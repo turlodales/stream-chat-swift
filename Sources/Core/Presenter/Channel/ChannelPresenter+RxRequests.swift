@@ -56,7 +56,7 @@ extension Reactive where Base == ChannelPresenter {
     }
     
     var messagesRequest: Observable<ChannelResponse> {
-        prepareRequest()
+        prepareRequest(startPaginationWith: base.messagesPagination)
             .filter { [weak base] in !$0.isEmpty && base?.parentMessage == nil }
             .flatMapLatest({ [weak base] pagination -> Observable<ChannelResponse> in
                 guard let base = base else {
@@ -173,7 +173,7 @@ public extension Reactive where Base == ChannelPresenter {
 private extension Reactive where Base == ChannelPresenter {
     
     var repliesRequest: Observable<[Message]> {
-        prepareRequest()
+        prepareRequest(startPaginationWith: base.repliesPagination)
             .filter { [weak base] in !$0.isEmpty && base?.parentMessage != nil }
             .flatMapLatest { [weak base] in (base?.parentMessage?.rx.replies(pagination: $0) ?? .empty()).retry(3) }
     }

@@ -38,7 +38,7 @@ extension Reactive  where Base: Presenter {
     }
 }
 
-public extension Reactive  where Base: Presenter {
+public extension Reactive where Base: Presenter {
     
     // MARK: Requests
     

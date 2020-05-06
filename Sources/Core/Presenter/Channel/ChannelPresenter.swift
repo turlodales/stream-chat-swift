@@ -51,6 +51,9 @@ public final class ChannelPresenter: Presenter {
         }
     }
     
+    internal let repliesPagination: Pagination
+    internal let messagesPagination: Pagination
+    
     /// A channel (see `Channel`).
     public var channel: Channel { channelAtomic.get(default: .unused) }
     /// A parent message for replies.
@@ -101,11 +104,17 @@ public final class ChannelPresenter: Presenter {
     ///     - channel: a channel
     ///     - parentMessage: a parent message for replies
     ///     - showStatuses: shows statuses separators, e.g. Today
-    public init(channel: Channel, parentMessage: Message? = nil, queryOptions: QueryOptions = .all) {
+    public init(channel: Channel,
+                parentMessage: Message? = nil,
+                messagesPagination: Pagination = [],
+                repliesPagination: Pagination = [],
+                queryOptions: QueryOptions = .all) {
         channelType = channel.type
         channelId = channel.id
         self.parentMessage = parentMessage
         self.queryOptions = queryOptions
+        self.messagesPagination = messagesPagination
+        self.repliesPagination = repliesPagination
         super.init(pageSize: [.messagesPageSize])
         channelAtomic.set(channel)
     }
@@ -115,12 +124,18 @@ public final class ChannelPresenter: Presenter {
     /// - Parameters:
     ///     - query: a channel query result with messages
     ///     - showStatuses: shows statuses separators, e.g. Today
-    public init(response: ChannelResponse, queryOptions: QueryOptions, showStatuses: Bool = true) {
+    public init(response: ChannelResponse,
+                messagesPagination: Pagination = [],
+                repliesPagination: Pagination = [],
+                queryOptions: QueryOptions,
+                showStatuses: Bool = true) {
         channelType = response.channel.type
         channelId = response.channel.id
         parentMessage = nil
         self.queryOptions = queryOptions
         self.showStatuses = showStatuses
+        self.messagesPagination = messagesPagination
+        self.repliesPagination = repliesPagination
         super.init(pageSize: [.messagesPageSize])
         parse(response: response)
     }
