@@ -19,12 +19,20 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let client = Client()
         
         window = UIWindow(frame: UIScreen.main.bounds)
+        let navVC = UINavigationController()
         
-        let navVC = UIStoryboard(name: "Main", bundle: nil).instantiateInitialViewController() as! UINavigationController
-        let chatVC = navVC.viewControllers.first as! ChatViewController
+        let filter: Filter = \.type == .messaging && \.members ~= client.currentUser
+        let query = ChannelListReference.Query(filter: filter)
         
-        chatVC.channelRef = client.channelReference(id: "chat_with_bahadir")
+        let channelListRef = client.channelListReference(query: query)
+        let channelListVC = ChatListViewController(reference: channelListRef) { selectedChatId in
+            let chatVC = UIStoryboard(name: "Main", bundle: nil).instantiateViewController(identifier: "ChatViewController") as! ChatViewController
+            chatVC.channelRef = client.channelReference(id: selectedChatId)
+            navVC.show(chatVC, sender: nil)
+        }
         
+        navVC.setViewControllers([channelListVC], animated: false)
+    
         window?.rootViewController = navVC
         window?.makeKeyAndVisible()
         

@@ -29,7 +29,7 @@ class Reference {
         self.client = client
     }
     
-    fileprivate let client: Client
+    let client: Client
 }
 
 extension Reference {
@@ -44,12 +44,12 @@ extension Reference {
 
 // MARK: - Models
 
-enum ChannelType {
+enum ChannelType: Hashable {
     case unknown, livestream, messaging, team, gaming, commerce
     case custom(String)
 }
 
-struct Channel {
+struct Channel: Hashable, Identifiable {
     typealias Id = String
     var id: Id { name }
     let name: String
@@ -87,9 +87,27 @@ struct Pagination { }
 
 protocol ChannelExtraDataCodable: Codable { }
 
-class ChannelListReference {
-    
-}
+struct Filter { }
+
+func ~=<T, C: Collection>(lhs: KeyPath<Channel, C>, rhs: T)  -> Filter where C.Element == T { .init() }
+
+func && (lhs: Filter, rhs: Filter) -> Filter { .init() }
+
+func == <T>(lhs: KeyPath<Channel, T>, rhs: T) -> Filter { .init() }
+
+//func == <T>(lhs:  rhs:) -> Filter { .init() }
+
+
+
+
+
+
+
+
+
+
+
+
 
 protocol Event { }
 
@@ -123,7 +141,6 @@ extension String: Error { }
 
 
 
-import CoreData
 
 // MARK: - ======================== Channel reference ========================
 
@@ -380,4 +397,3 @@ private func initialMessages(currentUser: User) -> [Message] {
         .init(text: "How's it going today?", user: john),
     ]
 }
-

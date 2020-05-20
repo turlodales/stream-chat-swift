@@ -16,6 +16,8 @@
 		792396C52472E48700069454 /* StreamCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792396C42472E48700069454 /* StreamCore.swift */; };
 		792396C7247408E200069454 /* Lorem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792396C6247408E200069454 /* Lorem.swift */; };
 		792396C924740D9700069454 /* MessageNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792396C824740D9700069454 /* MessageNode.swift */; };
+		792396CC2474244A00069454 /* ChatListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792396CB2474244A00069454 /* ChatListViewController.swift */; };
+		7923BFE624753D3300C91329 /* ChannelListReference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923BFE524753D3300C91329 /* ChannelListReference.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,6 +44,8 @@
 		792396C42472E48700069454 /* StreamCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamCore.swift; sourceTree = "<group>"; };
 		792396C6247408E200069454 /* Lorem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Lorem.swift; sourceTree = "<group>"; };
 		792396C824740D9700069454 /* MessageNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageNode.swift; sourceTree = "<group>"; };
+		792396CB2474244A00069454 /* ChatListViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListViewController.swift; sourceTree = "<group>"; };
+		7923BFE524753D3300C91329 /* ChannelListReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelListReference.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -66,6 +70,7 @@
 			isa = PBXGroup;
 			children = (
 				792396C42472E48700069454 /* StreamCore.swift */,
+				7923BFE524753D3300C91329 /* ChannelListReference.swift */,
 				7923968B246D311B00069454 /* AirChat */,
 				792396A6246D311C00069454 /* AirChatTests */,
 				7923968A246D311B00069454 /* Products */,
@@ -85,6 +90,7 @@
 			isa = PBXGroup;
 			children = (
 				7923968C246D311B00069454 /* AppDelegate.swift */,
+				792396CB2474244A00069454 /* ChatListViewController.swift */,
 				79239694246D311B00069454 /* ChatViewController.swift */,
 				792396C824740D9700069454 /* MessageNode.swift */,
 				79239696246D311B00069454 /* Main.storyboard */,
@@ -206,6 +212,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				792396CC2474244A00069454 /* ChatListViewController.swift in Sources */,
+				7923BFE624753D3300C91329 /* ChannelListReference.swift in Sources */,
 				792396C52472E48700069454 /* StreamCore.swift in Sources */,
 				792396C924740D9700069454 /* MessageNode.swift in Sources */,
 				792396C7247408E200069454 /* Lorem.swift in Sources */,
@@ -373,6 +381,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = D48F367GRM;
 				INFOPLIST_FILE = AirChat/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -391,6 +400,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = D48F367GRM;
 				INFOPLIST_FILE = AirChat/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 13.4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
