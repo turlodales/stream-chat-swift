@@ -10,8 +10,12 @@ import SwiftUI
 
 class ChatListViewController: UIHostingController<ChatListView> {
     
-    init(reference: ChannelListReference, didSelectChatId: @escaping (Channel.Id) -> Void) {
-        let view = ChatListView(reference: .init(reference: reference), didSelectChat: didSelectChatId)
+    init(reference: ChannelListReference,
+         didSelectChatId: @escaping (Channel.Id) -> Void,
+         didPressUserListButton: @escaping () -> Void) {
+        let view = ChatListView(reference: .init(reference: reference),
+                                didSelectChat: didSelectChatId,
+                                didPressUserListButton: didPressUserListButton)
         super.init(rootView: view)
     }
     
@@ -26,17 +30,17 @@ struct ChatListView: View {
     @ObservedObject var reference: ChannelListReference.Observable
 
     var didSelectChat: ((_ chatID: String) -> Void)?
+    var didPressUserListButton: (() -> Void)?
         
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            
-            ForEach(reference.channels.reversed()) { thumb in
-                
-                Button(action: { self.didSelectChat?(thumb.channel.id) }) {
+        
+        List(reference.channels.reversed()) { channel in
+            VStack {
+                Button(action: { self.didSelectChat?(channel.id) }) {
                     HStack {
                         VStack(alignment: .leading) {
-                            Text(thumb.channel.name)
-                            Text(thumb.recentMessages.last?.text ?? "no messages")
+                            Text(channel.name)
+                            Text(channel.lastMessage?.text ?? "no messages")
                                 .opacity(0.6)
                         }.foregroundColor(.black)
 
@@ -44,14 +48,19 @@ struct ChatListView: View {
                     }
                     .padding(20)
                     .background(Color.gray)
-                    
-                }.frame(height: 80)
-            }
-            
-            Spacer()
-            
+                }
+            }.frame(height: 80)
         }
         .navigationBarTitle(reference.isFetchingRemotely ? "loading ..." : "Chats")
+        .navigationBarItems(
+            leading: Button(action: {
+                    self.reference.createNewChannel(otherUser: .init(name: Lorem.firstName))
+                }, label: { Text("+") }
+            ),
+            trailing: Button(action: {
+                self.didPressUserListButton?()
+                }, label: { Text("Users") } )
+        )
         .animation(.default)
     }
 }

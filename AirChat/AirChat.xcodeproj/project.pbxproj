@@ -18,6 +18,17 @@
 		792396C924740D9700069454 /* MessageNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792396C824740D9700069454 /* MessageNode.swift */; };
 		792396CC2474244A00069454 /* ChatListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 792396CB2474244A00069454 /* ChatListViewController.swift */; };
 		7923BFE624753D3300C91329 /* ChannelListReference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923BFE524753D3300C91329 /* ChannelListReference.swift */; };
+		7923BFE92475515200C91329 /* UserListReference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923BFE82475515200C91329 /* UserListReference.swift */; };
+		7923C0062475664000C91329 /* ChannelDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923C0002475664000C91329 /* ChannelDTO.swift */; };
+		7923C0082475664000C91329 /* MessageDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923C0022475664000C91329 /* MessageDTO.swift */; };
+		7923C00A2475664000C91329 /* UserDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923C0042475664000C91329 /* UserDTO.swift */; };
+		7923C00F24756E8200C91329 /* SyncWorker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7923C00E24756E8200C91329 /* SyncWorker.swift */; };
+		7923C05F247677DD00C91329 /* CoreModel.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 7923C05D247677DD00C91329 /* CoreModel.xcdatamodeld */; };
+		795A135924768D2000340D55 /* ChannelReference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795A135824768D2000340D55 /* ChannelReference.swift */; };
+		795A135B2476BA1100340D55 /* DoubleChatViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795A135A2476BA1100340D55 /* DoubleChatViewController.swift */; };
+		795A135D2476E04500340D55 /* UsersCollectionViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795A135C2476E04500340D55 /* UsersCollectionViewController.swift */; };
+		795A13602476E06200340D55 /* UserCollectionCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 795A135E2476E06200340D55 /* UserCollectionCell.swift */; };
+		795A13612476E06200340D55 /* UserCollectionCell.xib in Resources */ = {isa = PBXBuildFile; fileRef = 795A135F2476E06200340D55 /* UserCollectionCell.xib */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,6 +57,17 @@
 		792396C824740D9700069454 /* MessageNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageNode.swift; sourceTree = "<group>"; };
 		792396CB2474244A00069454 /* ChatListViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListViewController.swift; sourceTree = "<group>"; };
 		7923BFE524753D3300C91329 /* ChannelListReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelListReference.swift; sourceTree = "<group>"; };
+		7923BFE82475515200C91329 /* UserListReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserListReference.swift; sourceTree = "<group>"; };
+		7923C0002475664000C91329 /* ChannelDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelDTO.swift; sourceTree = "<group>"; };
+		7923C0022475664000C91329 /* MessageDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageDTO.swift; sourceTree = "<group>"; };
+		7923C0042475664000C91329 /* UserDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserDTO.swift; sourceTree = "<group>"; };
+		7923C00E24756E8200C91329 /* SyncWorker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncWorker.swift; sourceTree = "<group>"; };
+		7923C05E247677DD00C91329 /* CoreModel.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = CoreModel.xcdatamodel; sourceTree = "<group>"; };
+		795A135824768D2000340D55 /* ChannelReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelReference.swift; sourceTree = "<group>"; };
+		795A135A2476BA1100340D55 /* DoubleChatViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoubleChatViewController.swift; sourceTree = "<group>"; };
+		795A135C2476E04500340D55 /* UsersCollectionViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsersCollectionViewController.swift; sourceTree = "<group>"; };
+		795A135E2476E06200340D55 /* UserCollectionCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserCollectionCell.swift; sourceTree = "<group>"; };
+		795A135F2476E06200340D55 /* UserCollectionCell.xib */ = {isa = PBXFileReference; lastKnownFileType = file.xib; path = UserCollectionCell.xib; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -70,7 +92,10 @@
 			isa = PBXGroup;
 			children = (
 				792396C42472E48700069454 /* StreamCore.swift */,
+				7923C00E24756E8200C91329 /* SyncWorker.swift */,
 				7923BFE524753D3300C91329 /* ChannelListReference.swift */,
+				795A135824768D2000340D55 /* ChannelReference.swift */,
+				7923BFE82475515200C91329 /* UserListReference.swift */,
 				7923968B246D311B00069454 /* AirChat */,
 				792396A6246D311C00069454 /* AirChatTests */,
 				7923968A246D311B00069454 /* Products */,
@@ -89,15 +114,20 @@
 		7923968B246D311B00069454 /* AirChat */ = {
 			isa = PBXGroup;
 			children = (
+				7923BFF5247562F900C91329 /* CoreData */,
 				7923968C246D311B00069454 /* AppDelegate.swift */,
 				792396CB2474244A00069454 /* ChatListViewController.swift */,
 				79239694246D311B00069454 /* ChatViewController.swift */,
+				795A135A2476BA1100340D55 /* DoubleChatViewController.swift */,
 				792396C824740D9700069454 /* MessageNode.swift */,
 				79239696246D311B00069454 /* Main.storyboard */,
 				79239699246D311C00069454 /* Assets.xcassets */,
 				7923969B246D311C00069454 /* LaunchScreen.storyboard */,
 				7923969E246D311C00069454 /* Info.plist */,
 				792396C6247408E200069454 /* Lorem.swift */,
+				795A135C2476E04500340D55 /* UsersCollectionViewController.swift */,
+				795A135E2476E06200340D55 /* UserCollectionCell.swift */,
+				795A135F2476E06200340D55 /* UserCollectionCell.xib */,
 			);
 			path = AirChat;
 			sourceTree = "<group>";
@@ -109,6 +139,17 @@
 				792396A9246D311C00069454 /* Info.plist */,
 			);
 			path = AirChatTests;
+			sourceTree = "<group>";
+		};
+		7923BFF5247562F900C91329 /* CoreData */ = {
+			isa = PBXGroup;
+			children = (
+				7923C0002475664000C91329 /* ChannelDTO.swift */,
+				7923C0022475664000C91329 /* MessageDTO.swift */,
+				7923C0042475664000C91329 /* UserDTO.swift */,
+				7923C05D247677DD00C91329 /* CoreModel.xcdatamodeld */,
+			);
+			path = CoreData;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -194,6 +235,7 @@
 			files = (
 				79239698246D311B00069454 /* Main.storyboard in Resources */,
 				7923969A246D311C00069454 /* Assets.xcassets in Resources */,
+				795A13612476E06200340D55 /* UserCollectionCell.xib in Resources */,
 				7923969D246D311C00069454 /* LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -213,12 +255,22 @@
 			buildActionMask = 2147483647;
 			files = (
 				792396CC2474244A00069454 /* ChatListViewController.swift in Sources */,
+				7923C00A2475664000C91329 /* UserDTO.swift in Sources */,
 				7923BFE624753D3300C91329 /* ChannelListReference.swift in Sources */,
+				795A135D2476E04500340D55 /* UsersCollectionViewController.swift in Sources */,
+				795A135924768D2000340D55 /* ChannelReference.swift in Sources */,
 				792396C52472E48700069454 /* StreamCore.swift in Sources */,
 				792396C924740D9700069454 /* MessageNode.swift in Sources */,
+				7923BFE92475515200C91329 /* UserListReference.swift in Sources */,
 				792396C7247408E200069454 /* Lorem.swift in Sources */,
+				795A13602476E06200340D55 /* UserCollectionCell.swift in Sources */,
+				7923C0082475664000C91329 /* MessageDTO.swift in Sources */,
+				795A135B2476BA1100340D55 /* DoubleChatViewController.swift in Sources */,
 				79239695246D311B00069454 /* ChatViewController.swift in Sources */,
+				7923C00F24756E8200C91329 /* SyncWorker.swift in Sources */,
 				7923968D246D311B00069454 /* AppDelegate.swift in Sources */,
+				7923C05F247677DD00C91329 /* CoreModel.xcdatamodeld in Sources */,
+				7923C0062475664000C91329 /* ChannelDTO.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -487,6 +539,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCVersionGroup section */
+		7923C05D247677DD00C91329 /* CoreModel.xcdatamodeld */ = {
+			isa = XCVersionGroup;
+			children = (
+				7923C05E247677DD00C91329 /* CoreModel.xcdatamodel */,
+			);
+			currentVersion = 7923C05E247677DD00C91329 /* CoreModel.xcdatamodel */;
+			name = CoreModel.xcdatamodeld;
+			path = ../../../../temp/CoreDataExample/CoreDataExample/CoreModel.xcdatamodeld;
+			sourceTree = "<group>";
+			versionGroupType = wrapper.xcdatamodel;
+		};
+/* End XCVersionGroup section */
 	};
 	rootObject = 79239681246D311B00069454 /* Project object */;
 }

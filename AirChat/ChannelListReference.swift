@@ -7,34 +7,41 @@
 //
 
 import Foundation
+import CoreData
+import Combine
 
-extension Client {
+extension ChatClient {
     func channelListReference(query: ChannelListReference.Query) -> ChannelListReference {
         .init(query: query, client: self)
     }
 }
 
-struct ChannelThumbnailData: Hashable {
-    let channel: Channel
-    let recentMessages: [Message]
-}
-
-extension ChannelThumbnailData: Identifiable {
-    var id: Channel.Id { channel.id }
-}
-
+/// An object representing a list of channel. You can use it to create a list of channels based on the provided query and
+/// and observe the changes in the list.
+///
+/// - Note: It's completely safe to have multiple references to the same list if your scenario requires it.
+///
 class ChannelListReference: Reference {
     
-    struct Query {
-        let filter: Filter
-    }
+    // MARK:  -------------------- -------------------- Public -------------------- --------------------
     
-    private(set) lazy var channels: [ChannelThumbnailData] = { fatalError("Call `startUpdating` first") }()
+    struct Query {
+        let filter: Filter<Channel>
+    }
+
+    private(set) var query: Query
+    
+    private(set) lazy var channels: [Channel] = { fatalError("Call `startUpdating` first") }()
     
     weak var delegate: ChannelListReferenceDelegate?
     
-    init(query: Query, client: Client) {
-        super.init(client: client)
+    /// Creates a new channel
+    func createNewChannel(otherUser: User) {
+        client.write { context in
+            var channel = Channel(name: "Chat with \(otherUser.name)")
+            channel.members = [self.currentUser, otherUser]
+            channel.save(to: context)
+        }
     }
     
     /// Synchronously loads the data for the referenced object form the local cache and starts observing its changes.
@@ -42,82 +49,88 @@ class ChannelListReference: Reference {
     /// It also anynchronously fetches the data from the servers. If the remote data differs from the locally cached one,
     /// `ChannelReference` uses the `delegate` methods to inform about the changes.
     func startUpdating() {
-        channels = initialChannels(currentUser: client.currentUser)
         
-        delegate?.willStartFetchingRemoteData(self)
+        fetchResultsController.delegate = self
+        try! fetchResultsController.performFetch()
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            self.simulateNewChannel()
-        }
-    }
-    
-    func simulateNewChannel() {
-        self.delegate?.didStopFetchingRemoteData(self, success: true)
-        
-        let channel = ChannelThumbnailData(
-            channel: .init(name: "Tommaso"),
-            recentMessages: [
-                .init(text: "Are you done with the v3 version yet??? It's extremely important we realease this ASAP!", user: User(name: "Tommaso")),
-            ]
-        )
-        self.channels.append(channel)
-        self.delegate?.channelsChanged(self, changes: [.added(channel)])
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            let channel = ChannelThumbnailData(
-                channel: .init(name: "Tommaso"),
-                recentMessages: [
-                    .init(text: "Are you done with the v3 version yet??? It's extremely important we realease this ASAP!", user: User(name: "Tommaso")),
-                    .init(text: "Seriously guys ... 👍", user: User(name: "Tommaso")),
+        channels = fetchResultsController.fetchedObjects!.map(Channel.init)
 
-                ]
-            )
-            self.channels[self.channels.count - 1] = channel
-            self.delegate?.channelsChanged(self, changes: [.updated(channel)])
+        delegate?.willStartFetchingRemoteData(self)
+                
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.delegate?.didStopFetchingRemoteData(self, success: true)
         }
     }
     
     func updateQuery(query: Query) -> Cancellable { fatalError() }
+
+    init(query: Query, client: ChatClient) {
+        self.query = query
+        super.init(client: client)
+    }
+        
+    // MARK:  -------------------- -------------------- Private -------------------- --------------------
+    
+    
+    private lazy var fetchResultsController: NSFetchedResultsController<ChannelDTO> = {
+        let request = Channel.channelsFetchRequest(query: self.query)
+        return .init(fetchRequest: request,
+                     managedObjectContext: self.client.persistentContainer.viewContext,
+                     sectionNameKeyPath: nil,
+                     cacheName: nil)
+    }()
+}
+
+extension ChannelListReference: NSFetchedResultsControllerDelegate {
+    
+    // TODO ...
+    
+    func controllerDidChangeContent(_ controller: NSFetchedResultsController<NSFetchRequestResult>) {
+        channels = fetchResultsController.fetchedObjects!.map(Channel.init)
+        delegate?.channelsChanged(self, changes: [])
+    }
 }
 
 protocol ChannelListReferenceDelegate: AnyObject {
     func willStartFetchingRemoteData(_ reference: ChannelListReference)
     func didStopFetchingRemoteData(_ reference: ChannelListReference, success: Bool)
     
-    func channelsChanged(_ reference: ChannelListReference, changes: [Change<ChannelThumbnailData>])
+    func channelsChanged(_ reference: ChannelListReference, changes: [Change<Channel>])
 }
 
 extension ChannelListReferenceDelegate {
     func willStartFetchingRemoteData(_ reference: ChannelListReference) { }
     func didStopFetchingRemoteData(_ reference: ChannelListReference, success: Bool) { }
     
-    func channelsChanged(_ reference: ChannelListReference, changes: [Change<ChannelThumbnailData>]) { }
+    func channelsChanged(_ reference: ChannelListReference, changes: [Change<Channel>]) { }
 }
 
-
-import Combine
 @available(iOS 13, *)
 extension ChannelListReference {
     class Observable: ObservableObject, ChannelListReferenceDelegate {
-
+        
         @Published var isFetchingRemotely: Bool = false
-        @Published var channels: [ChannelThumbnailData] = []
+        @Published var channels: [Channel] = []
         
         private let reference: ChannelListReference
-
+        
+        func createNewChannel(otherUser: User) {
+            reference.createNewChannel(otherUser: otherUser)
+        }
+        
         init(reference: ChannelListReference) {
             self.reference = reference
             reference.delegate = self
             reference.startUpdating()
             channels = reference.channels
         }
-
-        convenience init(query: Query, client: Client) {
+        
+        convenience init(query: Query, client: ChatClient) {
             self.init(reference: ChannelListReference(query: query, client: client))
         }
         
-        func channelsChanged(_ reference: ChannelListReference, changes: [Change<ChannelThumbnailData>]) {
-            // We don't case about the atomic updates, we just need to update everything and SwiftUI will figure it out
+        func channelsChanged(_ reference: ChannelListReference, changes: [Change<Channel>]) {
+            // We don't care about the atomic updates, we just need to update everything and SwiftUI will figure it out
             self.channels = reference.channels
         }
         
@@ -129,19 +142,5 @@ extension ChannelListReference {
             isFetchingRemotely = false
         }
     }
-}
-
-
-
-
-
-// Dummy data
-
-
-private func initialChannels(currentUser: User) -> [ChannelThumbnailData] {
-    [
-        .init(channel: .init(name: "Bahadir"), recentMessages: [.init(text: "Hey there", user: currentUser)]),
-        .init(channel: .init(name: "Alex"), recentMessages: [.init(text:  "Are you sure you want to use `!` ?", user: User(name: "Alex"))]),
-    ]
 }
 

@@ -30,7 +30,13 @@
                         <viewLayoutGuide key="safeArea" id="4qk-I5-YsI"/>
                     </view>
                     <extendedEdge key="edgesForExtendedLayout"/>
-                    <navigationItem key="navigationItem" id="z5l-Ur-dEO"/>
+                    <navigationItem key="navigationItem" id="z5l-Ur-dEO">
+                        <barButtonItem key="rightBarButtonItem" title="Split" id="brA-kO-91k">
+                            <connections>
+                                <segue destination="06X-j9-AGk" kind="show" id="x7X-9s-xvc"/>
+                            </connections>
+                        </barButtonItem>
+                    </navigationItem>
                     <connections>
                         <outlet property="inputField" destination="17G-uB-xd4" id="Fc5-S7-SiG"/>
                     </connections>
@@ -38,6 +44,37 @@
                 <placeholder placeholderIdentifier="IBFirstResponder" id="SZV-WD-TEh" sceneMemberID="firstResponder"/>
             </objects>
             <point key="canvasLocation" x="1047.8260869565217" y="137.94642857142856"/>
+        </scene>
+        <!--Double Chat View Controller-->
+        <scene sceneID="8fj-61-tzt">
+            <objects>
+                <viewController id="06X-j9-AGk" customClass="DoubleChatViewController" customModule="AirChat" customModuleProvider="target" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="liB-dv-nve">
+                        <rect key="frame" x="0.0" y="0.0" width="414" height="808"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <subviews>
+                            <stackView opaque="NO" contentMode="scaleToFill" axis="vertical" distribution="fillEqually" spacing="4" translatesAutoresizingMaskIntoConstraints="NO" id="xZf-er-ht2">
+                                <rect key="frame" x="0.0" y="0.0" width="414" height="774"/>
+                            </stackView>
+                        </subviews>
+                        <color key="backgroundColor" systemColor="systemBackgroundColor" cocoaTouchSystemColor="whiteColor"/>
+                        <constraints>
+                            <constraint firstItem="xZf-er-ht2" firstAttribute="top" secondItem="4yx-sv-aY0" secondAttribute="top" id="3er-ke-2sO"/>
+                            <constraint firstItem="xZf-er-ht2" firstAttribute="leading" secondItem="4yx-sv-aY0" secondAttribute="leading" id="7V1-V8-1yv"/>
+                            <constraint firstItem="4yx-sv-aY0" firstAttribute="bottom" secondItem="xZf-er-ht2" secondAttribute="bottom" id="I77-I0-D7F"/>
+                            <constraint firstItem="4yx-sv-aY0" firstAttribute="trailing" secondItem="xZf-er-ht2" secondAttribute="trailing" id="JNi-KH-vdE"/>
+                        </constraints>
+                        <viewLayoutGuide key="safeArea" id="4yx-sv-aY0"/>
+                    </view>
+                    <extendedEdge key="edgesForExtendedLayout"/>
+                    <navigationItem key="navigationItem" id="BfN-wA-xf8"/>
+                    <connections>
+                        <outlet property="mainStackView" destination="xZf-er-ht2" id="CxC-7i-QxW"/>
+                    </connections>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="SWS-fX-9aa" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="1936" y="138"/>
         </scene>
         <!--Navigation Controller-->
         <scene sceneID="BLU-cP-XSm">

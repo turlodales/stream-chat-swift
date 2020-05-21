@@ -29,9 +29,7 @@ class ChatViewController: UIViewController {
         skView.presentScene(scene)
         skView.ignoresSiblingOrder = true
         
-        scene.physicsWorld.gravity = .init(dx: 0, dy: 0.5)
-        scene.physicsBody = SKPhysicsBody(edgeLoopFrom: scene.frame)
-        
+        scene.physicsWorld.gravity = .init(dx: 0, dy: 20)
         inputField.delegate = self
     }
     
@@ -43,6 +41,22 @@ class ChatViewController: UIViewController {
         
         title = channelRef.channel.name
         reloadMessages()
+    }
+
+    // just a hack to force resizing of SKView. I don't know how to do this properly :)
+    private var lastKnownSize: CGSize? {
+        didSet {
+            if lastKnownSize != oldValue {
+                scene.size = skView.bounds.size
+                scene.physicsBody = SKPhysicsBody(edgeLoopFrom: scene.frame)
+                reloadMessages()
+            }
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        lastKnownSize = view.bounds.size
     }
     
     var skView: SKView { view as! SKView }
@@ -72,7 +86,7 @@ class ChatViewController: UIViewController {
     
     /// Remove all messages and reload them
     func reloadMessages() {
-        scene.physicsWorld.speed = 10000
+        scene.physicsWorld.speed = 10
         
         messageNodes.forEach { $0.removeFromParent() }
         
@@ -129,6 +143,13 @@ class ChatViewController: UIViewController {
     func removeMessageNode(message: Message) {
         messageNodes.first(where: { $0.id == message.id })?.removeFromParent()
     }
+    
+    // Tech demo
+    override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
+        guard let splitVC = segue.destination as? DoubleChatViewController else { return }
+        splitVC.client = channelRef.client
+        splitVC.channelId = channelRef.channelId
+    }
 }
 
 extension ChatViewController: UITextFieldDelegate {
@@ -150,28 +171,24 @@ extension ChatViewController: ChannelReferenceDelegate {
     func willStartFetchingRemoteData(_ reference: ChannelReference) {
         let spinner = UIActivityIndicatorView()
         spinner.startAnimating()
-        navigationItem.rightBarButtonItem = UIBarButtonItem(customView: spinner)
+        navigationItem.rightBarButtonItems?.append(UIBarButtonItem(customView: spinner))
     }
     
     func didStopFetchingRemoteData(_ reference: ChannelReference, success: Bool) {
-        navigationItem.rightBarButtonItem = nil
+        navigationItem.rightBarButtonItems = navigationItem.rightBarButtonItems?.dropLast()
     }
     
-    func didReceiveTypingEvent(_ reference: ChannelReference, event: TypingEvent, metadata: ChangeMatadata) {
-        
+    func didReceiveTypingEvent(_ reference: ChannelReference, event: TypingEvent) {
         if let event = event as? TypingStarted {
-            let label = UILabel()
-            label.text = "\(event.user.name) is typing..."
-            label.font = .italicSystemFont(ofSize: 8)
-            navigationItem.rightBarButtonItem = UIBarButtonItem(customView: label)
+            navigationItem.title = "\(event.user.name) is typing..."
         }
         
         if event is TypingStopped {
-            navigationItem.rightBarButtonItem = nil
+            navigationItem.title = channelRef.channel.name
         }
     }
     
-    func channelDataUpdated(_ reference: ChannelReference, data: Channel, metadata: ChangeMatadata) {
+    func channelDataUpdated(_ reference: ChannelReference, data: Channel) {
         title = data.name
     }
     

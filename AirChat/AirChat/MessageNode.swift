@@ -36,9 +36,11 @@ class MessageNode: SKLabelNode {
         
         super.init()
         
+        preferredMaxLayoutWidth = 300
+        
         numberOfLines = 0
         self.text = text
-        fontName = "SanFranciscoUIDisplay"
+        fontName = "SanFranciscoRounded-Bold"
         fontSize = 15
         
         isUserInteractionEnabled = true
