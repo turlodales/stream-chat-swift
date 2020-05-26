@@ -20,7 +20,7 @@ extension ChatClient {
 ///
 /// - Note: It's completely safe to have multiple references to the same channel if your scenario requires it.
 ///
-class ChannelReference: Reference {
+class ChannelReference: Reference, MessageOperations {
     
     // MARK:  -------------------- -------------------- Public -------------------- --------------------
 
@@ -44,7 +44,7 @@ class ChannelReference: Reference {
         fetchResultsController.delegate = self
         try! fetchResultsController.performFetch()
         
-        self.messages = fetchResultsController.fetchedObjects!.map(Message.init)
+        self.messages = fetchResultsController.fetchedObjects!.lazy.map(Message.init)
 
         delegate?.willStartFetchingRemoteData(self)
         
@@ -58,15 +58,15 @@ class ChannelReference: Reference {
             var message = message
             message.additionalState = .pendingSend
             message.channelId = self.channelId
-            
+
             var channel = Channel(id: self.channelId, context: $0)
             channel.lastMessageTimestamp = message.timestamp
-            
+
             message.save(to: $0)
             channel.save(to: $0)
         }
     }
-    
+
     func send(event: TypingEvent, completion: ((Error?) -> Void)? = nil) {  }
     
     func startWatchingChannel(options: QueryOptions, completion: (Error?) -> Void) {  }
@@ -77,26 +77,26 @@ class ChannelReference: Reference {
     func delete(image: URL, completion: (Error?) -> Void) {  }
     func delete(file: URL, completion: (Error?) -> Void) {  }
     
-    func delete(message: Message, completion: ((Error?) -> Void)?) {
-        var message = message
-        message.additionalState = .pendingDelete
-        client.write { message.save(to: $0) }
-        
-        // simulate delete API call
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-            let isFailure = Int.random(in: 0...2) == 2
-            guard isFailure == false else {
-                message.additionalState = nil
-                self.client.write { message.save(to: $0) }
-                completion?("Too many bugs...")
-                return
-            }
-            
-            self.client.write {
-                $0.delete(MessageDTO.message(id: message.id, in: $0))
-            }
-        }
-    }
+//    func delete(message: Message, completion: ((Error?) -> Void)?) {
+//        var message = message
+//        message.additionalState = .pendingDelete
+//        client.write { message.save(to: $0) }
+//
+//        // simulate delete API call
+//        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+//            let isFailure = Int.random(in: 0...2) == 2
+//            guard isFailure == false else {
+//                message.additionalState = nil
+//                self.client.write { message.save(to: $0) }
+//                completion?("Too many bugs...")
+//                return
+//            }
+//
+//            self.client.write {
+//                $0.delete(MessageDTO.message(id: message.id, in: $0))
+//            }
+//        }
+//    }
     
     func hide(clearHistory: Bool = false, completion: (Error?) -> Void) {  }
     func show(completion: (Error?) -> Void) {  }
@@ -210,8 +210,8 @@ extension ChannelReference: NSFetchedResultsControllerDelegate {
      }
 
      func controllerDidChangeContent(_ controller: NSFetchedResultsController<NSFetchRequestResult>) {
-         messages = fetchResultsController.fetchedObjects!.map(Message.init)
-         delegate?.messagesChanged(self, changes: currentChanges!)
+        messages = fetchResultsController.fetchedObjects!.lazy.map(Message.init)
+        delegate?.messagesChanged(self, changes: currentChanges!)
      }
 }
 
@@ -292,4 +292,46 @@ extension ChannelReferenceDelegate {
     func didReceiveChannelEvent(_ reference: ChannelReference, event: ChannelEvent) {}
     func didReceiveTypingEvent(_ reference: ChannelReference, event: TypingEvent) {}
     func didReceiveMemeberEvent(_ reference: ChannelReference, event: MemberEvent) {}
+}
+
+protocol MessageOperations {
+    var client: ChatClient { get }
+    var channelId: Channel.Id { get}
+}
+
+extension MessageOperations {
+    func send(message: Message) {
+        client.write {
+            var message = message
+            message.additionalState = .pendingSend
+            message.channelId = self.channelId
+            
+            var channel = Channel(id: self.channelId, context: $0)
+            channel.lastMessageTimestamp = message.timestamp
+            
+            message.save(to: $0)
+            channel.save(to: $0)
+        }
+    }
+    
+    func delete(message: Message, completion: ((Error?) -> Void)?) {
+        var message = message
+        message.additionalState = .pendingDelete
+        client.write { message.save(to: $0) }
+        
+        // simulate delete API call
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            let isFailure = Int.random(in: 0...2) == 2
+            guard isFailure == false else {
+                message.additionalState = nil
+                self.client.write { message.save(to: $0) }
+                completion?("Too many bugs...")
+                return
+            }
+            
+            self.client.write {
+                $0.delete(MessageDTO.message(id: message.id, in: $0))
+            }
+        }
+    }
 }
