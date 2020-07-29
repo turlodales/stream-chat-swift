@@ -159,7 +159,7 @@ class Client_DevicesTests: ClientTestCase {
     func test_removeDevice_handlesSuccess() throws {
         // Setup
         let device = Device("device_id_\(UUID().uuidString)")
-        var user = client.user
+        let user = client.user
         user.devices = [device]
         user.currentDevice = device
         client.set(user: user, token: "test_token")
@@ -184,7 +184,7 @@ class Client_DevicesTests: ClientTestCase {
         // Setup
         let error = TestError.mockError()
         let device = Device("device_id_\(UUID().uuidString)")
-        var user = client.user
+        let user = client.user
         user.devices = [device]
         user.currentDevice = device
         client.set(user: user, token: "test_token")
