@@ -159,4 +159,31 @@ class MessageDTO_Tests: XCTestCase {
             Assert.willBeEqual(loadedMessage?.isSilent, messagePayload.isSilent)
         }
     }
+    
+    func test_additonalState_isSaved() {
+        let messageId: MessageId = .unique
+        let channelId: ChannelId = .unique
+        let payload = MessagePayload<DefaultDataTypes>.dummy(messageId: messageId, authorUserId: .unique)
+        
+        // Save the payloads to the DB and set `additionalState` on the `MessageDTO`
+        database.write { session in
+            try! session.saveChannel(payload: self.dummyPayload(with: channelId))
+            let messageDTO = try! session.saveMessage(payload: payload, for: channelId)
+            messageDTO.additionalState = .pendingSend
+        }
+        
+        var loadedMessage: Message? {
+            database.viewContext.loadMessage(id: messageId)
+        }
+        
+        AssertAsync.willBeEqual(loadedMessage?.additionalState, .pendingSend)
+        
+        // Reset the additional state
+        database.write { session in
+            let messageDTO = session.loadMessageDTO(id: messageId)!
+            messageDTO.additionalState = nil
+        }
+        
+        AssertAsync.willBeEqual(loadedMessage?.additionalState, nil)
+    }
 }

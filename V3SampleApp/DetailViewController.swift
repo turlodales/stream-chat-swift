@@ -23,6 +23,20 @@ class DetailViewController: UIViewController {
         }
     }
 
+    @IBAction func newMessageButtonTapped(_ sender: Any) {
+        let alertController = UIAlertController(title: "New message", message: "", preferredStyle: .alert)
+        alertController.addAction(UIAlertAction(title: "Send", style: .default, handler: { alert -> Void in
+            if let text = (alertController.textFields![0] as UITextField).text {
+                self.controller?.addNewMessage(text: text)
+            }
+        }))
+        alertController.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
+        alertController.addTextField(configurationHandler: {(textField : UITextField!) -> Void in
+            textField.placeholder = "Message text"
+        })
+        self.present(alertController, animated: true, completion: nil)
+    }
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         

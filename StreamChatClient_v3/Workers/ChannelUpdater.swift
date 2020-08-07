@@ -25,7 +25,7 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
             }
         }
     }
-
+    
     func muteChannel(cid: ChannelId, mute: Bool, completion: ((Error?) -> Void)? = nil) {
         apiClient.request(endpoint: .muteChannel(cid: cid, mute: mute)) {
             switch $0 {
@@ -34,7 +34,7 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
             }
         }
     }
-
+    
     func deleteChannel(cid: ChannelId, completion: ((Error?) -> Void)? = nil) {
         apiClient.request(endpoint: .deleteChannel(cid: cid)) {
             switch $0 {
@@ -43,7 +43,7 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
             }
         }
     }
-
+    
     func hideChannel(cid: ChannelId, userId: UserId, clearHistory: Bool, completion: ((Error?) -> Void)? = nil) {
         apiClient.request(endpoint: .hideChannel(cid: cid, userId: userId, clearHistory: clearHistory)) {
             switch $0 {
@@ -52,13 +52,46 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
             }
         }
     }
-
+    
     func showChannel(cid: ChannelId, userId: UserId, completion: ((Error?) -> Void)? = nil) {
         apiClient.request(endpoint: .showChannel(cid: cid, userId: userId)) {
             switch $0 {
             case .success: completion?(nil)
             case let .failure(error): completion?(error)
             }
+        }
+    }
+    
+    /// Inserts a new `MessageDTO` object to the database with `additionalState` set to `.pendingSend`.
+    func addNewMessage(text: String, authorUserId: UserId, completion: ((Result<MessageId, Error>) -> Void)? = nil) {
+        let newMessageId: MessageId = .newUniqueId
+        
+        database.write({ session in
+            guard session.loadUser(id: authorUserId) as UserModel<ExtraData.User>? != nil else {
+                throw ClientError.UserDoesntExist(userId: authorUserId)
+            }
+            
+            let newMessage = try session.createMessage(id: newMessageId,
+                                                       text: text,
+                                                       createdAt: .init(),
+                                                       showReplyInChannel: false,
+                                                       extraData: Data([]))
+            newMessage.additionalState = .pendingSend
+            
+        }) { databaseError in
+            if let error = databaseError {
+                completion?(.failure(error))
+            } else {
+                completion?(.success(newMessageId))
+            }
+        }
+    }
+}
+
+extension ClientError {
+    public class UserDoesntExist: ClientError {
+        init(userId: UserId) {
+            super.init("User with userId:\(userId) doesn't exist.")
         }
     }
 }

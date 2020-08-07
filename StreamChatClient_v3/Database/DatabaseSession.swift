@@ -39,6 +39,13 @@ protocol DatabaseSession {
     
     @discardableResult func saveMessage<ExtraData: ExtraDataTypes>(payload: MessagePayload<ExtraData>, for cid: ChannelId) throws
         -> MessageDTO
+    func loadMessage<ExtraData: ExtraDataTypes>(id: MessageId) -> MessageModel<ExtraData>?
+    func loadMessageDTO(id: MessageId) -> MessageDTO?
+    func createMessage(id: MessageId,
+                       text: String,
+                       createdAt: Date,
+                       showReplyInChannel: Bool,
+                       extraData: Data) throws -> MessageDTO
 }
 
 extension DatabaseSession {

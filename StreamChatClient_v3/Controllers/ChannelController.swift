@@ -152,6 +152,12 @@ public class ChannelControllerGeneric<ExtraData: ExtraDataTypes>: Controller, De
         where Delegate.ExtraData == ExtraData {
         anyDelegate = AnyChannelControllerDelegate(delegate)
     }
+    
+    public func addNewMessage(text: String) {
+        worker.addNewMessage(text: text, authorUserId: client.currentUserId) { result in
+            print(result)
+        }
+    }
 }
 
 extension ChannelControllerGeneric {

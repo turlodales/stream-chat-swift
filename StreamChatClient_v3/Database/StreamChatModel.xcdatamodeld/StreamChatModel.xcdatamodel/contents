@@ -80,7 +80,7 @@
         </uniquenessConstraints>
     </entity>
     <entity name="MessageDTO" representedClassName="MessageDTO" syncable="YES">
-        <attribute name="additionalStateRaw" optional="YES" attributeType="Integer 16" defaultValueString="-1" usesScalarValueType="YES"/>
+        <attribute name="additionalStateRaw" optional="YES" attributeType="String"/>
         <attribute name="args" optional="YES" attributeType="String"/>
         <attribute name="command" optional="YES" attributeType="String"/>
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>

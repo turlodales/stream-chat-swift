@@ -6,6 +6,13 @@ import Foundation
 
 public typealias MessageId = String
 
+public enum AdditionalState: String {
+    /// The message is waiting to be sent.
+    case pendingSend
+    /// The message is waiting to be deleted.
+    case pendingDelete
+}
+
 public struct MessageModel<ExtraData: ExtraDataTypes> {
     public let id: MessageId
     public let text: String
@@ -21,6 +28,7 @@ public struct MessageModel<ExtraData: ExtraDataTypes> {
     public let extraData: ExtraData.Message
     public let isSilent: Bool
     public let reactionScores: [String: Int]
+    public let additionalState: AdditionalState?
     
     public let author: UserModel<ExtraData.User>
     public let mentionedUsers: Set<UserModel<ExtraData.User>>
