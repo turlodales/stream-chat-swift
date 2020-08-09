@@ -138,6 +138,8 @@ extension MasterViewController: ChannelListControllerDelegate {
             collectionView.apply(changes: changes)
          */
         
+        changes.forEach { print($0) }
+        
         tableView.beginUpdates()
         
         for change in changes {

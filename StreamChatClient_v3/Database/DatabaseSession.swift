@@ -45,7 +45,9 @@ protocol DatabaseSession {
                        text: String,
                        createdAt: Date,
                        showReplyInChannel: Bool,
-                       extraData: Data) throws -> MessageDTO
+                       extraData: Data,
+                       authorId: UserId,
+                       cid: ChannelId) throws -> MessageDTO
 }
 
 extension DatabaseSession {

@@ -158,7 +158,7 @@ class ListChangeAggregator<DTO: NSManagedObject, Item>: NSObject, NSFetchedResul
                 return
             }
             currentChanges.append(.move(item, fromIndex: fromIndex, toIndex: toIndex))
-            currentChanges.append(.update(item, index: toIndex))
+//            currentChanges.append(.update(item, index: toIndex))
             
         case .update:
             guard let index = indexPath else {

@@ -10,7 +10,7 @@ public enum MessageType: String, Codable {
     case regular, ephemeral, error, reply, system, deleted
 }
 
-struct MessagePayload<ExtraData: ExtraDataTypes>: Decodable {
+struct MessagePayload<ExtraData: ExtraDataTypes>: Codable {
     private enum CodingKeys: String, CodingKey {
         case id
         case type
@@ -130,6 +130,31 @@ struct MessagePayload<ExtraData: ExtraDataTypes>: Decodable {
         self.extraData = extraData
         self.reactionScores = reactionScores
         self.isSilent = isSilent
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+//        try container.encode(type, forKey: .type)
+        
+//        try container.encode(user, forKey: .user)
+//        try container.encode(createdAt, forKey: .createdAt)
+//        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(deletedAt, forKey: .deletedAt)
+        try container.encode(text, forKey: .text)
+        try container.encode(isSilent, forKey: .isSilent)
+        try container.encode(command, forKey: .command)
+        try container.encode(args, forKey: .args)
+        //        attachments = try container.decode([Attachment].self, forKey: .attachments)
+        try container.encodeIfPresent(parentId, forKey: .parentId)
+        try container.encodeIfPresent(showReplyInChannel, forKey: .showReplyInChannel)
+//        try container.encode(].self, forKey: .mentionedUsers)
+//        try container.encode(replyCount, forKey: .replyCount)
+        //        latestReactions = (try? container.decode([Reaction].self, forKey: .latestReactions)) ?? []
+        //        ownReactions = (try? container.decode([Reaction].self, forKey: .ownReactions)) ?? []
+        try container.encodeIfPresent(reactionScores, forKey: .reactionScores)
+        //        i18n = try container.decodeIfPresent(MessageTranslations.self, forKey: .i18n)
+        try extraData.encode(to: encoder)
     }
 }
 

@@ -4,7 +4,7 @@
 
 import Foundation
 
-class UserPayload<ExtraData: UserExtraData>: Decodable {
+class UserPayload<ExtraData: UserExtraData>: Codable {
     private enum CodingKeys: String, CodingKey {
         case id
         case role
@@ -76,6 +76,11 @@ class UserPayload<ExtraData: UserExtraData>: Decodable {
         isBanned = try container.decodeIfPresent(Bool.self, forKey: .isBanned) ?? false
         teams = try container.decodeIfPresent([String].self, forKey: .teams) ?? []
         extraData = try ExtraData(from: decoder)
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
     }
 }
 

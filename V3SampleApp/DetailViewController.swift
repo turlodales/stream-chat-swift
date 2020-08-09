@@ -103,7 +103,11 @@ extension DetailViewController: UITableViewDataSource {
         }
         
         let message = messages[indexPath.row]
-        cell.textLabel?.text = "\(message.author.id): \(message.text)"
+        cell.textLabel?.text = message.type == .deleted
+            ? "❌ the message was deleted"
+            : "\(message.author.id): \(message.text)"
+        
+        cell.backgroundColor = message.additionalState == .pendingSend ? .gray : .white
         
         return cell
     }

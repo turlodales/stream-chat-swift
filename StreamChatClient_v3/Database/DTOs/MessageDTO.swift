@@ -38,6 +38,14 @@ class MessageDTO: NSManagedObject {
         return request
     }
     
+    /// Returns a fetch request for messages pending send.
+    static func messagesPendingSendFetchRequest() -> NSFetchRequest<MessageDTO> {
+        let request = NSFetchRequest<MessageDTO>(entityName: MessageDTO.entityName)
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \MessageDTO.createdAt, ascending: false)]
+        request.predicate = NSPredicate(format: "additionalStateRaw == %@", AdditionalState.pendingSend.rawValue)
+        return request
+    }
+    
     static func load(for cid: String, limit: Int, offset: Int = 0, context: NSManagedObjectContext) -> [MessageDTO] {
         let request = NSFetchRequest<MessageDTO>(entityName: entityName)
         request.predicate = NSPredicate(format: "channel.cid == %@", cid)
@@ -114,9 +122,19 @@ extension NSManagedObjectContext {
                        text: String,
                        createdAt: Date = Date(),
                        showReplyInChannel: Bool = false,
-                       extraData: Data = Data([])) throws -> MessageDTO {
+                       extraData: Data = "{}".data(using: .utf8)!,
+                       authorId: UserId,
+                       cid: ChannelId) throws -> MessageDTO {
         guard loadMessageDTO(id: id) == nil else {
             throw ClientError.MessageAlreadyExist(id: id)
+        }
+        
+        guard let authorDTO = UserDTO.load(id: authorId, context: self) else {
+            throw ClientError.UserDoesntExist(userId: authorId)
+        }
+        
+        guard let channelDTO = ChannelDTO.load(cid: cid, context: self) else {
+            fatalError()
         }
         
         let dto = MessageDTO.loadOrCreate(id: id, context: self)
@@ -129,6 +147,10 @@ extension NSManagedObjectContext {
         dto.isSilent = false
         dto.replyCount = 0
         dto.reactionScores = [:]
+        
+        dto.user = authorDTO
+        dto.channel = channelDTO
+        
         return dto
     }
 }
@@ -146,7 +168,7 @@ extension MessageModel {
         parentId = dto.parentId
         showReplyInChannel = dto.showReplyInChannel
         replyCount = Int(dto.replyCount)
-        extraData = try! JSONDecoder.default.decode(ExtraData.Message.self, from: dto.extraData)
+        extraData = NoExtraData() as! ExtraData.Message
         isSilent = dto.isSilent
         reactionScores = dto.reactionScores
         additionalState = dto.additionalState
@@ -160,6 +182,12 @@ extension ClientError {
     class MessageAlreadyExist: ClientError {
         init(id: MessageId) {
             super.init("Message with the id:\(id) already exists.")
+        }
+    }
+    
+    public class UserDoesntExist: ClientError {
+        init(userId: UserId) {
+            super.init("User with userId:\(userId) doesn't exist.")
         }
     }
 }

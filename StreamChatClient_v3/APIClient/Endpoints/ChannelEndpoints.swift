@@ -21,7 +21,7 @@ extension Endpoint {
               requiresConnectionId: query.options.contains(oneOf: [.presence, .state, .watch]),
               body: query)
     }
-
+    
     static func muteChannel(cid: ChannelId, mute: Bool) -> Endpoint<EmptyResponse> {
         .init(path: "moderation/\(mute ? "mute" : "unmute")/channel",
               method: .post,
@@ -29,7 +29,7 @@ extension Endpoint {
               requiresConnectionId: true,
               body: ["channel_cid": cid])
     }
-
+    
     static func deleteChannel(cid: ChannelId) -> Endpoint<EmptyResponse> {
         .init(path: "channels/\(cid.type)/\(cid.id)",
               method: .delete,
@@ -37,7 +37,7 @@ extension Endpoint {
               requiresConnectionId: false,
               body: nil)
     }
-
+    
     static func hideChannel(cid: ChannelId, userId: UserId, clearHistory: Bool) -> Endpoint<EmptyResponse> {
         .init(path: "channels/\(cid.type)/\(cid.id)/hide",
               method: .post,
@@ -45,12 +45,21 @@ extension Endpoint {
               requiresConnectionId: false,
               body: HideChannelRequest(userId: userId, clearHistory: clearHistory))
     }
-
+    
     static func showChannel(cid: ChannelId, userId: UserId) -> Endpoint<EmptyResponse> {
         .init(path: "channels/\(cid.type)/\(cid.id)/show",
               method: .post,
               queryItems: nil,
               requiresConnectionId: false,
               body: ["userId": userId])
+    }
+    
+    static func sendMessage<ExtraData: ExtraDataTypes>(messagePayload: MessagePayload<ExtraData>, cid: ChannelId)
+        -> Endpoint<EmptyResponse> {
+        .init(path: "channels/\(cid.type)/\(cid.id)/message",
+              method: .post,
+              queryItems: nil,
+              requiresConnectionId: true,
+              body: ["message": messagePayload])
     }
 }

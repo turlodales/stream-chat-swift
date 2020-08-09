@@ -63,19 +63,20 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
     }
     
     /// Inserts a new `MessageDTO` object to the database with `additionalState` set to `.pendingSend`.
-    func addNewMessage(text: String, authorUserId: UserId, completion: ((Result<MessageId, Error>) -> Void)? = nil) {
-        let newMessageId: MessageId = .newUniqueId
+    func addNewMessage(text: String, authorUserId: UserId, cid: ChannelId,
+                       completion: ((Result<MessageId, Error>) -> Void)? = nil) {
+        // The format of the id doesn't matter as long as the id is unique. For consistency, we use the same id format
+        // the backend uses.
+        let newMessageId: MessageId = (authorUserId + "-" + .newUniqueId).lowercased()
         
         database.write({ session in
-            guard session.loadUser(id: authorUserId) as UserModel<ExtraData.User>? != nil else {
-                throw ClientError.UserDoesntExist(userId: authorUserId)
-            }
-            
             let newMessage = try session.createMessage(id: newMessageId,
                                                        text: text,
                                                        createdAt: .init(),
                                                        showReplyInChannel: false,
-                                                       extraData: Data([]))
+                                                       extraData: Data([]),
+                                                       authorId: authorUserId,
+                                                       cid: cid)
             newMessage.additionalState = .pendingSend
             
         }) { databaseError in
@@ -84,14 +85,6 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
             } else {
                 completion?(.success(newMessageId))
             }
-        }
-    }
-}
-
-extension ClientError {
-    public class UserDoesntExist: ClientError {
-        init(userId: UserId) {
-            super.init("User with userId:\(userId) doesn't exist.")
         }
     }
 }

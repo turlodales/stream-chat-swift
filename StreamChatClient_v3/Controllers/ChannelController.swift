@@ -154,7 +154,7 @@ public class ChannelControllerGeneric<ExtraData: ExtraDataTypes>: Controller, De
     }
     
     public func addNewMessage(text: String) {
-        worker.addNewMessage(text: text, authorUserId: client.currentUserId) { result in
+        worker.addNewMessage(text: text, authorUserId: client.currentUserId, cid: channelQuery.cid) { result in
             print(result)
         }
     }
