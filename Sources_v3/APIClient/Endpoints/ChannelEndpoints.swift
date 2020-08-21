@@ -62,4 +62,12 @@ extension Endpoint {
               requiresConnectionId: false,
               body: ["userId": userId])
     }
+    
+    static func invite(cid: ChannelId, userIds: Set<UserId>) -> Endpoint<EmptyResponse> {
+        .init(path: "channels/\(cid.type)/\(cid.id)",
+              method: .post,
+              queryItems: nil,
+              requiresConnectionId: false,
+              body: ["invites": userIds])
+    }
 }
