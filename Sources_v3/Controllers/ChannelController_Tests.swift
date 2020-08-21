@@ -823,6 +823,77 @@ class ChannelController_Tests: StressTestCase {
         // Completion should be called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, testError)
     }
+    
+    func test_invite_failsForNewChannels() throws {
+        //  Create `ChannelController` for new channel
+        let query = ChannelQuery(channelPayload: .unique)
+        setupControllerForNewChannel(query: query)
+        let members: Set<UserId> = [.unique]
+
+        // Simulate `addMembers` call and assert error is returned
+        var error: Error? = try await { [callbackQueueID] completion in
+            controller.invite(userIds: members) { error in
+                AssertTestQueue(withId: callbackQueueID)
+                completion(error)
+            }
+        }
+        XCTAssert(error is ClientError.ChannelNotCreatedYet)
+
+        // Simulate succsesfull backend channel creation
+        env.channelUpdater!.update_channelCreatedCallback?(query.cid)
+
+        // Simulate `invite` call and assert no error is returned
+        error = try await { [callbackQueueID] completion in
+            controller.invite(userIds: members) { error in
+                AssertTestQueue(withId: callbackQueueID)
+                completion(error)
+            }
+            env.channelUpdater!.invite_completion?(nil)
+        }
+
+        XCTAssertNil(error)
+    }
+
+    func test_invite_callsChannelUpdater() {
+        let members: Set<UserId> = [.unique]
+        
+        // Simulate `invite` call and catch the completion
+        var completionCalled = false
+        controller.invite(userIds: members) { [callbackQueueID] error in
+            AssertTestQueue(withId: callbackQueueID)
+            XCTAssertNil(error)
+            completionCalled = true
+        }
+        
+        // Assert cid and members state are passed to `channelUpdater`, completion is not called yet
+        XCTAssertEqual(env.channelUpdater!.invite_cid, channelId)
+        XCTAssertEqual(env.channelUpdater!.invite_userIds, members)
+        XCTAssertFalse(completionCalled)
+        
+        // Simulate successfull udpate
+        env.channelUpdater!.invite_completion?(nil)
+        
+        // Assert completion is called
+        AssertAsync.willBeTrue(completionCalled)
+    }
+    
+    func test_invite_propagesErrorFromUpdater() {
+        let members: Set<UserId> = [.unique]
+        
+        // Simulate `invite` call and catch the completion
+        var completionCalledError: Error?
+        controller.invite(userIds: members) { [callbackQueueID] in
+            AssertTestQueue(withId: callbackQueueID)
+            completionCalledError = $0
+        }
+        
+        // Simulate failed udpate
+        let testError = TestError()
+        env.channelUpdater!.invite_completion?(testError)
+        
+        // Completion should be called with the error
+        AssertAsync.willBeEqual(completionCalledError as? TestError, testError)
+    }
 }
 
 private class TestEnvironment {

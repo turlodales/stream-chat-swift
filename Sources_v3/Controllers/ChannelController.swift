@@ -390,6 +390,24 @@ public extension ChannelControllerGeneric {
             completion?(error)
         }
     }
+    
+    /// Invite users to the channel.
+    /// - Parameters:
+    ///   - users: Users Id to invite to the channel.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    func invite(userIds: Set<UserId>, completion: ((Error?) -> Void)? = nil) {
+        guard isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+        worker.invite(cid: channelId, userIds: userIds) { [weak self] error in
+            self?.callback {
+                completion?(error)
+            }
+        }
+    }
+
 }
 
 extension ChannelControllerGeneric {
