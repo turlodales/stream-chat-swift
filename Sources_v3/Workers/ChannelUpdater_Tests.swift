@@ -322,4 +322,55 @@ class ChannelUpdater_Tests: StressTestCase {
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
+    
+    // MARK: - Invite
+
+    func test_invite_makesCorrectAPICall() {
+        let channelID = ChannelId.unique
+        let userIDs: Set<UserId> = Set([UserId.unique])
+
+        // Simulate `invite(cid:, userIds:)` call
+        queryUpdater.invite(cid: channelID, userIds: userIDs)
+
+        // Assert correct endpoint is called
+        let referenceEndpoint: Endpoint<EmptyResponse> = .invite(cid: channelID, userIds: userIDs)
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+    }
+
+    func test_invite_successfulResponse_isPropagatedToCompletion() {
+        let channelID = ChannelId.unique
+        let userIDs: Set<UserId> = Set([UserId.unique])
+        
+        // Simulate `invite(cid:, userIds:)` call
+        var completionCalled = false
+        queryUpdater.invite(cid: channelID, userIds: userIDs) { error in
+            XCTAssertNil(error)
+            completionCalled = true
+        }
+
+        // Assert completion is not called yet
+        XCTAssertFalse(completionCalled)
+
+        // Simulate API response with success
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+
+        // Assert completion is called
+        AssertAsync.willBeTrue(completionCalled)
+    }
+
+    func test_invite_errorResponse_isPropagatedToCompletion() {
+        let channelID = ChannelId.unique
+        let userIDs: Set<UserId> = Set([UserId.unique])
+        
+        // Simulate `invite(cid:, userIds:)` call
+        var completionCalledError: Error?
+        queryUpdater.invite(cid: channelID, userIds: userIDs) { completionCalledError = $0 }
+
+        // Simulate API response with failure
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+
+        // Assert the completion is called with the error
+        AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+    }
 }

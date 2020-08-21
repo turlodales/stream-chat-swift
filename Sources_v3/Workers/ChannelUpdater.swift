@@ -86,4 +86,15 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
             completion?($0.error)
         }
     }
+    
+    /// Invites a member to the channel.
+    /// - Parameters:
+    ///   - cid: The channel you want to invite to.
+    ///   - userIds: Users to invite.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    func invite(cid: ChannelId, userIds: Set<UserId>, completion: ((Error?) -> Void)? = nil) {
+        apiClient.request(endpoint: .invite(cid: cid, userIds: userIds)) {
+            completion?($0.error)
+        }
+    }
 }
