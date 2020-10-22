@@ -273,6 +273,8 @@ extension _ChatMessage {
         mentionedUsers = Set(dto.mentionedUsers.map { $0.asModel() })
         
         localState = dto.localMessageState
+        
+        isFlaggedByCurrentUser = dto.flaggedBy != nil
     }
 }
 

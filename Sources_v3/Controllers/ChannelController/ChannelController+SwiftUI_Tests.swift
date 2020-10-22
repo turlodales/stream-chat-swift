@@ -154,7 +154,8 @@ extension _ChatMessage {
             reactionScores: ["": 1],
             author: .init(id: .unique),
             mentionedUsers: [],
-            localState: nil
+            localState: nil,
+            isFlaggedByCurrentUser: false
         )
     }
 }
