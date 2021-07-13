@@ -17,19 +17,23 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
     func update(
         channelQuery: _ChannelQuery<ExtraData>,
         channelCreatedCallback: ((ChannelId) -> Void)? = nil,
-        completion: ((Error?) -> Void)? = nil
+        completion: ((Result<ChannelPayload<ExtraData>, Error>) -> Void)? = nil
     ) {
         apiClient.request(endpoint: .channel(query: channelQuery)) { (result) in
             do {
                 let payload = try result.get()
                 channelCreatedCallback?(payload.channel.cid)
-                self.database.write { (session) in
+                self.database.write { session in
                     try session.saveChannel(payload: payload)
                 } completion: { error in
-                    completion?(error)
+                    if let error = error {
+                        completion?(.failure(error))
+                        return
+                    }
+                    completion?(.success(payload))
                 }
             } catch {
-                completion?(error)
+                completion?(.failure(error))
             }
         }
     }
@@ -102,6 +106,7 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
     ///   - cid: The cid of the channel the message is create in.
     ///   - text: Text of the message.
     ///   - pinning: Pins the new message. Nil if should not be pinned.
+    ///   - isSilent: A flag indicating whether the message is a silent message. Silent messages are special messages that don't increase the unread messages count nor mark a channel as unread.
     ///   - attachments: An array of the attachments for the message.
     ///   - quotedMessageId: An id of the message new message quotes. (inline reply)
     ///   - extraData: Additional extra data of the message object.
@@ -111,9 +116,11 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
         in cid: ChannelId,
         text: String,
         pinning: MessagePinning? = nil,
+        isSilent: Bool,
         command: String?,
         arguments: String?,
-        attachments: [AttachmentEnvelope] = [],
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId],
         quotedMessageId: MessageId?,
         extraData: ExtraData.Message,
         completion: ((Result<MessageId, Error>) -> Void)? = nil
@@ -128,8 +135,11 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
                 arguments: arguments,
                 parentMessageId: nil,
                 attachments: attachments,
+                mentionedUserIds: mentionedUserIds,
                 showReplyInChannel: false,
+                isSilent: isSilent,
                 quotedMessageId: quotedMessageId,
+                createdAt: nil,
                 extraData: extraData
             )
             
@@ -252,6 +262,21 @@ class ChannelUpdater<ExtraData: ExtraDataTypes>: Worker {
             } catch {
                 completion?(error)
             }
+        }
+    }
+    
+    /// Freezes/Unfreezes the channel.
+    ///
+    /// Freezing a channel will disallow sending new messages and sending / deleting reactions.
+    /// For more information, see https://getstream.io/chat/docs/ios-swift/freezing_channels/?language=swift
+    ///
+    /// - Parameters:
+    ///   - freeze: Freeze or unfreeze.
+    /// - Parameter cid: Channel id of the channel to be watched
+    /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    func freezeChannel(_ freeze: Bool, cid: ChannelId, completion: ((Error?) -> Void)? = nil) {
+        apiClient.request(endpoint: .freezeChannel(freeze, cid: cid)) {
+            completion?($0.error)
         }
     }
 }

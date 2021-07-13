@@ -35,7 +35,7 @@ class AttachmentDTO: NSManagedObject {
     /// An attachment local url.
     @NSManaged var localURL: URL?
     /// An attachment raw `Data`.
-    @NSManaged var data: Data?
+    @NSManaged var data: Data
     
     // MARK: - Relationships
     
@@ -82,7 +82,7 @@ extension NSManagedObjectContext: AttachmentDatabaseSession {
     }
     
     func saveAttachment(
-        payload: AttachmentPayload,
+        payload: MessageAttachmentPayload,
         id: AttachmentId
     ) throws -> AttachmentDTO {
         guard let messageDTO = message(id: id.messageId) else {
@@ -107,7 +107,7 @@ extension NSManagedObjectContext: AttachmentDatabaseSession {
     }
     
     func createNewAttachment(
-        attachment: AttachmentEnvelope,
+        attachment: AnyAttachmentPayload,
         id: AttachmentId
     ) throws -> AttachmentDTO {
         guard let messageDTO = message(id: id.messageId) else {
@@ -125,7 +125,7 @@ extension NSManagedObjectContext: AttachmentDatabaseSession {
         dto.localURL = attachment.localFileURL
         dto.localState = attachment.localFileURL == nil ? .uploaded : .pendingUpload
 
-        dto.data = try JSONEncoder.stream.encode(attachment.payload?.asAnyEncodable)
+        dto.data = try JSONEncoder.stream.encode(attachment.payload.asAnyEncodable)
         dto.channel = channelDTO
         dto.message = messageDTO
         
@@ -140,31 +140,17 @@ private extension AttachmentDTO {
             let localState = localState
         else { return nil }
 
-        return .init(localFileURL: localURL, state: localState)
-    }
-
-    func asModel<T: Decodable>(payloadType: T.Type = T.self) -> _ChatMessageAttachment<T>? {
-        .init(
-            id: attachmentID,
-            type: attachmentType,
-            payload: payload(),
-            uploadingState: uploadingState
-        )
-    }
-
-    /// Helper decoding method that logs error only if object exists.
-    /// Returns `nil` if `Data` for decoding is `nil`.
-    func payload<T: Decodable>(ofType type: T.Type = T.self) -> T? {
-        guard let data = data else { return nil }
-
         do {
-            return try JSONDecoder.default.decode(type, from: data)
-        } catch {
-            log.error(
-                "Failed to decode attachment of type:\(type) with hash: <\(id)>, "
-                    + "falling back to ChatMessageCustomAttachment."
-                    + "Error: \(error)"
+            return .init(
+                localFileURL: localURL,
+                state: localState,
+                file: try AttachmentFile(url: localURL)
             )
+        } catch {
+            log.error("""
+                Failed to build uploading state for attachment with id: \(attachmentID).
+                Error: \(error.localizedDescription)
+            """)
             return nil
         }
     }
@@ -172,52 +158,20 @@ private extension AttachmentDTO {
 
 extension AttachmentDTO {
     /// Snapshots the current state of `AttachmentDTO` and returns an immutable model object from it.
-    func asAnyModel() -> ChatMessageAttachment? {
-        var attachment: ChatMessageAttachment?
-
-        switch attachmentType {
-        case .image:
-            guard let image = asModel(payloadType: AttachmentImagePayload.self) else {
-                log.assertionFailure("Failed to decode `.image` attachment")
-                break
-            }
-            attachment = image.asAnyAttachment
-        case .file:
-            guard let file = asModel(payloadType: AttachmentFilePayload.self) else {
-                log.assertionFailure("Failed to decode `.file` attachment")
-                break
-            }
-            attachment = file.asAnyAttachment
-        case .giphy:
-            guard let giphy = asModel(payloadType: AttachmentGiphyPayload.self) else {
-                log.assertionFailure("Failed to decode `.giphy` attachment")
-                break
-            }
-            attachment = giphy.asAnyAttachment
-        case .linkPreview:
-            guard let link = asModel(payloadType: AttachmentLinkPayload.self) else {
-                log.assertionFailure("Failed to decode `.link` attachment")
-                break
-            }
-            attachment = link.asAnyAttachment
-        default:
-            attachment = .init(
-                id: attachmentID,
-                type: attachmentType,
-                payload: data,
-                uploadingState: uploadingState
-            )
-        }
-
-        return attachment
+    func asAnyModel() -> AnyChatMessageAttachment {
+        .init(
+            id: attachmentID,
+            type: attachmentType,
+            payload: data,
+            uploadingState: uploadingState
+        )
     }
     
     /// Snapshots the current state of `AttachmentDTO` and returns its representation for used in API calls.
     /// It's possible to introduce custom attachment types outside the SDK.
     /// That is why `RawJSON` object is used for sending it to backend because SDK doesn't know the structure of custom attachment.
-    func asRequestPayload() -> AttachmentPayload? {
+    func asRequestPayload() -> MessageAttachmentPayload? {
         guard
-            let data = data,
             let payload = try? JSONDecoder.default.decode(RawJSON.self, from: data)
         else {
             log.error("Internal error. Unable to decode attachment `data` for sending to backend.")
@@ -228,27 +182,34 @@ extension AttachmentDTO {
     }
 
     func update(uploadedFileURL: URL) {
-        switch attachmentType {
-        case .image:
-            guard var image: AttachmentImagePayload = payload() else {
-                log.assertionFailure(
-                    "Image payload must be decoded to provide the `imageURL` before sending"
-                )
-                return
-            }
-            image.imageURL = uploadedFileURL
-            data = try? JSONEncoder.stream.encode(image)
-        case .file:
-            guard var file: AttachmentFilePayload = payload() else {
-                log.assertionFailure(
-                    "File payload must be decoded to provide the `assetURL` before sending"
-                )
-                return
-            }
-            file.assetURL = uploadedFileURL
-            data = try? JSONEncoder.stream.encode(file)
-        default:
-            break
+        let attachment = asAnyModel()
+        let updatedPayload: AnyEncodable
+        
+        if let image = attachment.attachment(payloadType: ImageAttachmentPayload.self) {
+            var payload = image.payload
+            payload.imageURL = uploadedFileURL
+            updatedPayload = payload.asAnyEncodable
+        } else if let video = attachment.attachment(payloadType: VideoAttachmentPayload.self) {
+            var payload = video.payload
+            payload.videoURL = uploadedFileURL
+            updatedPayload = payload.asAnyEncodable
+        } else if let file = attachment.attachment(payloadType: FileAttachmentPayload.self) {
+            var payload = file.payload
+            payload.assetURL = uploadedFileURL
+            updatedPayload = payload.asAnyEncodable
+        } else {
+            log.assertionFailure(
+                "Attachment of type \(attachment.type) is not supposed to be updated with uploaded file URL."
+            )
+            return
+        }
+        
+        do {
+            data = try JSONEncoder.stream.encode(updatedPayload)
+        } catch {
+            log.assertionFailure(
+                "Failed to encode updated payload for attachment with id \(attachmentID) after uploading."
+            )
         }
     }
 }
@@ -293,12 +254,6 @@ extension LocalAttachmentState {
 }
 
 extension ClientError {
-    class MissingAttachmentType: ClientError {
-        init(id: AttachmentId) {
-            super.init("Attachment type is missing for attachment with id: \(id).")
-        }
-    }
-    
     class AttachmentDoesNotExist: ClientError {
         init(id: AttachmentId) {
             super.init("There is no `AttachmentDTO` instance in the DB matching id: \(id).")
@@ -310,26 +265,14 @@ extension ClientError {
             super.init("`AttachmentDTO` with id: \(id) can't be edited (\(reason))")
         }
     }
-    
-    class AttachmentSeedUploading: ClientError {
-        init(id: AttachmentId) {
-            super.init(
-                "Uploading only supported for attachments of type `.image` and `.file`."
-                    + "Failed to upload attachment with id: \(id)"
-            )
-        }
-    }
 
     class AttachmentDecoding: ClientError {}
-}
-
-extension _ChatMessageAttachment {
-    var asAnyAttachment: ChatMessageAttachment {
-        .init(
-            id: id,
-            type: type,
-            payload: payload as Any,
-            uploadingState: uploadingState
-        )
+    
+    class AttachmentUploading: ClientError {
+        init(id: AttachmentId) {
+            super.init(
+                "Failed to upload attachment with id: \(id)"
+            )
+        }
     }
 }

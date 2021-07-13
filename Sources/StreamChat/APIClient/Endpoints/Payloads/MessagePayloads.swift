@@ -57,6 +57,7 @@ class MessagePayload<ExtraData: ExtraDataTypes>: Decodable {
     let parentId: String?
     let showReplyInChannel: Bool
     let quotedMessage: MessagePayload<ExtraData>?
+    let quotedMessageId: MessageId?
     let mentionedUsers: [UserPayload<ExtraData.User>]
     let threadParticipants: [UserPayload<ExtraData.User>]
     let replyCount: Int
@@ -65,7 +66,7 @@ class MessagePayload<ExtraData: ExtraDataTypes>: Decodable {
     let latestReactions: [MessageReactionPayload<ExtraData>]
     let ownReactions: [MessageReactionPayload<ExtraData>]
     let reactionScores: [MessageReactionType: Int]
-    let attachments: [AttachmentPayload]
+    let attachments: [MessageAttachmentPayload]
     let isSilent: Bool
 
     var pinned: Bool
@@ -103,7 +104,8 @@ class MessagePayload<ExtraData: ExtraDataTypes>: Decodable {
             .mapKeys { MessageReactionType(rawValue: $0) } ?? [:]
         // Because attachment objects can be malformed, we wrap those into `OptionalDecodable`
         // and if decoding of those fail, it assignes `nil` instead of throwing whole MessagePayload away.
-        attachments = try container.decode([OptionalDecodable<AttachmentPayload>].self, forKey: .attachments).compactMap(\.base)
+        attachments = try container.decode([OptionalDecodable<MessageAttachmentPayload>].self, forKey: .attachments)
+            .compactMap(\.base)
         extraData = try ExtraData.Message(from: decoder)
         
         // Some endpoints return also channel payload data for convenience
@@ -113,6 +115,7 @@ class MessagePayload<ExtraData: ExtraDataTypes>: Decodable {
         pinnedBy = try container.decodeIfPresent(UserPayload<ExtraData.User>.self, forKey: .pinnedBy)
         pinnedAt = try container.decodeIfPresent(Date.self, forKey: .pinnedAt)
         pinExpires = try container.decodeIfPresent(Date.self, forKey: .pinExpires)
+        quotedMessageId = try container.decodeIfPresent(MessageId.self, forKey: .quotedMessageId)
     }
     
     init(
@@ -137,7 +140,7 @@ class MessagePayload<ExtraData: ExtraDataTypes>: Decodable {
         ownReactions: [MessageReactionPayload<ExtraData>] = [],
         reactionScores: [MessageReactionType: Int],
         isSilent: Bool,
-        attachments: [AttachmentPayload],
+        attachments: [MessageAttachmentPayload],
         channel: ChannelDetailPayload<ExtraData>? = nil,
         pinned: Bool = false,
         pinnedBy: UserPayload<ExtraData.User>? = nil,
@@ -170,6 +173,7 @@ class MessagePayload<ExtraData: ExtraDataTypes>: Decodable {
         self.pinnedBy = pinnedBy
         self.pinnedAt = pinnedAt
         self.pinExpires = pinExpires
+        self.quotedMessageId = quotedMessageId
     }
 }
 
@@ -182,8 +186,10 @@ struct MessageRequestBody<ExtraData: ExtraDataTypes>: Encodable {
     let args: String?
     let parentId: String?
     let showReplyInChannel: Bool
+    let isSilent: Bool
     let quotedMessageId: String?
-    let attachments: [AttachmentPayload]
+    let attachments: [MessageAttachmentPayload]
+    let mentionedUserIds: [UserId]
     var pinned: Bool
     var pinExpires: Date?
     let extraData: ExtraData.Message
@@ -196,8 +202,10 @@ struct MessageRequestBody<ExtraData: ExtraDataTypes>: Encodable {
         args: String? = nil,
         parentId: String? = nil,
         showReplyInChannel: Bool = false,
+        isSilent: Bool = false,
         quotedMessageId: String? = nil,
-        attachments: [AttachmentPayload] = [],
+        attachments: [MessageAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
         pinned: Bool = false,
         pinExpires: Date? = nil,
         extraData: ExtraData.Message
@@ -209,8 +217,10 @@ struct MessageRequestBody<ExtraData: ExtraDataTypes>: Encodable {
         self.args = args
         self.parentId = parentId
         self.showReplyInChannel = showReplyInChannel
+        self.isSilent = isSilent
         self.quotedMessageId = quotedMessageId
         self.attachments = attachments
+        self.mentionedUserIds = mentionedUserIds
         self.pinned = pinned
         self.pinExpires = pinExpires
         self.extraData = extraData
@@ -227,9 +237,14 @@ struct MessageRequestBody<ExtraData: ExtraDataTypes>: Encodable {
         try container.encodeIfPresent(quotedMessageId, forKey: .quotedMessageId)
         try container.encode(pinned, forKey: .pinned)
         try container.encodeIfPresent(pinExpires, forKey: .pinExpires)
+        try container.encode(isSilent, forKey: .isSilent)
 
         if !attachments.isEmpty {
             try container.encode(attachments, forKey: .attachments)
+        }
+        
+        if !mentionedUserIds.isEmpty {
+            try container.encode(mentionedUserIds, forKey: .mentionedUsers)
         }
         
         try extraData.encode(to: encoder)

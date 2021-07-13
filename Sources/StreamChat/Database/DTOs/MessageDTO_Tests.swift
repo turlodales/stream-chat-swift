@@ -359,13 +359,35 @@ class MessageDTO_Tests: XCTestCase {
 
         try database.createCurrentUser(id: currentUserId)
         try database.createChannel(cid: channelId, withMessages: false)
-        
+
+        let imageAttachmentPayload: MessageAttachmentPayload = .image()
+        let fileAttachmentPayload: MessageAttachmentPayload = .file()
+        let giphyAttachmentPayload: MessageAttachmentPayload = .giphy()
+        let linkAttachmentPayload: MessageAttachmentPayload = .link()
+        let videoAttachmentPayload: MessageAttachmentPayload = .video()
+        let testPayload = TestAttachmentPayload.unique
+        let testAttachmentPayload: MessageAttachmentPayload = .init(
+            type: TestAttachmentPayload.type,
+            payload: .dictionary([
+                "name": .string(testPayload.name),
+                "number": .integer(testPayload.number)
+            ])
+        )
+
         let messagePayload: MessagePayload<NoExtraData> = .dummy(
             messageId: messageId,
             quotedMessage: .dummy(
                 messageId: quotedMessageId,
                 authorUserId: quotedMessageAuthorId
             ),
+            attachments: [
+                imageAttachmentPayload,
+                fileAttachmentPayload,
+                giphyAttachmentPayload,
+                linkAttachmentPayload,
+                testAttachmentPayload,
+                videoAttachmentPayload
+            ],
             authorUserId: messageAuthorId,
             latestReactions: (0..<3).map { _ in
                 .dummy(messageId: messageId, user: .dummy(userId: .unique))
@@ -373,6 +395,7 @@ class MessageDTO_Tests: XCTestCase {
             ownReactions: (0..<2).map { _ in
                 .dummy(messageId: messageId, user: .dummy(userId: messageAuthorId))
             },
+            channel: .dummy(cid: channelId),
             pinned: true,
             pinnedByUserId: .unique,
             pinnedAt: .unique,
@@ -405,6 +428,7 @@ class MessageDTO_Tests: XCTestCase {
         )
 
         XCTAssertEqual(loadedMessage.id, messagePayload.id)
+        XCTAssertEqual(loadedMessage.cid, messagePayload.channel?.cid)
         XCTAssertEqual(loadedMessage.type, messagePayload.type)
         XCTAssertEqual(loadedMessage.author.id, messagePayload.user.id)
         XCTAssertEqual(loadedMessage.createdAt, messagePayload.createdAt)
@@ -428,14 +452,38 @@ class MessageDTO_Tests: XCTestCase {
         XCTAssertEqual(pin.expiresAt, messagePayload.pinExpires)
         XCTAssertEqual(pin.pinnedAt, messagePayload.pinnedAt)
         XCTAssertEqual(pin.pinnedBy.id, messagePayload.pinnedBy?.id)
-        XCTAssertEqual(
-            loadedMessage.attachments.map(\.id),
-            messagePayload.attachmentIDs(cid: channelId)
-        )
         // Quoted message
         XCTAssertEqual(loadedMessage.quotedMessage?.id, messagePayload.quotedMessage?.id)
         XCTAssertEqual(loadedMessage.quotedMessage?.author.id, messagePayload.quotedMessage?.user.id)
         XCTAssertEqual(loadedMessage.quotedMessage?.extraData, messagePayload.quotedMessage?.extraData)
+
+        // Attachments
+        XCTAssertEqual(
+            loadedMessage._attachments.map(\.id),
+            messagePayload.attachmentIDs(cid: channelId)
+        )
+        XCTAssertEqual(
+            loadedMessage._attachments.map(\.type),
+            messagePayload.attachments.map(\.type)
+        )
+        XCTAssertEqual(loadedMessage.imageAttachments.map(\.payload), [imageAttachmentPayload.decodedImagePayload])
+        XCTAssertEqual(loadedMessage.fileAttachments.map(\.payload), [fileAttachmentPayload.decodedFilePayload])
+        XCTAssertEqual(loadedMessage.giphyAttachments.map(\.payload), [giphyAttachmentPayload.decodedGiphyPayload])
+        XCTAssertEqual(loadedMessage.linkAttachments.map(\.payload), [linkAttachmentPayload.decodedLinkPayload])
+        XCTAssertEqual(
+            loadedMessage.videoAttachments.map(\.payload),
+            [videoAttachmentPayload.decodedVideoPayload]
+        )
+        XCTAssertEqual(
+            loadedMessage.attachments(payloadType: TestAttachmentPayload.self).map(\.payload),
+            [testPayload]
+        )
+        XCTAssertEqual(
+            loadedMessage.attachmentCounts,
+            messagePayload.attachments.reduce(into: [:]) { scores, attachment in
+                scores[attachment.type, default: 0] += 1
+            }
+        )
     }
     
     func test_newMessage_asRequestBody() throws {
@@ -457,12 +505,14 @@ class MessageDTO_Tests: XCTestCase {
         let messagePinning: MessagePinning? = MessagePinning(expirationDate: .unique)
         let messageCommand: String = .unique
         let messageArguments: String = .unique
-        let attachments: [AttachmentEnvelope] = [
+        let attachments: [AnyAttachmentPayload] = [
             .init(payload: TestAttachmentPayload.unique),
             .mockFile,
             .mockImage
         ]
+        let mentionedUserIds: [UserId] = [currentUserId]
         let messageShowReplyInChannel = true
+        let messageIsSilent = true
         let messageExtraData: NoExtraData = .defaultValue
 
         // Create message with attachments in the database.
@@ -475,8 +525,11 @@ class MessageDTO_Tests: XCTestCase {
                 arguments: messageArguments,
                 parentMessageId: parentMessageId,
                 attachments: attachments,
-                showReplyInChannel: true,
+                mentionedUserIds: mentionedUserIds,
+                showReplyInChannel: messageShowReplyInChannel,
+                isSilent: messageIsSilent,
                 quotedMessageId: nil,
+                createdAt: nil,
                 extraData: messageExtraData
             ).id
         }
@@ -494,10 +547,12 @@ class MessageDTO_Tests: XCTestCase {
         XCTAssertEqual(requestBody.args, messageArguments)
         XCTAssertEqual(requestBody.parentId, parentMessageId)
         XCTAssertEqual(requestBody.showReplyInChannel, messageShowReplyInChannel)
+        XCTAssertEqual(requestBody.isSilent, messageIsSilent)
         XCTAssertEqual(requestBody.extraData, messageExtraData)
         XCTAssertEqual(requestBody.pinned, true)
         XCTAssertEqual(requestBody.pinExpires, messagePinning!.expirationDate)
         XCTAssertEqual(requestBody.attachments.map(\.type), attachments.map(\.type))
+        XCTAssertEqual(requestBody.mentionedUserIds, mentionedUserIds)
     }
     
     func test_additionalLocalState_isStored() {
@@ -578,8 +633,11 @@ class MessageDTO_Tests: XCTestCase {
                     arguments: nil,
                     parentMessageId: nil,
                     attachments: [],
+                    mentionedUserIds: [],
                     showReplyInChannel: false,
+                    isSilent: false,
                     quotedMessageId: nil,
+                    createdAt: nil,
                     extraData: NoExtraData.defaultValue
                 )
                 message1Id = message1DTO.id
@@ -594,31 +652,28 @@ class MessageDTO_Tests: XCTestCase {
                     arguments: nil,
                     parentMessageId: nil,
                     attachments: [],
+                    mentionedUserIds: [],
                     showReplyInChannel: false,
+                    isSilent: false,
                     quotedMessageId: nil,
+                    createdAt: nil,
                     extraData: NoExtraData.defaultValue
                 )
+                // Reset the `locallyCreateAt` value of the second message to simulate the message was sent
+                message2DTO.locallyCreatedAt = nil
                 message2Id = message2DTO.id
             }, completion: completion)
         }
         
-        var message1: MessageDTO? {
-            database.viewContext.message(id: message1Id)
-        }
-        
-        var message2: MessageDTO? {
-            database.viewContext.message(id: message2Id)
-        }
-        
+        let message1: MessageDTO = try XCTUnwrap(database.viewContext.message(id: message1Id))
+        let message2: MessageDTO = try XCTUnwrap(database.viewContext.message(id: message2Id))
+
         AssertAsync {
-            Assert.willBeTrue(message1 != nil)
-            Assert.willBeTrue(message2 != nil)
-            
             // Message 1 should have `locallyCreatedAt` as `defaultSortingKey`
-            Assert.willBeEqual(message1?.defaultSortingKey, message1?.locallyCreatedAt)
+            Assert.willBeEqual(message1.defaultSortingKey, message1.locallyCreatedAt)
             
             // Message 2 should have `createdAt` as `defaultSortingKey`
-            Assert.willBeEqual(message2?.defaultSortingKey, message2?.createdAt)
+            Assert.willBeEqual(message2.defaultSortingKey, message2.createdAt)
         }
     }
 
@@ -673,12 +728,13 @@ class MessageDTO_Tests: XCTestCase {
         let newMessageCommand: String = .unique
         let newMessageArguments: String = .unique
         let newMessageParentMessageId: String = .unique
-        let newMessageAttachments: [AttachmentEnvelope] = [
+        let newMessageAttachments: [AnyAttachmentPayload] = [
             .init(payload: TestAttachmentPayload.unique),
             .mockFile,
             .mockImage
         ]
         let newMessagePinning: MessagePinning? = MessagePinning(expirationDate: .unique)
+        let newMentionedUserIds: [UserId] = [.unique]
                 
         _ = try waitFor { completion in
             database.write({
@@ -690,8 +746,11 @@ class MessageDTO_Tests: XCTestCase {
                     arguments: newMessageArguments,
                     parentMessageId: newMessageParentMessageId,
                     attachments: newMessageAttachments,
+                    mentionedUserIds: newMentionedUserIds,
                     showReplyInChannel: true,
+                    isSilent: false,
                     quotedMessageId: nil,
+                    createdAt: nil,
                     extraData: NoExtraData.defaultValue
                 )
                 newMessageId = messageDTO.id
@@ -716,7 +775,7 @@ class MessageDTO_Tests: XCTestCase {
         XCTAssertEqual(loadedMessage.createdAt, loadedMessage.locallyCreatedAt)
         XCTAssertEqual(loadedMessage.createdAt, loadedMessage.updatedAt)
         XCTAssertEqual(
-            loadedMessage.attachments.map { $0.uploadingState?.localFileURL },
+            loadedMessage._attachments.map { $0.uploadingState?.localFileURL },
             newMessageAttachments.map(\.localFileURL)
         )
     }
@@ -732,8 +791,11 @@ class MessageDTO_Tests: XCTestCase {
                     arguments: .unique,
                     parentMessageId: .unique,
                     attachments: [],
+                    mentionedUserIds: [.unique],
                     showReplyInChannel: true,
+                    isSilent: false,
                     quotedMessageId: nil,
+                    createdAt: nil,
                     extraData: NoExtraData.defaultValue
                 )
             }, completion: completion)
@@ -767,8 +829,11 @@ class MessageDTO_Tests: XCTestCase {
                     arguments: .unique,
                     parentMessageId: .unique,
                     attachments: [],
+                    mentionedUserIds: [.unique],
                     showReplyInChannel: true,
+                    isSilent: false,
                     quotedMessageId: nil,
+                    createdAt: nil,
                     extraData: NoExtraData.defaultValue
                 )
             }, completion: completion)
@@ -804,6 +869,7 @@ class MessageDTO_Tests: XCTestCase {
                 text: newMessageText,
                 pinning: MessagePinning(expirationDate: .unique),
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: NoExtraData.defaultValue
             )
             newMessageId = messageDTO.id
@@ -813,8 +879,8 @@ class MessageDTO_Tests: XCTestCase {
             database.viewContext.message(id: newMessageId)
         )
         
-        XCTAssertEqual(loadedMessage.channel.lastMessageAt, loadedMessage.createdAt)
-        XCTAssertEqual(loadedMessage.channel.defaultSortingAt, loadedMessage.createdAt)
+        XCTAssertEqual(loadedMessage.channel!.lastMessageAt, loadedMessage.createdAt)
+        XCTAssertEqual(loadedMessage.channel!.defaultSortingAt, loadedMessage.createdAt)
     }
     
     func test_replies_linkedToParentMessage_onCreatingNewMessage() throws {
@@ -840,8 +906,11 @@ class MessageDTO_Tests: XCTestCase {
                 arguments: nil,
                 parentMessageId: messageId,
                 attachments: [],
+                mentionedUserIds: [],
                 showReplyInChannel: false,
+                isSilent: false,
                 quotedMessageId: nil,
+                createdAt: nil,
                 extraData: NoExtraData.defaultValue
             )
             // Get reply messageId
@@ -968,6 +1037,178 @@ class MessageDTO_Tests: XCTestCase {
         }
         channel = try XCTUnwrap(database.viewContext.channel(cid: channelId))
         XCTAssertEqual(channel.lastMessageAt, newerMessagePayload.createdAt)
+    }
+    
+    func test_saveMultipleMessagesWithSameQuotedMessage() throws {
+        // We check whether a message can be quoted by multiple other messages in the same channel
+        // Here, secondMessage and thirdMessage quote the firstMessage
+        
+        let firstMessageId: MessageId = .unique
+        let secondMessageId: MessageId = .unique
+        let thirdMessageId: MessageId = .unique
+        let currentUserId: UserId = .unique
+        let messageAuthorId: UserId = .unique
+        let channelId: ChannelId = .unique
+        
+        try database.createCurrentUser(id: currentUserId)
+        try database.createChannel(cid: channelId, withMessages: false)
+        
+        var createdMessages: [MessagePayload<NoExtraData>] = []
+        
+        let messageIdToQuotedIdMapping = [
+            secondMessageId: firstMessageId,
+            thirdMessageId: firstMessageId
+        ]
+        
+        let messageToBeQuoted: MessagePayload<NoExtraData> = .dummy(
+            messageId: firstMessageId,
+            quotedMessage: nil,
+            attachments: [],
+            authorUserId: messageAuthorId,
+            latestReactions: [],
+            ownReactions: [],
+            channel: .dummy(cid: channelId),
+            pinned: true,
+            pinnedByUserId: .unique,
+            pinnedAt: .unique,
+            pinExpires: .unique
+        )
+        createdMessages.append(messageToBeQuoted)
+        
+        messageIdToQuotedIdMapping.forEach { (messageId, quotedMessageId) in
+            let message: MessagePayload<NoExtraData> = .dummy(
+                messageId: messageId,
+                quotedMessage: .dummy(
+                    messageId: quotedMessageId,
+                    authorUserId: messageAuthorId
+                ),
+                attachments: [],
+                authorUserId: messageAuthorId,
+                latestReactions: [],
+                ownReactions: [],
+                channel: .dummy(cid: channelId),
+                pinned: true,
+                pinnedByUserId: .unique,
+                pinnedAt: .unique,
+                pinExpires: .unique
+            )
+            createdMessages.append(message)
+        }
+                
+        try createdMessages.forEach { messagePayload in
+            try database.writeSynchronously { session in
+                // Save the message
+                try session.saveMessage(payload: messagePayload, for: channelId)
+            }
+        }
+
+        var loadedMessages: [ChatMessage] = []
+        try [firstMessageId, secondMessageId, thirdMessageId].forEach { messageId in
+            // Load the messages one by one from the db and save them
+            let loadedMessage: ChatMessage = try XCTUnwrap(
+                database.viewContext.message(id: messageId)?.asModel()
+            )
+            loadedMessages.append(loadedMessage)
+        }
+        
+        XCTAssertEqual(createdMessages.count, loadedMessages.count)
+        
+        // The very first message doesn't quote any message
+        XCTAssertEqual(loadedMessages.first?.quotedMessage, nil)
+        // The second message quotes the first message
+        XCTAssertEqual(loadedMessages[1].quotedMessage?.id, createdMessages[0].id)
+        // The third message also quotes the first message
+        XCTAssertEqual(loadedMessages[2].quotedMessage?.id, createdMessages[0].id)
+    }
+    
+    func test_saveMessagesWithNestedQuotedMessages() throws {
+        // We check whether we can successfully nest quoted messages
+        // i.e. A, B-quotes-A, C-quotes-B
+        // Here, secondMessage and thirdMessage quote the firstMessage
+        
+        let firstMessageId: MessageId = .unique
+        let secondMessageId: MessageId = .unique
+        let thirdMessageId: MessageId = .unique
+        let currentUserId: UserId = .unique
+        let messageAuthorId: UserId = .unique
+        let channelId: ChannelId = .unique
+        
+        try database.createCurrentUser(id: currentUserId)
+        try database.createChannel(cid: channelId, withMessages: false)
+        
+        var createdMessages: [MessagePayload<NoExtraData>] = []
+        
+        let firstMessage: MessagePayload<NoExtraData> = .dummy(
+            messageId: firstMessageId,
+            quotedMessage: nil,
+            attachments: [],
+            authorUserId: messageAuthorId,
+            latestReactions: [],
+            ownReactions: [],
+            channel: .dummy(cid: channelId),
+            pinned: true,
+            pinnedByUserId: .unique,
+            pinnedAt: .unique,
+            pinExpires: .unique
+        )
+        createdMessages.append(firstMessage)
+        
+        let secondMessage: MessagePayload<NoExtraData> = .dummy(
+            messageId: secondMessageId,
+            quotedMessage: firstMessage,
+            attachments: [],
+            authorUserId: messageAuthorId,
+            latestReactions: [],
+            ownReactions: [],
+            channel: .dummy(cid: channelId),
+            pinned: true,
+            pinnedByUserId: .unique,
+            pinnedAt: .unique,
+            pinExpires: .unique
+        )
+        createdMessages.append(secondMessage)
+        
+        // Note that the third message contains a quotedMessageId instead of a quotedMessage
+        let thirdMessage: MessagePayload<NoExtraData> = .dummy(
+            messageId: thirdMessageId,
+            quotedMessageId: secondMessageId,
+            quotedMessage: nil,
+            attachments: [],
+            authorUserId: messageAuthorId,
+            latestReactions: [],
+            ownReactions: [],
+            channel: .dummy(cid: channelId),
+            pinned: true,
+            pinnedByUserId: .unique,
+            pinnedAt: .unique,
+            pinExpires: .unique
+        )
+        createdMessages.append(thirdMessage)
+
+        try createdMessages.forEach { messagePayload in
+            try database.writeSynchronously { session in
+                // Save the message
+                try session.saveMessage(payload: messagePayload, for: channelId)
+            }
+        }
+
+        var loadedMessages: [ChatMessage] = []
+        try [firstMessageId, secondMessageId, thirdMessageId].forEach { messageId in
+            // Load the messages one by one from the db and save them
+            let loadedMessage: ChatMessage = try XCTUnwrap(
+                database.viewContext.message(id: messageId)?.asModel()
+            )
+            loadedMessages.append(loadedMessage)
+        }
+        
+        XCTAssertEqual(createdMessages.count, loadedMessages.count)
+        
+        // The very first message doesn't quote any message
+        XCTAssertEqual(loadedMessages.first?.quotedMessage, nil)
+        // The second message quotes the first message
+        XCTAssertEqual(loadedMessages[1].quotedMessage?.id, createdMessages[0].id)
+        // The third message also quotes the first message
+        XCTAssertEqual(loadedMessages[2].quotedMessage?.id, createdMessages[1].id)
     }
 }
 

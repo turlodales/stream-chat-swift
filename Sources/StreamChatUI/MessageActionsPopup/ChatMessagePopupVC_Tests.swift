@@ -36,7 +36,8 @@ final class ChatMessagePopupVC_Tests: XCTestCase {
 
         message = .mock(
             id: .unique,
-            text: "Message text",
+            cid: .unique,
+            text: "Message",
             author: .mock(id: .unique)
         )
 
@@ -48,12 +49,21 @@ final class ChatMessagePopupVC_Tests: XCTestCase {
         messageContentView.content = message
         
         vc = TestChatMessagePopupVC()
+        vc.messageBubbleViewInsets.right = 70
         vc.messageContentView = messageContentView
-        vc.messageViewFrame = CGRect(x: 50, y: 300, width: 200, height: 50)
+        vc.messageViewFrame = CGRect(x: 50, y: 300, width: 220, height: 200)
+        vc.messageViewFrame.size = vc.messageContentView.systemLayoutSizeFitting(
+            CGSize(width: vc.messageViewFrame.width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .streamRequire,
+            verticalFittingPriority: .streamLow
+        )
+
+        messageContentView.translatesAutoresizingMaskIntoConstraints = false
+        vc.messageContentContainerView.embed(messageContentView)
         
         let chatMessageController = ChatMessageController_Mock<NoExtraData>.mock()
         chatMessageController.simulateInitial(
-            message: ChatMessage.mock(id: .unique, text: "", author: ChatUser.mock(id: .unique)),
+            message: ChatMessage.mock(id: .unique, cid: .unique, text: "", author: ChatUser.mock(id: .unique)),
             replies: [],
             state: .remoteDataFetched
         )
@@ -62,6 +72,7 @@ final class ChatMessagePopupVC_Tests: XCTestCase {
         vc.reactionsController = reactionsController
         actionsController = ChatMessageActionsVC()
         actionsController.messageController = chatMessageController
+        actionsController.channelConfig = .mock()
         vc.actionsController = actionsController
     }
     
@@ -75,13 +86,18 @@ final class ChatMessagePopupVC_Tests: XCTestCase {
     }
     
     func test_defaultAppearance_when_largeLongMessage() {
-        vc.messageViewFrame = CGRect(x: 50, y: 100, width: 200, height: 50)
         vc.messageContentView.content = .mock(
             id: .unique,
+            cid: .unique,
             text: repeatElement("Message text", count: 8).joined(separator: "\n"),
             author: .mock(id: .unique)
         )
-        AssertSnapshot(vc)
+        vc.messageViewFrame.size = vc.messageContentView.systemLayoutSizeFitting(
+            CGSize(width: vc.messageViewFrame.width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .streamRequire,
+            verticalFittingPriority: .streamLow
+        )
+        AssertSnapshot(vc, variants: [.defaultDark, .defaultLight])
     }
     
     func test_appearanceCustomization_usingAppearance() {
@@ -90,7 +106,7 @@ final class ChatMessagePopupVC_Tests: XCTestCase {
 
         vc.appearance = config
 
-        AssertSnapshot(vc)
+        AssertSnapshot(vc, variants: [.defaultDark, .defaultLight])
     }
     
     func test_appearanceCustomization_usingSubclassing() {
@@ -113,8 +129,15 @@ final class ChatMessagePopupVC_Tests: XCTestCase {
         let vc = TestView()
         vc.actionsController = actionsController
         vc.messageContentView = messageContentView
-        vc.messageViewFrame = CGRect(x: 50, y: 300, width: 200, height: 50)
+        vc.messageViewFrame = CGRect(x: 50, y: 300, width: 220, height: 50)
+        vc.messageViewFrame.size = vc.messageContentView.systemLayoutSizeFitting(
+            CGSize(width: vc.messageViewFrame.width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .streamRequire,
+            verticalFittingPriority: .streamLow
+        )
+        messageContentView.translatesAutoresizingMaskIntoConstraints = false
+        vc.messageContentContainerView.embed(messageContentView)
 
-        AssertSnapshot(vc)
+        AssertSnapshot(vc, variants: [.defaultDark, .defaultLight])
     }
 }

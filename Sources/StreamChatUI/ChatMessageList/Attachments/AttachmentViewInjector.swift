@@ -18,6 +18,10 @@ public typealias AttachmentViewInjector = _AttachmentViewInjector<NoExtraData>
 /// - Important: This is an abstract superclass meant to be subclassed.
 ///
 open class _AttachmentViewInjector<ExtraData: ExtraDataTypes> {
+    /// Says whether a message content should start filling all available width.
+    /// Is `true` by default.
+    open var fillAllAvailableWidth: Bool = true
+    
     /// Called after `contentView.prepareForReuse` is called.
     open func contentViewDidPrepareForReuse() {}
 
@@ -36,6 +40,12 @@ open class _AttachmentViewInjector<ExtraData: ExtraDataTypes> {
     ///
     public required init(_ contentView: _ChatMessageContentView<ExtraData>) {
         self.contentView = contentView
+    }
+
+    public func attachments<Payload: AttachmentPayload>(
+        payloadType: Payload.Type
+    ) -> [_ChatMessageAttachment<Payload>] {
+        contentView.content?.attachments(payloadType: payloadType) ?? []
     }
 
     @available(*, unavailable)

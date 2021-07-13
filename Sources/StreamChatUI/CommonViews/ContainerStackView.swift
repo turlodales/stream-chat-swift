@@ -88,6 +88,12 @@ public class ContainerStackView: UIView {
 
     /// Each view's `isHidden` property is observed to hide or show the view in the container.
     private var hidingObserversByView: [UIView: NSKeyValueObservation] = [:]
+    
+    /// Layout guide used to enforce views having the same width/height if necessary.
+    private lazy var sizeLayoutGuide = UILayoutGuide()
+    
+    /// Constraints that force views to be the same size on the axis, if not hidden.
+    private var sizeConstraintsByView: [UIView: NSLayoutConstraint] = [:]
 
     /// Creates the container with predefined configuration and initial arranged subviews.
     /// - Parameters:
@@ -110,7 +116,17 @@ public class ContainerStackView: UIView {
         self.distribution = distribution
         addArrangedSubviews(arrangedSubviews)
     }
-
+    
+    override public init(frame: CGRect) {
+        super.init(frame: frame)
+        addLayoutGuide(sizeLayoutGuide)
+    }
+    
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
     /// The distribution of the arranged subviews along the container’s axis.
     public var distribution: Distribution = .natural {
         didSet {
@@ -209,6 +225,9 @@ public class ContainerStackView: UIView {
         subview.alpha = 1.0
         hideConstraintsByView[subview]?.isActive = false
         hideConstraintsByView[subview] = nil
+        
+        sizeConstraintsByView[subview]?.isActive = false
+        sizeConstraintsByView[subview] = nil
 
         // Remove the hiding observer from the removed view
         hidingObserversByView[subview] = nil
@@ -298,15 +317,11 @@ public class ContainerStackView: UIView {
 
         // Make the arranged subviews all with the same size in case of equal distribution
         if distribution == .equal {
-            zip(subviews, subviews.dropFirst()).forEach { lView, rView in
+            subviews.forEach { view in
                 if axis == .horizontal {
-                    customConstraints.append(
-                        lView.widthAnchor.constraint(equalTo: rView.widthAnchor)
-                    )
+                    sizeConstraintsByView[view] = view.widthAnchor.constraint(equalTo: sizeLayoutGuide.widthAnchor)
                 } else {
-                    customConstraints.append(
-                        lView.heightAnchor.constraint(equalTo: rView.heightAnchor)
-                    )
+                    sizeConstraintsByView[view] = view.heightAnchor.constraint(equalTo: sizeLayoutGuide.heightAnchor)
                 }
             }
         }
@@ -367,6 +382,10 @@ public class ContainerStackView: UIView {
         for (view, constraint) in customTopConstraintsByView where !view.isHidden {
             constraint.isActive = true
         }
+        
+        for (view, constraint) in sizeConstraintsByView where !view.isHidden {
+            constraint.isActive = true
+        }
     }
 
     // MARK: - Private API
@@ -376,9 +395,11 @@ public class ContainerStackView: UIView {
         NSLayoutConstraint.deactivate(customConstraints)
         NSLayoutConstraint.deactivate(customTopConstraintsByView.map(\.value))
         NSLayoutConstraint.deactivate(customLeadingConstraintsByView.map(\.value))
+        NSLayoutConstraint.deactivate(sizeConstraintsByView.map(\.value))
         customConstraints = []
         customTopConstraintsByView = [:]
         customLeadingConstraintsByView = [:]
+        sizeConstraintsByView = [:]
         setNeedsUpdateConstraints()
     }
 
@@ -395,6 +416,8 @@ public class ContainerStackView: UIView {
         guard subview.alpha != 0 else { return }
 
         updateConstraintsIfNeeded()
+        
+        sizeConstraintsByView[subview]?.isActive = false
 
         if axis == .horizontal {
             hideConstraintsByView[subview] = subview.widthAnchor.constraint(equalToConstant: 0)
@@ -414,7 +437,7 @@ public class ContainerStackView: UIView {
 
         spacingConstraintsByView[subview]?.setTemporaryConstant(0)
 
-        layoutIfNeeded()
+        setNeedsLayout()
     }
 
     /// Shows the arranged subview by setting the width, height and spacing constraints to the original value before being hidden.
@@ -433,9 +456,12 @@ public class ContainerStackView: UIView {
         }
 
         hideConstraintsByView[subview]?.isActive = false
+        
+        sizeConstraintsByView[subview]?.isActive = true
 
         spacingConstraintsByView[subview]?.resetTemporaryConstant()
-        layoutIfNeeded()
+        
+        setNeedsLayout()
     }
 
     deinit {
@@ -470,6 +496,7 @@ extension UILayoutPriority {
 
 extension NSLayoutConstraint {
     func setTemporaryConstant(_ value: CGFloat) {
+        guard originalConstant == nil else { return }
         originalConstant = constant
         constant = value
     }
@@ -477,6 +504,7 @@ extension NSLayoutConstraint {
     func resetTemporaryConstant() {
         if let original = originalConstant {
             constant = original
+            originalConstant = nil
         }
     }
 

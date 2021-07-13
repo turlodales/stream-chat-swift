@@ -14,10 +14,10 @@ class CreateChatViewController: UIViewController {
     }
     
     // Composer subclass intended to be only used in this VC
-    class DemoComposerVC: _ChatMessageComposerVC<NoExtraData> {
-        override func createNewMessage(text: String, quotedMessageId: MessageId? = nil, attachments: [AttachmentEnvelope] = []) {
+    class DemoComposerVC: _ComposerVC<NoExtraData> {
+        override func createNewMessage(text: String) {
             guard let navController = parent?.parent as? UINavigationController,
-                  let controller = controller else { return }
+                  let controller = channelController else { return }
             // Create the Channel on backend
             controller.synchronize { error in
                 // TODO: handle error
@@ -343,7 +343,7 @@ extension CreateChatViewController: UITableViewDelegate, UITableViewDataSource {
         update(for: .selected)
         let client = searchController.client
         do {
-            composerView.controller = try client
+            composerView.channelController = try client
                 .channelController(
                     createDirectMessageChannelWith: selectedUserIds,
                     name: nil,
@@ -385,5 +385,70 @@ extension UIImage {
         UIGraphicsEndImageContext()
         
         return newImage!
+    }
+}
+
+extension UIViewController {
+    func presentAlert(title: String?, message: String? = nil, okHandler: (() -> Void)? = nil, cancelHandler: (() -> Void)? = nil) {
+        let alert = UIAlertController(
+            title: title,
+            message: message,
+            preferredStyle: .alert
+        )
+        
+        alert.addAction(.init(title: "OK", style: .default, handler: { _ in
+            okHandler?()
+        }))
+        
+        if let cancelHandler = cancelHandler {
+            alert.addAction(.init(title: "Cancel", style: .destructive, handler: { _ in
+                cancelHandler()
+            }))
+        }
+        
+        present(alert, animated: true, completion: nil)
+    }
+    
+    func presentAlert(
+        title: String?,
+        message: String? = nil,
+        textFieldPlaceholder: String? = nil,
+        okHandler: @escaping ((String?) -> Void),
+        cancelHandler: (() -> Void)? = nil
+    ) {
+        let alert = UIAlertController(
+            title: title,
+            message: message,
+            preferredStyle: .alert
+        )
+        
+        alert.addTextField { textField in
+            textField.placeholder = textFieldPlaceholder
+        }
+        
+        alert.addAction(.init(title: "OK", style: .default, handler: { _ in
+            okHandler(alert.textFields?.first?.text)
+        }))
+        
+        alert.addAction(.init(title: "Cancel", style: .destructive, handler: { _ in
+            cancelHandler?()
+        }))
+        
+        present(alert, animated: true, completion: nil)
+    }
+    
+    func presentAlert(title: String?, message: String? = nil, actions: [UIAlertAction], cancelHandler: (() -> Void)? = nil) {
+        let alert = UIAlertController(
+            title: title,
+            message: message,
+            preferredStyle: .alert
+        )
+        
+        actions.forEach { alert.addAction($0) }
+        alert.addAction(.init(title: "Cancel", style: .destructive, handler: { _ in
+            cancelHandler?()
+        }))
+        
+        present(alert, animated: true, completion: nil)
     }
 }

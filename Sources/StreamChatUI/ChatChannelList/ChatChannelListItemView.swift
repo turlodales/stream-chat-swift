@@ -10,8 +10,21 @@ public typealias ChatChannelListItemView = _ChatChannelListItemView<NoExtraData>
 
 /// An `UIView` subclass that shows summary and preview information about a given channel.
 open class _ChatChannelListItemView<ExtraData: ExtraDataTypes>: _View, ThemeProvider, SwiftUIRepresentable {
+    /// The content of this view.
+    public struct Content {
+        /// Channel for the current Item.
+        public let channel: _ChatChannel<ExtraData>
+        /// Current user ID needed to filter out when showing typing indicator.
+        public let currentUserId: UserId?
+        
+        public init(channel: _ChatChannel<ExtraData>, currentUserId: UserId?) {
+            self.channel = channel
+            self.currentUserId = currentUserId
+        }
+    }
+    
     /// The data this view component shows.
-    public var content: _ChatChannel<ExtraData>? {
+    public var content: Content? {
         didSet { updateContentIfNeeded() }
     }
 
@@ -31,65 +44,49 @@ open class _ChatChannelListItemView<ExtraData: ExtraDataTypes>: _View, ThemeProv
     open private(set) lazy var bottomContainer: ContainerStackView = ContainerStackView().withoutAutoresizingMaskConstraints
     
     /// The `UILabel` instance showing the channel name.
-    open private(set) lazy var titleLabel: UILabel = components
-        .channelList
-        .itemSubviews
-        .titleLabel
-        .init()
+    open private(set) lazy var titleLabel: UILabel = UILabel()
         .withoutAutoresizingMaskConstraints
         .withAdjustingFontForContentSizeCategory
         .withBidirectionalLanguagesSupport
     
-    /// The `UILabel` instance showing the last message or typing members if any.
-    open private(set) lazy var subtitleLabel: UILabel = components
-        .channelList
-        .itemSubviews
-        .subtitleLabel
-        .init()
+    /// The `UILabel` instance showing the last message or typing users if any.
+    open private(set) lazy var subtitleLabel: UILabel = UILabel()
         .withoutAutoresizingMaskConstraints
         .withAdjustingFontForContentSizeCategory
         .withBidirectionalLanguagesSupport
     
     /// The `UILabel` instance showing the time of the last sent message.
-    open private(set) lazy var timestampLabel: UILabel = components
-        .channelList
-        .itemSubviews
-        .timestampLabel
-        .init()
+    open private(set) lazy var timestampLabel: UILabel = UILabel()
         .withoutAutoresizingMaskConstraints
         .withAdjustingFontForContentSizeCategory
         .withBidirectionalLanguagesSupport
     
     /// The view used to show channels avatar.
     open private(set) lazy var avatarView: _ChatChannelAvatarView<ExtraData> = components
-        .channelList
-        .itemSubviews
-        .avatarView
+        .channelAvatarView
         .init()
         .withoutAutoresizingMaskConstraints
     
     /// The view showing number of unread messages in channel if any.
     open private(set) lazy var unreadCountView: ChatChannelUnreadCountView = components
-        .channelList
-        .itemSubviews
-        .unreadCountView.init()
+        .channelUnreadCountView.init()
         .withoutAutoresizingMaskConstraints
 
     /// Text of `titleLabel` which contains the channel name.
     open var titleText: String? {
-        if let channel = content {
-            return components.channelList.channelNamer(channel, channel.membership?.id)
+        if let channel = content?.channel {
+            return components.channelNamer(channel, channel.membership?.id)
         } else {
             return nil
         }
     }
 
-    /// Text of `subtitleLabel` which contains current typing member or the last message in the channel.
+    /// Text of `subtitleLabel` which contains current typing user or the last message in the channel.
     open var subtitleText: String? {
-        guard let channel = content else { return nil }
-        if let typingMembersInfo = typingMemberString {
-            return typingMembersInfo
-        } else if let latestMessage = channel.latestMessages.first {
+        guard let content = content else { return nil }
+        if let typingUsersInfo = typingUserString {
+            return typingUsersInfo
+        } else if let latestMessage = content.channel.latestMessages.first {
             return "\(latestMessage.author.name ?? latestMessage.author.id): \(latestMessage.text)"
         } else {
             return L10n.Channel.Item.emptyMessages
@@ -98,7 +95,7 @@ open class _ChatChannelListItemView<ExtraData: ExtraDataTypes>: _View, ThemeProv
 
     /// Text of `timestampLabel` which contains the time of the last sent message.
     open var timestampText: String? {
-        if let lastMessageAt = content?.lastMessageAt {
+        if let lastMessageAt = content?.channel.lastMessageAt {
             return dateFormatter.string(from: lastMessageAt)
         } else {
             return nil
@@ -171,19 +168,21 @@ open class _ChatChannelListItemView<ExtraData: ExtraDataTypes>: _View, ThemeProv
         subtitleLabel.text = subtitleText
         timestampLabel.text = timestampText
 
-        avatarView.content = (content, content?.membership?.id)
+        avatarView.content = (content?.channel, content?.currentUserId)
 
-        unreadCountView.content = content?.unreadCount ?? .noUnread
+        unreadCountView.content = content?.channel.unreadCount ?? .noUnread
         unreadCountView.invalidateIntrinsicContentSize()
     }
 }
 
 extension _ChatChannelListItemView {
     /// The formatted string containing the typing member.
-    var typingMemberString: String? {
-        guard let members = content?.currentlyTypingMembers, !members.isEmpty else { return nil }
+    var typingUserString: String? {
+        guard let users = content?.channel.currentlyTypingUsers.filter({ $0.id != content?.currentUserId }),
+              !users.isEmpty
+        else { return nil }
 
-        let names = members
+        let names = users
             .compactMap(\.name)
             .sorted()
             .joined(separator: ", ")
@@ -191,6 +190,6 @@ extension _ChatChannelListItemView {
         let typingSingularText = L10n.Channel.Item.typingSingular
         let typingPluralText = L10n.Channel.Item.typingPlural
 
-        return names + " \(members.count == 1 ? typingSingularText : typingPluralText)"
+        return names + " \(users.count == 1 ? typingSingularText : typingPluralText)"
     }
 }

@@ -77,9 +77,12 @@ extension DatabaseSessionMock {
         command: String?,
         arguments: String?,
         parentMessageId: MessageId?,
-        attachments: [AttachmentEnvelope],
+        attachments: [AnyAttachmentPayload],
+        mentionedUserIds: [UserId],
         showReplyInChannel: Bool,
+        isSilent: Bool,
         quotedMessageId: MessageId?,
+        createdAt: Date?,
         extraData: ExtraData
     ) throws -> MessageDTO where ExtraData: MessageExtraData {
         try throwErrorIfNeeded()
@@ -92,8 +95,11 @@ extension DatabaseSessionMock {
             arguments: arguments,
             parentMessageId: parentMessageId,
             attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
             showReplyInChannel: showReplyInChannel,
+            isSilent: isSilent,
             quotedMessageId: quotedMessageId,
+            createdAt: createdAt,
             extraData: extraData
         )
     }
@@ -139,6 +145,21 @@ extension DatabaseSessionMock {
         where ExtraData: ExtraDataTypes {
         try throwErrorIfNeeded()
         return try underlyingSession.saveChannelRead(payload: payload, for: cid)
+    }
+    
+    func saveChannelRead(
+        cid: ChannelId,
+        userId: UserId,
+        lastReadAt: Date,
+        unreadMessageCount: Int
+    ) throws -> ChannelReadDTO {
+        try throwErrorIfNeeded()
+        return try underlyingSession.saveChannelRead(
+            cid: cid,
+            userId: userId,
+            lastReadAt: lastReadAt,
+            unreadMessageCount: unreadMessageCount
+        )
     }
     
     func loadChannelRead(cid: ChannelId, userId: String) -> ChannelReadDTO? {
@@ -188,12 +209,12 @@ extension DatabaseSessionMock {
         underlyingSession.attachment(id: id)
     }
     
-    func saveAttachment(payload: AttachmentPayload, id: AttachmentId) throws -> AttachmentDTO {
+    func saveAttachment(payload: MessageAttachmentPayload, id: AttachmentId) throws -> AttachmentDTO {
         try throwErrorIfNeeded()
         return try underlyingSession.saveAttachment(payload: payload, id: id)
     }
     
-    func createNewAttachment(attachment: AttachmentEnvelope, id: AttachmentId) throws -> AttachmentDTO {
+    func createNewAttachment(attachment: AnyAttachmentPayload, id: AttachmentId) throws -> AttachmentDTO {
         try throwErrorIfNeeded()
         return try underlyingSession.createNewAttachment(attachment: attachment, id: id)
     }

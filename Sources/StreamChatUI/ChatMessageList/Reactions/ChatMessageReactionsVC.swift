@@ -13,8 +13,6 @@ open class _ChatMessageReactionsVC<ExtraData: ExtraDataTypes>: _ViewController, 
     // MARK: - Subviews
 
     public private(set) lazy var reactionsBubble = components
-        .messageList
-        .messageReactions
         .reactionsBubbleView
         .init()
         .withoutAutoresizingMaskConstraints
@@ -40,7 +38,13 @@ open class _ChatMessageReactionsVC<ExtraData: ExtraDataTypes>: _ViewController, 
                 reactions: appearance.images.availableReactions
                     .keys
                     .sorted { $0.rawValue < $1.rawValue }
-                    .map { .init(type: $0, isChosenByCurrentUser: userReactionIDs.contains($0)) },
+                    .map {
+                        .init(
+                            type: $0,
+                            score: message.reactionScores[$0] ?? 0,
+                            isChosenByCurrentUser: userReactionIDs.contains($0)
+                        )
+                    },
                 didTapOnReaction: { [weak self] in
                     self?.toggleReaction($0)
                 }
@@ -52,11 +56,15 @@ open class _ChatMessageReactionsVC<ExtraData: ExtraDataTypes>: _ViewController, 
 
     public func toggleReaction(_ reaction: MessageReactionType) {
         guard let message = messageController.message else { return }
+        
+        let completion: (Error?) -> Void = { [weak self] _ in
+            self?.dismiss(animated: true)
+        }
 
         let shouldRemove = message.currentUserReactions.contains { $0.type == reaction }
         shouldRemove
-            ? messageController.deleteReaction(reaction)
-            : messageController.addReaction(reaction)
+            ? messageController.deleteReaction(reaction, completion: completion)
+            : messageController.addReaction(reaction, completion: completion)
     }
 }
 

@@ -60,6 +60,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send without attachments",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             message1.localMessageState = .pendingSend
@@ -70,6 +71,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send with attachments",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 attachments: [
                     .mockFile,
                     .mockImage,
@@ -85,6 +87,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message without local state",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 attachments: [],
                 extraData: ExtraData.Message.defaultValue
             )
@@ -150,6 +153,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 attachments: [
                     .init(payload: TestAttachmentPayload.unique),
                     .init(payload: TestAttachmentPayload.unique)
@@ -178,6 +182,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 attachments: [
                     .mockImage,
                     .init(payload: TestAttachmentPayload.unique)
@@ -218,6 +223,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             message1.localMessageState = .pendingSend
@@ -230,12 +236,15 @@ class MessageSender_Tests: StressTestCase {
         // Wait for the API call to be initiated
         AssertAsync.willBeTrue(apiClient.request_endpoint != nil)
         
-        // Simulate successfull API response
+        // Simulate successful API response
         let callback = apiClient.request_completion as! (Result<MessagePayload<ExtraData>.Boxed, Error>) -> Void
         callback(.success(.init(message: .dummy(messageId: message1Id, authorUserId: .anonymous))))
         
-        // Check the state is eventually changed to `nil`
-        AssertAsync.willBeEqual(database.viewContext.message(id: message1Id)?.localMessageState, nil)
+        // Check the temporary state is erased
+        AssertAsync {
+            Assert.willBeEqual(self.database.viewContext.message(id: message1Id)?.localMessageState, nil)
+            Assert.willBeEqual(self.database.viewContext.message(id: message1Id)?.locallyCreatedAt, nil)
+        }
     }
     
     func test_sender_changesMessageStates_whenSendingFails() throws {
@@ -248,6 +257,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             message1.localMessageState = .pendingSend
@@ -261,8 +271,11 @@ class MessageSender_Tests: StressTestCase {
         let callback = apiClient.request_completion as! (Result<MessagePayload<ExtraData>.Boxed, Error>) -> Void
         callback(.failure(TestError()))
         
-        // Check the state is eventually changed to `sendingFailed`
-        AssertAsync.willBeEqual(database.viewContext.message(id: message1Id)?.localMessageState, .sendingFailed)
+        // Check the state is eventually changed to `sendingFailed` but keeps the `locallyCreatedAt` value
+        AssertAsync {
+            Assert.willBeEqual(self.database.viewContext.message(id: message1Id)?.localMessageState, .sendingFailed)
+            Assert.willNotBeNil(self.database.viewContext.message(id: message1Id)?.locallyCreatedAt)
+        }
     }
     
     func test_senderSendsMessage_inTheOrderTheyWereCreatedLocally() throws {
@@ -277,6 +290,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send 1",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             message1.localMessageState = .pendingSend
@@ -287,6 +301,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send 2",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             message2.localMessageState = .pendingSend
@@ -297,6 +312,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send 3",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             message3.localMessageState = .pendingSend
@@ -364,6 +380,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Channel A message 1",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             messageA1.localMessageState = .pendingSend
@@ -374,6 +391,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Channel A message 2",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             messageA2.localMessageState = .pendingSend
@@ -384,6 +402,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Channel B message 1",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             messageB1.localMessageState = .pendingSend
@@ -394,6 +413,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Channel B message 2",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             messageB2.localMessageState = .pendingSend
@@ -457,6 +477,7 @@ class MessageSender_Tests: StressTestCase {
                 text: "Message pending send",
                 pinning: nil,
                 quotedMessageId: nil,
+                isSilent: false,
                 extraData: ExtraData.Message.defaultValue
             )
             message.localMessageState = .pendingSend
@@ -468,7 +489,7 @@ class MessageSender_Tests: StressTestCase {
         
         // Simulate successful API response with assigned attachment
         let callback = apiClient.request_completion as! (Result<MessagePayload<ExtraData>.Boxed, Error>) -> Void
-        let attachment: AttachmentPayload = .dummy(type: .giphy, title: .unique)
+        let attachment: MessageAttachmentPayload = .dummy(type: .giphy, title: .unique)
         let messagePayload: MessagePayload<ExtraData> = .dummy(
             messageId: messageId,
             attachments: [attachment],

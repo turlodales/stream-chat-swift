@@ -13,8 +13,7 @@ open class _ChatCommandSuggestionCollectionViewCell<ExtraData: ExtraDataTypes>: 
     open class var reuseId: String { String(describing: self) }
 
     public private(set) lazy var commandView = components
-        .messageComposer
-        .suggestionsCommandCellView.init()
+        .suggestionsCommandView.init()
         .withoutAutoresizingMaskConstraints
 
     override open func setUpLayout() {

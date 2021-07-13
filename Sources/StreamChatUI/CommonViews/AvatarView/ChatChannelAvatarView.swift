@@ -27,7 +27,12 @@ open class _ChatChannelAvatarView<ExtraData: ExtraDataTypes>: _View, ThemeProvid
 
     override open func updateContent() {
         guard let channel = content.channel else {
-            presenceAvatarView.avatarView.imageView.loadImage(from: nil)
+            presenceAvatarView.avatarView.imageView.loadImage(
+                from: nil,
+                placeholder: appearance.images.userAvatarPlaceholder3,
+                preferredSize: .avatarThumbnailSize,
+                components: components
+            )
             return
         }
 
@@ -47,7 +52,12 @@ open class _ChatChannelAvatarView<ExtraData: ExtraDataTypes>: _View, ThemeProvid
             return (firstOtherMember?.imageURL, firstOtherMember?.isOnline ?? false)
         }()
 
-        presenceAvatarView.avatarView.imageView.loadImage(from: avatarURL)
+        presenceAvatarView.avatarView.imageView.loadImage(
+            from: avatarURL,
+            placeholder: appearance.images.userAvatarPlaceholder4,
+            preferredSize: .avatarThumbnailSize,
+            components: components
+        )
         presenceAvatarView.isOnlineIndicatorVisible = isOnlineIndicatorVisible
     }
 }

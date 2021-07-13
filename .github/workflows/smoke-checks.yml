@@ -93,7 +93,8 @@ jobs:
       with:
         status: ${{ job.status }}
         text: "You shall not pass!"
-        fields: message,commit,author,action,eventName,workflow,job,took
+        job_name: "Test LLC + UI (Debug)"
+        fields: message,commit,author,action,workflow,job,took
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         MATRIX_CONTEXT: ${{ toJson(matrix) }}
@@ -125,17 +126,20 @@ jobs:
       run: bundle exec fastlane build_sample
     - name: Build Demo App
       run: bundle exec fastlane build_demo
-    # - name: Build iMessageClone App
-    #   run: bundle exec fastlane build_imessage_clone
-    # - name: Build SlackClone App
-    #   run: bundle exec fastlane build_slack_clone
-    # - name: Build MessengerClone App
-    #   run: bundle exec fastlane build_messenger_clone
+    - name: Build iMessageClone App
+      run: bundle exec fastlane build_imessage_clone
+    - name: Build SlackClone App
+      run: bundle exec fastlane build_slack_clone
+    - name: Build MessengerClone App
+      run: bundle exec fastlane build_messenger_clone
+    - name: Build YouTubeClone App
+      run: bundle exec fastlane build_youtube_clone
     - uses: 8398a7/action-slack@v3
       with:
         status: ${{ job.status }}
         text: "You shall not pass!"
-        fields: message,commit,author,action,eventName,workflow,job,took
+        job_name: "Build Sample + Demo Apps"
+        fields: message,commit,author,action,workflow,job,took
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         MATRIX_CONTEXT: ${{ toJson(matrix) }}
@@ -161,7 +165,8 @@ jobs:
   #     with:
   #       status: ${{ job.status }}
   #       text: "You shall not pass!"
-  #       fields: message,commit,author,action,eventName,workflow,job,took
+  #       job_name: "Build Docs Snippets"
+  #       fields: message,commit,author,action,workflow,job,took
   #     env:
   #       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
   #       MATRIX_CONTEXT: ${{ toJson(matrix) }}
@@ -195,7 +200,8 @@ jobs:
       with:
         status: ${{ job.status }}
         text: "You shall not pass!"
-        fields: message,commit,author,action,eventName,workflow,job,took
+        job_name: "Test Integration (SPM)"
+        fields: message,commit,author,action,workflow,job,took
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         MATRIX_CONTEXT: ${{ toJson(matrix) }}
@@ -229,7 +235,8 @@ jobs:
       with:
         status: ${{ job.status }}
         text: "You shall not pass!"
-        fields: message,commit,author,action,eventName,workflow,job,took
+        job_name: "Test Integration (CocoaPods)"
+        fields: message,commit,author,action,workflow,job,took
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         MATRIX_CONTEXT: ${{ toJson(matrix) }}

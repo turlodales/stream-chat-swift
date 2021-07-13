@@ -34,7 +34,7 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
     /// The current layout options of the view.
     /// When this value is set the subviews are instantiated and laid out just once based on
     /// the received options.
-    private var layoutOptions: ChatMessageLayoutOptions!
+    public var layoutOptions: ChatMessageLayoutOptions?
 
     // MARK: Content && Actions
 
@@ -64,18 +64,22 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
 
     /// Shows the bubble around message content.
     /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.bubble`.
-    public private(set) var bubbleView: ChatMessageBubbleView?
+    public private(set) var bubbleView: _ChatMessageBubbleView<ExtraData>?
 
     /// Shows message author avatar.
     /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.author`.
     public private(set) var authorAvatarView: ChatAvatarView?
+
+    /// Shows a spacer where the author avatar should be.
+    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.avatarSizePadding`.
+    public private(set) var authorAvatarSpacer: UIView?
 
     /// Shows message text content.
     /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.text`.
     public private(set) var textView: UITextView?
 
     /// Shows message timestamp.
-    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.metadata`.
+    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.timestamp`.
     public private(set) var timestampLabel: UILabel?
 
     /// Shows message author name.
@@ -83,17 +87,17 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
     public private(set) var authorNameLabel: UILabel?
 
     /// Shows the icon part of the indicator saying the message is visible for current user only.
-    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.metadata`
-    /// and `.onlyVisibleForYouIndicator`.
+    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options
+    /// containing `.onlyVisibleForYouIndicator`.
     public private(set) var onlyVisibleForYouIconImageView: UIImageView?
 
     /// Shows the text part of the indicator saying the message is visible for current user only.
-    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.metadata`
-    /// and `.onlyVisibleForYouIndicator`.
+    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options
+    /// containing `.onlyVisibleForYouIndicator`
     public private(set) var onlyVisibleForYouLabel: UILabel?
 
     /// Shows error indicator.
-    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.error`.
+    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.errorIndicator`.
     public private(set) var errorIndicatorView: ChatMessageErrorIndicator?
 
     /// Shows the message quoted by the message this view displays.
@@ -141,12 +145,21 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
     /// The container which holds `threadArrowView`, `threadAvatarView`, and `threadReplyCountButton`
     public private(set) var threadInfoContainer: ContainerStackView?
 
-    /// The container which holds `timestampLabel`, `authorNameLabel`, and `onlyVisibleForYouContainer` if it exists
+    /// The container which holds `timestampLabel`, `authorNameLabel`, and `onlyVisibleForYouContainer`.
+    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with any of
+    /// `.timestamp/.authorName/.onlyVisibleForYouIndicator` options
     public private(set) var metadataContainer: ContainerStackView?
 
     /// The container which holds `onlyVisibleForYouIconImageView` and `onlyVisibleForYouLabel`
     public private(set) var onlyVisibleForYouContainer: ContainerStackView?
 
+    /// The container which holds `errorIndicatorView`
+    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.errorIndicator`.
+    public private(set) var errorIndicatorContainer: UIView?
+
+    /// Constraint between bubble and reactions.
+    public private(set) var bubbleToReactionsConstraint: NSLayoutConstraint?
+    
     /// Makes sure the `layout(options: ChatMessageLayoutOptions)` is called just once.
     /// - Parameter options: The options describing the layout of the content view.
     open func setUpLayoutIfNeeded(
@@ -176,34 +189,6 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
 
         var constraintsToActivate: [NSLayoutConstraint] = []
 
-        // Main container
-        mainContainer.alignment = .trailing
-        mainContainer.isLayoutMarginsRelativeArrangement = true
-        mainContainer.layoutMargins.top = 0
-
-        addSubview(mainContainer)
-        constraintsToActivate += [
-            mainContainer.bottomAnchor.pin(equalTo: bottomAnchor),
-            mainContainer.widthAnchor.pin(
-                lessThanOrEqualTo: widthAnchor,
-                multiplier: maxContentWidthMultiplier
-            )
-        ]
-
-        if options.contains(.flipped) {
-            constraintsToActivate += [
-                mainContainer.trailingAnchor
-                    .pin(equalTo: trailingAnchor)
-                    .almostRequired
-            ]
-        } else {
-            constraintsToActivate += [
-                mainContainer.leadingAnchor
-                    .pin(equalTo: leadingAnchor)
-                    .almostRequired
-            ]
-        }
-
         // Avatar view
         if options.contains(.avatar) {
             let avatarView = createAvatarView()
@@ -211,33 +196,28 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
                 avatarView.widthAnchor.pin(equalToConstant: messageAuthorAvatarSize.width),
                 avatarView.heightAnchor.pin(equalToConstant: messageAuthorAvatarSize.height)
             ]
-
-            mainContainer.addArrangedSubview(avatarView)
         }
 
+        // Avatar spacer
         if options.contains(.avatarSizePadding) {
-            let spacer = UIView().withoutAutoresizingMaskConstraints
-            spacer.isHidden = true
-            constraintsToActivate += [spacer.widthAnchor.pin(equalToConstant: messageAuthorAvatarSize.width)]
-            mainContainer.addArrangedSubview(spacer)
+            let avatarSpacer = createAvatarSpacer()
+            constraintsToActivate += [
+                avatarSpacer.widthAnchor.pin(equalToConstant: messageAuthorAvatarSize.width)
+            ]
         }
 
         // Bubble - Thread - Metadata
-        bubbleThreadMetaContainer.alignment = options.contains(.flipped) ? .trailing : .leading
-        mainContainer.addArrangedSubview(bubbleThreadMetaContainer)
+        bubbleThreadMetaContainer.alignment = attachmentViewInjector?.fillAllAvailableWidth == true
+            ? .fill
+            : options.contains(.flipped) ? .trailing : .leading
 
         // Bubble view
         if options.contains(.bubble) {
             let bubbleView = createBubbleView()
             bubbleView.embed(bubbleContentContainer)
 
-            if options.contains(.continuousBubble) {
-                bubbleView.roundedCorners = .all
+            if options.contains(.continuousBubble) && !options.contains(.threadInfo) {
                 mainContainer.layoutMargins.bottom = 0
-            } else if options.contains(.flipped) {
-                bubbleView.roundedCorners = CACornerMask.all.subtracting(.layerMaxXMaxYCorner)
-            } else {
-                bubbleView.roundedCorners = CACornerMask.all.subtracting(.layerMinXMaxYCorner)
             }
 
             bubbleThreadMetaContainer.addArrangedSubview(bubbleView)
@@ -254,11 +234,15 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
             let threadAvatarView = createThreadAvatarView()
             let threadReplyCountButton = createThreadReplyCountButton()
 
-            let arrangedSubviews = [
+            var arrangedSubviews = [
                 arrowView,
                 threadAvatarView,
                 threadReplyCountButton
             ]
+            
+            if attachmentViewInjector?.fillAllAvailableWidth == true {
+                arrangedSubviews.append(.spacer(axis: .horizontal))
+            }
 
             if options.contains(.flipped) {
                 arrowView.direction = .toLeading
@@ -278,20 +262,28 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
         }
 
         // Metadata
-        if options.contains(.metadata) {
-            var metadataSubviews: [UIView] = [
-                createAuthorNameLabel(),
-                createTimestampLabel()
-            ]
-
+        if options.hasMetadata {
+            var metadataSubviews: [UIView] = []
+            
+            if options.contains(.authorName) {
+                metadataSubviews.append(createAuthorNameLabel())
+            }
+            if options.contains(.timestamp) {
+                metadataSubviews.append(createTimestampLabel())
+            }
             if options.contains(.onlyVisibleForYouIndicator) {
                 onlyVisibleForYouContainer = ContainerStackView()
                 onlyVisibleForYouContainer!.addArrangedSubview(createOnlyVisibleForYouIconImageView())
                 onlyVisibleForYouContainer!.addArrangedSubview(createOnlyVisibleForYouLabel())
-                metadataSubviews.insert(onlyVisibleForYouContainer!, at: 0)
+                metadataSubviews.append(onlyVisibleForYouContainer!)
+            }
+            if attachmentViewInjector?.fillAllAvailableWidth == true {
+                metadataSubviews.append(.spacer(axis: .horizontal))
             }
 
-            metadataContainer = ContainerStackView(arrangedSubviews: metadataSubviews)
+            metadataContainer = ContainerStackView(
+                arrangedSubviews: options.contains(.flipped) ? metadataSubviews.reversed() : metadataSubviews
+            )
             bubbleThreadMetaContainer.addArrangedSubview(metadataContainer!)
         }
 
@@ -300,19 +292,22 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
             let errorIndicatorView = createErrorIndicatorView()
             errorIndicatorView.setContentCompressionResistancePriority(.streamRequire, for: .horizontal)
             errorIndicatorView.setContentCompressionResistancePriority(.streamRequire, for: .vertical)
-            addSubview(errorIndicatorView)
+
+            let errorIndicatorContainer = createErrorIndicatorContainer()
+            errorIndicatorContainer.addSubview(errorIndicatorView)
 
             constraintsToActivate += [
-                errorIndicatorView.bottomAnchor.pin(equalTo: (bubbleView ?? bubbleContentContainer).bottomAnchor),
-                errorIndicatorView.trailingAnchor.pin(equalTo: layoutMarginsGuide.trailingAnchor),
-                bubbleThreadMetaContainer.trailingAnchor.pin(equalTo: errorIndicatorView.centerXAnchor)
+                errorIndicatorView.leadingAnchor.pin(equalTo: errorIndicatorContainer.leadingAnchor),
+                errorIndicatorView.trailingAnchor.pin(equalTo: errorIndicatorContainer.trailingAnchor),
+                errorIndicatorView.topAnchor.pin(equalTo: errorIndicatorContainer.topAnchor),
+                errorIndicatorView.bottomAnchor.pin(equalTo: (bubbleView ?? bubbleContentContainer).bottomAnchor)
             ]
         }
 
         // Quoted message
         if options.contains(.quotedMessage) {
             let quotedMessageView = createQuotedMessageView()
-            bubbleContentContainer.addArrangedSubview(quotedMessageView, respectsLayoutMargins: true)
+            bubbleContentContainer.addArrangedSubview(quotedMessageView)
         }
 
         // Text
@@ -330,22 +325,93 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
             reactionsBubbleView.addSubview(reactionsView)
             reactionsView.pin(to: reactionsBubbleView.layoutMarginsGuide)
 
+            bubbleToReactionsConstraint = (bubbleView ?? bubbleContentContainer).topAnchor
+                .pin(equalTo: reactionsBubbleView.centerYAnchor)
             constraintsToActivate += [
                 reactionsBubbleView.topAnchor.pin(equalTo: topAnchor),
-                (bubbleView ?? bubbleContentContainer).topAnchor.pin(equalTo: reactionsBubbleView.centerYAnchor),
+                bubbleToReactionsConstraint,
                 reactionsBubbleView.centerXAnchor.pin(
                     equalTo: options.contains(.flipped) ?
                         mainContainer.leadingAnchor :
                         mainContainer.trailingAnchor
                 )
             ]
+            .compactMap { $0 }
         } else {
             constraintsToActivate += [
                 mainContainer.topAnchor.pin(equalTo: topAnchor)
             ]
         }
 
+        // Main container
+
+        mainContainer.alignment = .bottom
+        mainContainer.isLayoutMarginsRelativeArrangement = true
+        mainContainer.layoutMargins.top = 0
+        insertSubview(mainContainer, at: 0)
+
+        let mainContainerSubviews = [
+            authorAvatarView ?? authorAvatarSpacer,
+            errorIndicatorContainer,
+            bubbleThreadMetaContainer
+        ].compactMap { $0 }
+
+        if options.contains(.flipped) {
+            mainContainer.addArrangedSubviews(mainContainerSubviews.reversed())
+
+            if let errorIndicator = errorIndicatorView {
+                mainContainer.setCustomSpacing(
+                    .init(-errorIndicator.intrinsicContentSize.width / 2),
+                    after: bubbleThreadMetaContainer
+                )
+            }
+
+            constraintsToActivate += [
+                mainContainer.trailingAnchor
+                    .pin(equalTo: trailingAnchor)
+                    .almostRequired
+            ]
+        } else {
+            mainContainer.addArrangedSubviews(mainContainerSubviews)
+
+            if let errorIndicator = errorIndicatorView {
+                mainContainer.setCustomSpacing(
+                    .init(-errorIndicator.intrinsicContentSize.width / 2),
+                    after: errorIndicatorContainer!
+                )
+            }
+
+            constraintsToActivate += [
+                mainContainer.leadingAnchor
+                    .pin(equalTo: leadingAnchor)
+                    .almostRequired
+            ]
+        }
+
+        constraintsToActivate += [
+            mainContainer.bottomAnchor.pin(equalTo: bottomAnchor),
+            attachmentViewInjector?.fillAllAvailableWidth == true
+                ? mainContainer.widthAnchor.pin(
+                    equalTo: widthAnchor,
+                    multiplier: maxContentWidthMultiplier
+                )
+                : mainContainer.widthAnchor.pin(
+                    lessThanOrEqualTo: widthAnchor,
+                    multiplier: maxContentWidthMultiplier
+                )
+        ]
+
         NSLayoutConstraint.activate(constraintsToActivate)
+    }
+
+    // When the content is updated, we want to make sure there
+    // are no unwanted animations caused by the ContainerStackView.
+    func updateContentIfNeeded() {
+        if superview != nil {
+            UIView.performWithoutAnimation {
+                updateContent()
+            }
+        }
     }
 
     override open func updateContent() {
@@ -356,27 +422,46 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
         }
 
         // Text
-        textView?.text = content?.text
+        textView?.text = content?.textContent
 
+        let textColor = content?.isDeleted == true ? appearance.colorPalette.textDisabled : appearance.colorPalette.text
+        textView?.textColor = textColor
+        
         // Avatar
         let placeholder = appearance.images.userAvatarPlaceholder1
         if let imageURL = content?.author.imageURL {
-            authorAvatarView?.imageView.loadImage(from: imageURL, placeholder: placeholder)
+            authorAvatarView?.imageView.loadImage(
+                from: imageURL,
+                placeholder: placeholder,
+                preferredSize: .avatarThumbnailSize,
+                components: components
+            )
         } else {
             authorAvatarView?.imageView.image = placeholder
         }
 
         // Bubble view
-        if content?.type == .ephemeral {
-            bubbleView?.backgroundColor = appearance.colorPalette.popoverBackground
-        } else {
-            bubbleView?.backgroundColor = content?.isSentByCurrentUser == true ?
-                appearance.colorPalette.background2 :
-                appearance.colorPalette.popoverBackground
+        bubbleView?.content = content.map { message in
+            var backgroundColor: UIColor {
+                if message.isSentByCurrentUser {
+                    if message.type == .ephemeral {
+                        return appearance.colorPalette.background8
+                    } else {
+                        return appearance.colorPalette.background6
+                    }
+                } else {
+                    return appearance.colorPalette.background8
+                }
+            }
+            
+            return .init(
+                backgroundColor: backgroundColor,
+                roundedCorners: layoutOptions?.roundedCorners ?? .all
+            )
         }
 
         // Metadata
-        onlyVisibleForYouContainer?.isVisible = content?.onlyVisibleForCurrentUser ?? false
+        onlyVisibleForYouContainer?.isVisible = content?.isOnlyVisibleForCurrentUser == true
 
         authorNameLabel?.isVisible = layoutOptions?.contains(.authorName) == true
         authorNameLabel?.text = content?.author.name
@@ -389,18 +474,23 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
 
         // Quoted message view
         quotedMessageView?.content = content?.quotedMessage.map {
-            .init(message: $0, avatarAlignment: $0.isSentByCurrentUser ? .right : .left)
+            .init(message: $0, avatarAlignment: $0.isSentByCurrentUser ? .trailing : .leading)
         }
 
         // Thread info
         threadReplyCountButton?.setTitleColor(tintColor, for: .normal)
-        if let replyCount = content?.replyCount {
+        if let replyCount = content?.replyCount, replyCount > 0 {
             threadReplyCountButton?.setTitle(L10n.Message.Threads.count(replyCount), for: .normal)
         } else {
             threadReplyCountButton?.setTitle(L10n.Message.Threads.reply, for: .normal)
         }
         let latestReplyAuthorAvatar = content?.latestReplies.first?.author.imageURL
-        threadAvatarView?.imageView.loadImage(from: latestReplyAuthorAvatar)
+        threadAvatarView?.imageView.loadImage(
+            from: latestReplyAuthorAvatar,
+            placeholder: appearance.images.userAvatarPlaceholder4,
+            preferredSize: .avatarThumbnailSize,
+            components: components
+        )
 
         // Reactions view
         reactionsBubbleView?.tailDirection = content
@@ -423,10 +513,10 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
     }
 
     /// Cleans up the view so it is ready to display another message.
+    /// We don't need to reset `content` because all subviews are always updated.
     func prepareForReuse() {
         defer { attachmentViewInjector?.contentViewDidPrepareForReuse() }
 
-        content = nil
         delegate = nil
         indexPath = nil
     }
@@ -462,7 +552,6 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
             textView?.adjustsFontForContentSizeCategory = true
             textView?.textContainerInset = .init(top: 0, left: 8, bottom: 0, right: 8)
             textView?.textContainer.lineFragmentPadding = 0
-            textView?.translatesAutoresizingMaskIntoConstraints = false
             textView?.font = appearance.fonts.body
         }
         return textView!
@@ -473,13 +562,20 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
     open func createAvatarView() -> ChatAvatarView {
         if authorAvatarView == nil {
             authorAvatarView = components
-                .messageList
-                .messageContentSubviews
-                .authorAvatarView
+                .avatarView
                 .init()
                 .withoutAutoresizingMaskConstraints
         }
         return authorAvatarView!
+    }
+
+    /// Instantiates, configures and assigns `createAvatarSpacer` when called for the first time.
+    /// - Returns: The `authorAvatarSpacer` subview.
+    open func createAvatarSpacer() -> UIView {
+        if authorAvatarSpacer == nil {
+            authorAvatarSpacer = UIView().withoutAutoresizingMaskConstraints
+        }
+        return authorAvatarSpacer!
     }
 
     /// Instantiates, configures and assigns `threadAvatarView` when called for the first time.
@@ -487,9 +583,7 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
     open func createThreadAvatarView() -> ChatAvatarView {
         if threadAvatarView == nil {
             threadAvatarView = components
-                .messageList
-                .messageContentSubviews
-                .authorAvatarView
+                .avatarView
                 .init()
                 .withoutAutoresizingMaskConstraints
         }
@@ -521,9 +615,12 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
 
     /// Instantiates, configures and assigns `bubbleView` when called for the first time.
     /// - Returns: The `bubbleView` subview.
-    open func createBubbleView() -> ChatMessageBubbleView {
+    open func createBubbleView() -> _ChatMessageBubbleView<ExtraData> {
         if bubbleView == nil {
-            bubbleView = ChatMessageBubbleView().withoutAutoresizingMaskConstraints
+            bubbleView = components
+                .messageBubbleView
+                .init()
+                .withoutAutoresizingMaskConstraints
         }
         return bubbleView!
     }
@@ -548,8 +645,6 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
     open func createReactionsView() -> _ChatMessageReactionsView<ExtraData> {
         if reactionsView == nil {
             reactionsView = components
-                .messageList
-                .messageReactions
                 .reactionsView
                 .init()
                 .withoutAutoresizingMaskConstraints
@@ -562,15 +657,23 @@ open class _ChatMessageContentView<ExtraData: ExtraDataTypes>: _View, ThemeProvi
     open func createErrorIndicatorView() -> ChatMessageErrorIndicator {
         if errorIndicatorView == nil {
             errorIndicatorView = components
-                .messageList
-                .messageContentSubviews
-                .errorIndicator
+                .messageErrorIndicator
                 .init()
                 .withoutAutoresizingMaskConstraints
 
             errorIndicatorView!.addTarget(self, action: #selector(handleTapOnErrorIndicator), for: .touchUpInside)
         }
         return errorIndicatorView!
+    }
+
+    /// Instantiates, configures and assigns `errorIndicatorContainer` when called for the first time.
+    /// - Returns: The `errorIndicatorContainer` subview.
+    open func createErrorIndicatorContainer() -> UIView {
+        if errorIndicatorContainer == nil {
+            errorIndicatorContainer = UIView().withoutAutoresizingMaskConstraints
+            errorIndicatorContainer!.layer.zPosition = 1
+        }
+        return errorIndicatorContainer!
     }
 
     /// Instantiates, configures and assigns `reactionsBubbleView` when called for the first time.
@@ -649,8 +752,31 @@ private extension _ChatMessage {
     var reactions: [ChatMessageReactionData] {
         let userReactionIDs = Set(currentUserReactions.map(\.type))
         return reactionScores
-            .keys
-            .sorted { $0.rawValue < $1.rawValue }
-            .map { .init(type: $0, isChosenByCurrentUser: userReactionIDs.contains($0)) }
+            .sorted { $0.key.rawValue < $1.key.rawValue }
+            .map { .init(type: $0.key, score: $0.value, isChosenByCurrentUser: userReactionIDs.contains($0.key)) }
+    }
+}
+
+private extension ChatMessageLayoutOptions {
+    static let metadata: Self = [
+        .onlyVisibleForYouIndicator,
+        .authorName,
+        .timestamp
+    ]
+    
+    var hasMetadata: Bool {
+        !intersection(.metadata).isEmpty
+    }
+}
+
+extension ChatMessageLayoutOptions {
+    var roundedCorners: CACornerMask {
+        if contains(.continuousBubble) {
+            return .all
+        } else if contains(.flipped) {
+            return CACornerMask.all.subtracting(.layerMaxXMaxYCorner)
+        } else {
+            return CACornerMask.all.subtracting(.layerMinXMaxYCorner)
+        }
     }
 }

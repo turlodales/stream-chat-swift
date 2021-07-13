@@ -4,9 +4,16 @@
 
 import Foundation
 
-public typealias ChatMessageImageAttachment = _ChatMessageAttachment<AttachmentImagePayload>
+/// A type alias for attachment with `ImageAttachmentPayload` payload type.
+///
+/// The `ChatMessageImageAttachment` attachment will be added to the message automatically
+/// if the message was sent with attached `AnyAttachmentPayload` created with
+/// local URL and `.image` attachment type.
+public typealias ChatMessageImageAttachment = _ChatMessageAttachment<ImageAttachmentPayload>
 
-public struct AttachmentImagePayload: AttachmentPayloadType {
+/// Represents a payload for attachments with `.image` type.
+public struct ImageAttachmentPayload: AttachmentPayload {
+    /// An attachment type all `ImageAttachmentPayload` instances conform to. Is set to `.image`.
     public static let type: AttachmentType = .image
 
     /// A title, usually the name of the image.
@@ -15,39 +22,43 @@ public struct AttachmentImagePayload: AttachmentPayloadType {
     public internal(set) var imageURL: URL
     /// A link to the image preview.
     public let imagePreviewURL: URL
+    /// An extra data.
+    let extraData: [String: RawJSON]?
+    
+    /// Decodes extra data as an instance of the given type.
+    /// - Parameter ofType: The type an extra data should be decoded as.
+    /// - Returns: Extra data of the given type or `nil` if decoding fails.
+    public func extraData<T: Decodable>(ofType: T.Type = T.self) -> T? {
+        extraData
+            .flatMap { try? JSONEncoder.stream.encode($0) }
+            .flatMap { try? JSONDecoder.stream.decode(T.self, from: $0) }
+    }
 }
 
-extension AttachmentImagePayload: Equatable {}
+extension ImageAttachmentPayload: Equatable {}
 
 // MARK: - Encodable
 
-extension AttachmentImagePayload: Encodable {
+extension ImageAttachmentPayload: Encodable {
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: AttachmentCodingKeys.self)
-
-        try container.encodeIfPresent(title, forKey: .fallback)
-        try container.encodeIfPresent(imageURL, forKey: .imageURL)
+        var values = extraData ?? [:]
+        values[AttachmentCodingKeys.title.rawValue] = title.map { .string($0) }
+        values[AttachmentCodingKeys.imageURL.rawValue] = .string(imageURL.absoluteString)
+        try values.encode(to: encoder)
     }
 }
 
 // MARK: - Decodable
 
-extension AttachmentImagePayload: Decodable {
+extension ImageAttachmentPayload: Decodable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: AttachmentCodingKeys.self)
-
-        guard
-            let imageURL = (
-                try container.decodeIfPresent(String.self, forKey: .image)
-                    ?? container.decodeIfPresent(String.self, forKey: .imageURL)
-                    ?? container.decodeIfPresent(String.self, forKey: .assetURL)
-            )?.attachmentFixedURL
-        else { throw ClientError.AttachmentDecoding() }
         
-        let imagePreviewURL = try container
-            .decodeIfPresent(String.self, forKey: .thumbURL)?
-            .attachmentFixedURL
-
+        let imageURL = try
+            container.decodeIfPresent(URL.self, forKey: .image) ??
+            container.decodeIfPresent(URL.self, forKey: .imageURL) ??
+            container.decode(URL.self, forKey: .assetURL)
+        
         let title = (
             try container.decodeIfPresent(String.self, forKey: .title) ??
                 container.decodeIfPresent(String.self, forKey: .fallback) ??
@@ -57,7 +68,9 @@ extension AttachmentImagePayload: Decodable {
         self.init(
             title: title,
             imageURL: imageURL,
-            imagePreviewURL: imagePreviewURL ?? imageURL
+            imagePreviewURL: try container
+                .decodeIfPresent(URL.self, forKey: .thumbURL) ?? imageURL,
+            extraData: try Self.decodeExtraData(from: decoder)
         )
     }
 }

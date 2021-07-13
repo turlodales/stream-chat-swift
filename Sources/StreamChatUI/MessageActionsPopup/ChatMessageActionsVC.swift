@@ -20,21 +20,25 @@ public typealias ChatMessageActionsVC = _ChatMessageActionsVC<NoExtraData>
 
 /// View controller to show message actions.
 open class _ChatMessageActionsVC<ExtraData: ExtraDataTypes>: _ViewController, ThemeProvider {
-    /// `_ChatMessageController` instance used to obtain current data.
-    public var messageController: _ChatMessageController<ExtraData>!
     /// `_ChatMessageActionsVC.Delegate` instance.
     public var delegate: Delegate?
+
+    /// `_ChatMessageController` instance used to obtain the message data.
+    public var messageController: _ChatMessageController<ExtraData>!
+
+    /// `ChannelConfig` that contains the feature flags of the channel.
+    public var channelConfig: ChannelConfig!
 
     /// Message that should be shown in this view controller.
     open var message: _ChatMessage<ExtraData>? {
         messageController.message
     }
     
-    /// The `_ChatMessageActionsRouter` instance responsible for navigation.
-    open private(set) lazy var router = components
-        .navigation
-        .messageActionsRouter
-        .init(rootViewController: self)
+    /// The `AlertsRouter` instance responsible for presenting alerts.
+    open lazy var alertsRouter = components
+        .alertsRouter
+        // Temporary solution until the actions router works with with the `UIWindow`
+        .init(rootViewController: self.parent ?? self)
 
     /// `ContainerView` for showing message's actions.
     open private(set) lazy var messageActionsContainerStackView = ContainerStackView()
@@ -77,16 +81,20 @@ open class _ChatMessageActionsVC<ExtraData: ExtraDataTypes>: _ViewController, Th
         guard
             let currentUser = messageController.dataStore.currentUser(),
             let message = message,
-            message.deletedAt == nil
+            message.isDeleted == false
         else { return [] }
 
         switch message.localState {
         case nil:
             var actions: [ChatMessageActionItem] = [
-                inlineReplyActionItem(),
-                threadReplyActionItem(),
-                copyActionItem()
+                inlineReplyActionItem()
             ]
+
+            if channelConfig.repliesEnabled && !message.isPartOfThread {
+                actions.append(threadReplyActionItem())
+            }
+
+            actions.append(copyActionItem())
 
             if message.isSentByCurrentUser {
                 actions += [editActionItem(), deleteActionItem()]
@@ -126,7 +134,7 @@ open class _ChatMessageActionsVC<ExtraData: ExtraDataTypes>: _ViewController, Th
         DeleteActionItem(
             action: { [weak self] _ in
                 guard let self = self else { return }
-                self.router.showMessageDeletionConfirmationAlert { confirmed in
+                self.alertsRouter.showMessageDeletionConfirmationAlert { confirmed in
                     guard confirmed else { return }
 
                     self.messageController.deleteMessage { _ in

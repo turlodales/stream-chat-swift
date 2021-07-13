@@ -236,7 +236,7 @@ public struct ChannelConfig: Codable {
     public let connectEventsEnabled: Bool
     /// Enables uploads.
     public let uploadsEnabled: Bool
-    /// Enables message threads and replies. Enabled by default.
+    /// Enables message thread replies. Enabled by default.
     public let repliesEnabled: Bool
     /// Controls if messages should be searchable (this is a premium feature). Disabled by default.
     public let searchEnabled: Bool
@@ -249,14 +249,14 @@ public struct ChannelConfig: Codable {
     /// The max message length. 5000 by default.
     public let maxMessageLength: Int
     /// An array of commands, e.g. /giphy.
-    public let commands: [Command]?
+    public let commands: [Command]
     /// A channel created date.
     public let createdAt: Date
     /// A channel updated date.
     public let updatedAt: Date
     
     /// Determines if users are able to flag messages. Enabled by default.
-    public var flagsEnabled: Bool { commands?.map(\.name).contains("flag") ?? false }
+    public var flagsEnabled: Bool { commands.map(\.name).contains("flag") }
         
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)

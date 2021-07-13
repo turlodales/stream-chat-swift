@@ -8,10 +8,10 @@ import Foundation
 public class ChatChannelController_Mock<ExtraData: ExtraDataTypes>: _ChatChannelController<ExtraData> {
     /// Creates a new mock instance of `ChatChannelController`.
     public static func mock() -> ChatChannelController_Mock<ExtraData> {
-        .init(channelQuery: .init(cid: try! .init(cid: "Mock:Channel")), client: .mock())
+        .init(channelQuery: .init(cid: try! .init(cid: "mock:channel")), client: .mock())
     }
     
-    public private(set) var channel_mock: _ChatChannel<ExtraData>?
+    public var channel_mock: _ChatChannel<ExtraData>?
     override public var channel: _ChatChannel<ExtraData>? {
         channel_mock ?? super.channel
     }
@@ -36,18 +36,18 @@ public extension ChatChannelController_Mock {
         state_mock = state
     }
     
-    /// Simulates a change of the `channel` value. Observers are notified with the provided `change` value. If `typingMembers`
-    /// value is explicitly provided, `didChangeTypingMembers` is called, too.
+    /// Simulates a change of the `channel` value. Observers are notified with the provided `change` value. If `typingUsers`
+    /// value is explicitly provided, `didChangeTypingUsers` is called, too.
     func simulate(
         channel: _ChatChannel<ExtraData>?,
         change: EntityChange<_ChatChannel<ExtraData>>,
-        typingMembers: Set<_ChatChannelMember<ExtraData.User>>?
+        typingUsers: Set<_ChatChannelMember<ExtraData.User>>?
     ) {
         channel_mock = channel
         delegateCallback {
             $0.channelController(self, didUpdateChannel: change)
-            if let typingMembers = typingMembers {
-                $0.channelController(self, didChangeTypingMembers: typingMembers)
+            if let typingUsers = typingUsers {
+                $0.channelController(self, didChangeTypingUsers: typingUsers)
             }
         }
     }

@@ -8,12 +8,12 @@ import UIKit
 /// The cell that displays the message content of a dynamic type and layout.
 /// Once the cell is set up it is expected to be dequeued for messages with
 /// the same content and layout the cell has already been configured with.
-public typealias СhatMessageCollectionViewCell = _СhatMessageCollectionViewCell<NoExtraData>
+public typealias ChatMessageCollectionViewCell = _ChatMessageCollectionViewCell<NoExtraData>
 
 /// The cell that displays the message content of a dynamic type and layout.
 /// Once the cell is set up it is expected to be dequeued for messages with
 /// the same content and layout the cell has already been configured with.
-public final class _СhatMessageCollectionViewCell<ExtraData: ExtraDataTypes>: _CollectionViewCell {
+public final class _ChatMessageCollectionViewCell<ExtraData: ExtraDataTypes>: _CollectionViewCell {
     public static var reuseId: String { "\(self)" }
 
     public private(set) var messageContentView: _ChatMessageContentView<ExtraData>?
@@ -41,7 +41,17 @@ public final class _СhatMessageCollectionViewCell<ExtraData: ExtraDataTypes>: _
         // We add the content view to the view hierarchy before invoking `setUpLayoutIfNeeded`
         // (where the subviews are instantiated and configured) to use `components` and `appearance`
         // taken from the responder chain.
-        contentView.embed(messageContentView!)
+        contentView.addSubview(messageContentView!)
+        
+        messageContentView?.pin(anchors: [.leading, .top, .trailing], to: contentView)
+        
+        // Bottom anchor is pinned with a lower priority to make the content view stick to the top of the
+        // cell during animations.
+        messageContentView?.bottomAnchor
+            .pin(lessThanOrEqualTo: contentView.bottomAnchor)
+            .with(priority: .streamAlmostRequire)
+            .isActive = true
+        
         messageContentView!.setUpLayoutIfNeeded(options: options, attachmentViewInjectorType: attachmentViewInjectorType)
     }
 

@@ -18,13 +18,13 @@ extension UIView {
         ])
     }
     
-    func pin(anchors: [LayoutAnchorName] = [.top, .left, .bottom, .right], to view: UIView) {
+    func pin(anchors: [LayoutAnchorName] = [.top, .leading, .bottom, .trailing], to view: UIView) {
         anchors
             .map { $0.makeConstraint(fromView: self, toView: view) }
             .forEach { $0.isActive = true }
     }
     
-    func pin(anchors: [LayoutAnchorName] = [.top, .left, .bottom, .right], to layoutGuide: UILayoutGuide) {
+    func pin(anchors: [LayoutAnchorName] = [.top, .leading, .bottom, .trailing], to layoutGuide: UILayoutGuide) {
         anchors
             .compactMap { $0.makeConstraint(fromView: self, toLayoutGuide: layoutGuide) }
             .forEach { $0.isActive = true }
@@ -57,9 +57,7 @@ extension UIView {
     
     /// Returns `UIView` that is flexible along defined `axis`.
     static func spacer(axis: NSLayoutConstraint.Axis) -> UIView {
-        let view = UIView().flexible(axis: axis)
-        view.isHidden = true
-        return view
+        UIView().flexible(axis: axis)
     }
 }
 

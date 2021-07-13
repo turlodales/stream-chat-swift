@@ -7,7 +7,7 @@ import UIKit
 
 /// Button used for sending a message, or any type of content.
 open class SendButton: _Button, AppearanceProvider {
-    /// Override this variable to enable custom behaviour upon button enabled.
+    /// Override this variable to enable custom behavior upon button enabled.
     override open var isEnabled: Bool {
         didSet {
             Animate {
@@ -24,7 +24,7 @@ open class SendButton: _Button, AppearanceProvider {
         let normalStateImage = appearance.images.sendArrow
         setImage(normalStateImage, for: .normal)
 
-        let buttonColor: UIColor = appearance.colorPalette.inactiveTint
+        let buttonColor: UIColor = appearance.colorPalette.alternativeInactiveTint
         let disabledStateImage = appearance.images.sendArrow.tinted(with: buttonColor)
         setImage(disabledStateImage, for: .disabled)
     }

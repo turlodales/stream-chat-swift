@@ -314,10 +314,10 @@ final class ChannelEndpoints_Tests: XCTestCase {
         
         let expectedEndpoint = Endpoint<EmptyResponse>(
             path: "channels/\(cid.type.rawValue)/\(cid.id)",
-            method: .post,
+            method: .patch,
             queryItems: nil,
             requiresConnectionId: false,
-            body: ["cooldown": cooldownDuration]
+            body: ["set": ["cooldown": cooldownDuration]]
         )
         
         let endpoint = Endpoint<EmptyResponse>.enableSlowMode(cid: cid, cooldownDuration: cooldownDuration)
@@ -355,6 +355,23 @@ final class ChannelEndpoints_Tests: XCTestCase {
         )
         
         let endpoint: Endpoint<ChannelPayload<NoExtraData>> = .channelWatchers(query: query)
+        
+        XCTAssertEqual(AnyEndpoint(expectedEndpoint), AnyEndpoint(endpoint))
+    }
+    
+    func test_freezeChannel_buildsCorrectly() {
+        let cid = ChannelId.unique
+        let freeze = Bool.random()
+        
+        let expectedEndpoint = Endpoint<EmptyResponse>(
+            path: "channels/" + cid.apiPath,
+            method: .patch,
+            queryItems: nil,
+            requiresConnectionId: false,
+            body: ["set": ["frozen": freeze]]
+        )
+        
+        let endpoint: Endpoint<EmptyResponse> = .freezeChannel(freeze, cid: cid)
         
         XCTAssertEqual(AnyEndpoint(expectedEndpoint), AnyEndpoint(endpoint))
     }

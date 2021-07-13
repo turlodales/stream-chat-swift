@@ -166,7 +166,7 @@ final class MessageController_Tests: StressTestCase {
     
     /// This test simulates a bug where the `message` and `replies` fields were not updated if they weren't
     /// touched before calling synchronize.
-    func test_channelsAreFetched_afterCallingSynchronize() throws {
+    func test_messagesAreFetched_afterCallingSynchronize() throws {
         // Simulate `synchronize` call
         controller.synchronize()
         
@@ -227,6 +227,214 @@ final class MessageController_Tests: StressTestCase {
         // Check the order of replies is correct
         let bottomToTopIds = [reply1, reply2].sorted { $0.createdAt < $1.createdAt }.map(\.id)
         XCTAssertEqual(controller.replies.map(\.id), bottomToTopIds)
+    }
+    
+    /// This test was added because we forgot to exclude deleted messages when fetching replies.
+    /// Valid message for a thread is defined as:
+    /// - `parentId` correctly set,
+    /// - is not deleted, or current user owned non-ephemeral deleted,
+    /// - newer than channel's truncation date (if channel is truncated)
+    func test_replies_onlyIncludeValidMessages() throws {
+        // Create dummy channel
+        let cid = ChannelId.unique
+        let channel = dummyPayload(with: cid)
+        let truncatedDate = Date.unique
+        
+        // Save channel
+        try client.databaseContainer.writeSynchronously {
+            let dto = try $0.saveChannel(payload: channel)
+            dto.truncatedAt = truncatedDate
+        }
+        
+        // Insert parent message
+        try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
+        
+        // Insert replies for parent message
+        let reply1: MessagePayload<NoExtraData> = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: .unique,
+            createdAt: .unique(after: truncatedDate)
+        )
+        
+        // Insert the 2nd reply as deleted
+        let createdAt = Date.unique(after: truncatedDate)
+        let reply2: MessagePayload<NoExtraData> = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: .unique,
+            createdAt: createdAt,
+            deletedAt: .unique(after: createdAt)
+        )
+        
+        // Insert 3rd reply before truncation date
+        let reply3: MessagePayload<NoExtraData> = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: .unique,
+            createdAt: .unique(before: truncatedDate)
+        )
+        
+        // Save messages
+        try client.databaseContainer.writeSynchronously {
+            try $0.saveMessage(payload: reply1, for: cid)
+            try $0.saveMessage(payload: reply2, for: cid)
+            try $0.saveMessage(payload: reply3, for: cid)
+        }
+        
+        // Check if the replies are correct
+        let ids = [reply1].map(\.id)
+        XCTAssertEqual(controller.replies.map(\.id), ids)
+    }
+
+    func test_replies_withVisibleForCurrentUser_messageVisibility() throws {
+        // Create dummy channel
+        let cid = ChannelId.unique
+        let channel = dummyPayload(with: cid)
+        let truncatedDate = Date.unique
+
+        try client.databaseContainer.createCurrentUser(id: currentUserId)
+        client.databaseContainer.viewContext.deletedMessagesVisibility = .visibleForCurrentUser
+
+        // Save channel
+        try client.databaseContainer.writeSynchronously {
+            let dto = try $0.saveChannel(payload: channel)
+            dto.truncatedAt = truncatedDate
+        }
+
+        // Insert parent message
+        try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
+
+        // Insert own deleted reply
+        let ownReply: MessagePayload<NoExtraData> = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: currentUserId,
+            createdAt: .unique(after: truncatedDate),
+            deletedAt: .unique(after: truncatedDate)
+        )
+
+        // Insert deleted reply by another user
+        let createdAt = Date.unique(after: truncatedDate)
+        let otherReply: MessagePayload<NoExtraData> = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: .unique,
+            createdAt: createdAt,
+            deletedAt: .unique(after: createdAt)
+        )
+
+        // Save messages
+        try client.databaseContainer.writeSynchronously {
+            try $0.saveMessage(payload: ownReply, for: cid)
+            try $0.saveMessage(payload: otherReply, for: cid)
+        }
+
+        // Only own reply shoudl be visible
+        XCTAssertEqual(controller.replies.map(\.id), [ownReply.id])
+    }
+
+    func test_replies_withAlwaysHidden_messageVisibility() throws {
+        // Create dummy channel
+        let cid = ChannelId.unique
+        let channel = dummyPayload(with: cid)
+        let truncatedDate = Date.unique
+
+        try client.databaseContainer.createCurrentUser(id: currentUserId)
+        client.databaseContainer.viewContext.deletedMessagesVisibility = .alwaysHidden
+
+        // Save channel
+        try client.databaseContainer.writeSynchronously {
+            let dto = try $0.saveChannel(payload: channel)
+            dto.truncatedAt = truncatedDate
+        }
+
+        // Insert parent message
+        try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
+
+        // Insert own deleted reply
+        let ownReply: MessagePayload<NoExtraData> = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: currentUserId,
+            createdAt: .unique(after: truncatedDate),
+            deletedAt: .unique(after: truncatedDate)
+        )
+
+        // Insert deleted reply by another user
+        let createdAt = Date.unique(after: truncatedDate)
+        let otherReply: MessagePayload<NoExtraData> = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: .unique,
+            createdAt: createdAt,
+            deletedAt: .unique(after: createdAt)
+        )
+
+        // Save messages
+        try client.databaseContainer.writeSynchronously {
+            try $0.saveMessage(payload: ownReply, for: cid)
+            try $0.saveMessage(payload: otherReply, for: cid)
+        }
+
+        // both deleted replies should be hidden
+        XCTAssertTrue(controller.replies.isEmpty)
+    }
+
+    func test_replies_withAlwaysVisible_messageVisibility() throws {
+        // Create dummy channel
+        let cid = ChannelId.unique
+        let channel = dummyPayload(with: cid)
+        let truncatedDate = Date.unique
+
+        try client.databaseContainer.createCurrentUser(id: currentUserId)
+        client.databaseContainer.viewContext.deletedMessagesVisibility = .alwaysVisible
+
+        // Save channel
+        try client.databaseContainer.writeSynchronously {
+            let dto = try $0.saveChannel(payload: channel)
+            dto.truncatedAt = truncatedDate
+        }
+
+        // Insert parent message
+        try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
+
+        // Insert own deleted reply
+        let ownReply: MessagePayload<NoExtraData> = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: currentUserId,
+            createdAt: .unique(after: truncatedDate),
+            deletedAt: .unique(after: truncatedDate)
+        )
+
+        // Insert deleted reply by another user
+        let createdAt = Date.unique(after: truncatedDate)
+        let otherReply: MessagePayload<NoExtraData> = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: .unique,
+            createdAt: createdAt,
+            deletedAt: .unique(after: createdAt)
+        )
+
+        // Save messages
+        try client.databaseContainer.writeSynchronously {
+            try $0.saveMessage(payload: ownReply, for: cid)
+            try $0.saveMessage(payload: otherReply, for: cid)
+        }
+
+        // both deleted replies should be visible
+        XCTAssertEqual(Set(controller.replies.map(\.id)), Set([ownReply.id, otherReply.id]))
     }
 
     // MARK: - Delegate
@@ -645,7 +853,7 @@ final class MessageController_Tests: StressTestCase {
         let showReplyInChannel = true
         let quotedMessageId: MessageId = .unique
         let extraData: NoExtraData = .defaultValue
-        let attachments: [AttachmentEnvelope] = [.mockFile, .mockImage, .init(payload: TestAttachmentPayload.unique)]
+        let attachments: [AnyAttachmentPayload] = [.mockFile, .mockImage, .init(payload: TestAttachmentPayload.unique)]
         let pin = MessagePinning(expirationDate: .unique)
 
         // Simulate `createNewReply` calls and catch the completion

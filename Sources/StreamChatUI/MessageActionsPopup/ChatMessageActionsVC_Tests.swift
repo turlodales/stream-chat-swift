@@ -13,13 +13,14 @@ class ChatMessageActionsVC_Tests: XCTestCase {
     
     override func setUp() {
         super.setUp()
-        
-        vc = ChatMessageActionsVC()
+
         chatMessageController = .mock()
+        vc = ChatMessageActionsVC()
         vc.messageController = chatMessageController
-        
+        vc.channelConfig = .mock()
+
         chatMessageController.simulateInitial(
-            message: ChatMessage.mock(id: .unique, text: "", author: ChatUser.mock(id: .unique)),
+            message: ChatMessage.mock(id: .unique, cid: .unique, text: "", author: ChatUser.mock(id: .unique)),
             replies: [],
             state: .remoteDataFetched
         )
@@ -60,6 +61,7 @@ class ChatMessageActionsVC_Tests: XCTestCase {
 
         let vc = TestView()
         vc.messageController = chatMessageController
+        vc.channelConfig = .mock()
         AssertSnapshot(vc.embedded())
     }
     
@@ -67,13 +69,11 @@ class ChatMessageActionsVC_Tests: XCTestCase {
         // Create new config to edit types...
         var components = vc.components
 
-        class TestChatMessageActionsRouter: ChatMessageActionsRouter {}
-
-        components.navigation.messageActionsRouter = TestChatMessageActionsRouter.self
-
+        class TestAlertsRouter: AlertsRouter {}
+        components.alertsRouter = TestAlertsRouter.self
         vc.components = components
 
-        XCTAssert(vc.router is TestChatMessageActionsRouter)
+        XCTAssert(vc.alertsRouter is TestAlertsRouter)
     }
 }
 

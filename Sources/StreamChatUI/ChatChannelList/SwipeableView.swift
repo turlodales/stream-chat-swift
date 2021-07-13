@@ -30,7 +30,7 @@ open class _SwipeableView<ExtraData: ExtraDataTypes>: _View, ComponentsProvider,
     /// Gesture recognizer which is needed to be added on the owning view which will be recognizing the swipes.
     open private(set) lazy var panGestureRecognizer: UIPanGestureRecognizer = UIPanGestureRecognizer(
         target: self,
-        action: #selector(didPan(_:))
+        action: #selector(handlePan(_:))
     )
 
     /// Returns whether the swipe action items are expanded or shrinked.
@@ -54,16 +54,13 @@ open class _SwipeableView<ExtraData: ExtraDataTypes>: _View, ComponentsProvider,
     /// Value detecting start of the swipe gesture. We always start at 0
     private var startValue: CGFloat = 0
 
-    /// The IndexPath is used in here to pass some reference for the given cell in action buttons closure.
-    /// we use this in delegate function calls `swipeableViewActionViews(forIndexPath)`
-    /// and `swipeableViewWillShowActionViews(forIndexPath)`
-    public var indexPath: IndexPath?
+    /// The provider of cell index path. The IndexPath is used in here to pass some reference
+    /// for the given cell in action buttons closure. We use this in delegate function
+    /// calls `swipeableViewActionViews(forIndexPath)` and `swipeableViewWillShowActionViews(forIndexPath)`
+    public var indexPath: (() -> IndexPath?)?
 
     /// The `UIStackView` that arranges buttons revealed by swipe gesture.
-    open private(set) lazy var actionItemsStackView: UIStackView = components
-        .channelList
-        .swipeableViewStackView
-        .init()
+    open private(set) lazy var actionItemsStackView: UIStackView = UIStackView()
         .withoutAutoresizingMaskConstraints
 
     override open func setUp() {
@@ -89,9 +86,12 @@ open class _SwipeableView<ExtraData: ExtraDataTypes>: _View, ComponentsProvider,
     // We continue with the swipe and assing how far we are to `swipedValue`.
     var swipedValue: CGFloat = 0
 
-    @objc open func didPan(_ gesture: UIPanGestureRecognizer) {
+    @objc open func handlePan(_ gesture: UIPanGestureRecognizer) {
         // If we don't have indexPath or any actionViews, we don't want to proceed with the swiping.
-        guard let indexPath = indexPath, let actionButtons = delegate?.swipeableViewActionViews(for: indexPath) else { return }
+        guard let indexPath = indexPath?(),
+              let actionButtons = delegate?.swipeableViewActionViews(for: indexPath),
+              actionButtons.isEmpty == false
+        else { return }
 
         var swipeVelocity = gesture.velocity(in: self)
         var swipePosition = gesture.translation(in: self)

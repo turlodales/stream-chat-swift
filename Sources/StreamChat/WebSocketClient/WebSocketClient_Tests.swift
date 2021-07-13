@@ -24,7 +24,6 @@ class WebSocketClient_Tests: StressTestCase {
     var engine: WebSocketEngineMock? { webSocketClient.engine as? WebSocketEngineMock }
     var connectionId: String!
     var user: ChatUser!
-    var backgroundTaskScheduler: MockBackgroundTaskScheduler!
     var requestEncoder: TestRequestEncoder!
     var pingController: WebSocketPingControllerMock { webSocketClient.pingController as! WebSocketPingControllerMock }
     var internetConnectionMonitor: InternetConnectionMonitorMock!
@@ -41,11 +40,10 @@ class WebSocketClient_Tests: StressTestCase {
         VirtualTimeTimer.time = time
         
         endpoint = .webSocketConnect(
-            userId: .unique
+            userInfo: UserInfo<NoExtraData>(id: .unique)
         )
         
         decoder = EventDecoderMock()
-        backgroundTaskScheduler = MockBackgroundTaskScheduler()
         
         reconnectionStrategy = MockReconnectionStrategy()
         
@@ -62,7 +60,6 @@ class WebSocketClient_Tests: StressTestCase {
         environment.timerType = VirtualTimeTimer.self
         environment.createPingController = WebSocketPingControllerMock.init
         environment.createEngine = WebSocketEngineMock.init
-        environment.backgroundTaskScheduler = backgroundTaskScheduler
         
         webSocketClient = WebSocketClient(
             sessionConfiguration: .ephemeral,
@@ -133,16 +130,6 @@ class WebSocketClient_Tests: StressTestCase {
     }
     
     // MARK: - Connection tests
-    
-    func test_healthCheckMiddlewareIsThere() {
-        let healthCheckMiddlewares = webSocketClient.eventNotificationCenter.middlewares.compactMap { $0 as? HealthCheckMiddleware }
-       
-        // Assert there is only one `HealthCheckMiddleware`
-        XCTAssertEqual(healthCheckMiddlewares.count, 1)
-        
-        // Assert the middlewares works with the correct client
-        XCTAssertTrue(healthCheckMiddlewares[0].webSocketClient === webSocketClient)
-    }
     
     func test_connectionFlow() {
         assert(webSocketClient.connectionState == .disconnected())
@@ -476,240 +463,76 @@ class WebSocketClient_Tests: StressTestCase {
         // Simulate connection state changes
         let connectionStates: [WebSocketConnectionState] = [
             .connecting,
+            .connecting, // duplicate state should be ignored
             .waitingForConnectionId,
+            .waitingForConnectionId, // duplicate state should be ignored
             .connected(connectionId: connectionId),
+            .connected(connectionId: connectionId), // duplicate state should be ignored
             .disconnecting(source: .userInitiated),
-            .disconnected()
+            .disconnecting(source: .userInitiated), // duplicate state should be ignored
+            .disconnected(),
+            .disconnected() // duplicate state should be ignored
         ]
         
         connectionStates.forEach { webSocketClient.simulateConnectionStatus($0) }
         
-        let expectedEvents = connectionStates.map { ConnectionStatusUpdated(webSocketConnectionState: $0).asEquatable }
+        let expectedEvents = [
+            WebSocketConnectionState.connecting, // states 0...3
+            .connected(connectionId: connectionId), // states 4...5
+            .disconnecting(source: .userInitiated), // states 6...7
+            .disconnected() // states 8...9
+        ].map {
+            ConnectionStatusUpdated(webSocketConnectionState: $0).asEquatable
+        }
+
         AssertAsync.willBeEqual(eventLogger.equatableEvents, expectedEvents)
     }
     
-    // MARK: - Background task tests
-    
-    func test_backgroundTaskIsCreated_whenWebSocketIsConnected_andAppGoesToBackground() {
+    func test_currentUserDTOExists_whenStateIsConnected() throws {
+        // Add `EventDataProcessorMiddleware` which is responsible for saving CurrentUser
+        let eventDataProcessorMiddleware = EventDataProcessorMiddleware<NoExtraData>()
+        webSocketClient.eventNotificationCenter.add(middleware: eventDataProcessorMiddleware)
+        
         // Simulate connection
-        test_connectionFlow()
-        assert(backgroundTaskScheduler.beginBackgroundTask_called == false)
         
-        // Set up mock response
-        backgroundTaskScheduler.beginBackgroundTask = UIBackgroundTaskIdentifier(rawValue: .random(in: 1...100))
+        // Simulate response from the encoder
+        let request = URLRequest(url: .unique())
+        requestEncoder.encodeRequest = .success(request)
         
-        // Simulate app going to the background
-        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
-        
-        // Check a new background task is scheduled
-        AssertAsync.willBeTrue(backgroundTaskScheduler.beginBackgroundTask_called)
-    }
-    
-    func test_backgroundTaskIsNotCreated_whenWebSocketIsConnected_appGoesToBackground_andBackgroundConnectionIsForbidden() {
-        // Simulate connection
-        test_connectionFlow()
-        assert(backgroundTaskScheduler.beginBackgroundTask_called == false)
-        
-        // Turn off background connection
-        webSocketClient.options.remove(.staysConnectedInBackground)
-        
-        // Set up mock response
-        backgroundTaskScheduler.beginBackgroundTask = UIBackgroundTaskIdentifier(rawValue: .random(in: 1...100))
-        
-        // Simulate app going to the background
-        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
-        
-        // Check a new background task is scheduled
-        AssertAsync.staysTrue(backgroundTaskScheduler.beginBackgroundTask_called == false)
-    }
-    
-    func test_backgroundTaskIsNotCreated_whenWebSocketIsNotConnected_andAppGoesToBackground() {
-        assert(backgroundTaskScheduler.beginBackgroundTask_called == false)
-        
-        // Simulate app going to the background
-        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
-        
-        // Check a new background task is not scheduled
-        AssertAsync.staysTrue(backgroundTaskScheduler.beginBackgroundTask_called == false)
-    }
-    
-    func test_backgroundTaskIsNotCreated_whenWebSocketIsDisconnected_andAppGoesToBackground() {
-        // Simulate disconnection
-        test_disconnect()
-        
-        assert(backgroundTaskScheduler.beginBackgroundTask_called == false)
-        
-        // Simulate app going to the background
-        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
-        
-        // Check a new background task is not scheduled
-        AssertAsync.staysTrue(backgroundTaskScheduler.beginBackgroundTask_called == false)
-    }
-    
-    func test_connectionIsTerminated_whenBackgroundTaskCantBeInitiated() {
-        // Simulate connection and start a background task
-        test_connectionFlow()
-        
-        assert(engine!.disconnect_calledCount == 0)
-        
-        // Simulate the background task can't be scheduled
-        backgroundTaskScheduler.beginBackgroundTask = .invalid
-        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
-        
-        // Check the connection is terminated
-        AssertAsync {
-            Assert.willBeEqual(self.engine!.disconnect_calledCount, 1)
-            Assert.willBeEqual(self.webSocketClient.connectionState, .disconnecting(source: .systemInitiated))
+        // Assert that `CurrentUserDTO` does not exist
+        var currentUser: CurrentUserDTO? {
+            database.viewContext.currentUser
         }
-    }
-    
-    func test_connectionIsTerminated_whenBackgroundTaskFinishesExecution() {
-        // Simulate connection and start a background task
-        test_connectionFlow()
-        backgroundTaskScheduler.beginBackgroundTask = UIBackgroundTaskIdentifier(rawValue: .random(in: 1...100))
-        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
         
-        assert(engine!.disconnect_calledCount == 0)
+        XCTAssertNil(currentUser)
         
-        // Simulate the background task finishes execution
-        backgroundTaskScheduler.beginBackgroundTask_expirationHandler?()
+        // Call `connect`, it should change connection state and call `connect` on the engine
+        webSocketClient.connectEndpoint = endpoint
+        webSocketClient.connect()
         
-        // Check the connection is terminated
         AssertAsync {
-            Assert.willBeEqual(self.engine!.disconnect_calledCount, 1)
-            Assert.willBeEqual(self.webSocketClient.connectionState, .disconnecting(source: .systemInitiated))
+            Assert.willBeEqual(self.engine!.connect_calledCount, 1)
         }
-    }
-    
-    func test_backgroundTaskIsCancelled_whenAppBecomesActive() {
-        // Simulate connection and start a background task
-        test_connectionFlow()
-        let task = UIBackgroundTaskIdentifier(rawValue: .random(in: 1...100))
-        backgroundTaskScheduler.beginBackgroundTask = task
-        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
         
-        // Wait for `beginBackgroundTask` being called since it can be done asynchronously
-        AssertAsync.willBeTrue(backgroundTaskScheduler.beginBackgroundTask_called)
-        assert(backgroundTaskScheduler.endBackgroundTask_called == nil)
+        // Simulate the engine is connected and check the connection state is updated
+        engine!.simulateConnectionSuccess()
+        AssertAsync.willBeEqual(webSocketClient.connectionState, .waitingForConnectionId)
         
-        // Simulate an app going to the foreground
-        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        // Simulate a health check event is received and the connection state is updated
+        let payloadCurrentUser = dummyCurrentUser
+        let eventPayload = EventPayload<NoExtraData>(
+            eventType: .healthCheck,
+            connectionId: connectionId,
+            cid: nil,
+            currentUser: payloadCurrentUser,
+            channel: nil
+        )
+        decoder.decodedEvent = .success(try HealthCheckEvent(from: eventPayload))
+        engine!.simulateMessageReceived()
         
-        // Check the background task is terminated
-        AssertAsync.willBeEqual(backgroundTaskScheduler.endBackgroundTask_called, task)
-    }
-    
-    func test_backgroundTaskIsCancelled_whenDisconnected() {
-        // Simulate connection and start a background task
-        test_connectionFlow()
-        let task = UIBackgroundTaskIdentifier(rawValue: .random(in: 1...100))
-        backgroundTaskScheduler.beginBackgroundTask = task
-        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
-        
-        // Wait for `beginBackgroundTask` being called since it can be done asynchronously
-        AssertAsync.willBeTrue(backgroundTaskScheduler.beginBackgroundTask_called)
-        assert(backgroundTaskScheduler.endBackgroundTask_called == nil)
-        
-        // Simulate the connection is terminated
-        webSocketClient.disconnect()
-        engine!.simulateDisconnect()
-        
-        // Check the background task is terminated
-        AssertAsync.willBeEqual(backgroundTaskScheduler.endBackgroundTask_called, task)
-    }
-    
-    func test_backgroundTaskIsCancelled_whenExpirationHandlerIsCalled() {
-        // Simulate connection and start a background task
-        test_connectionFlow()
-        let task = UIBackgroundTaskIdentifier(rawValue: .random(in: 1...100))
-        backgroundTaskScheduler.beginBackgroundTask = task
-        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
-        
-        // Wait for `beginBackgroundTask` being called since it can be done asynchronously
-        AssertAsync.willBeTrue(backgroundTaskScheduler.beginBackgroundTask_called)
-        assert(backgroundTaskScheduler.endBackgroundTask_called == nil)
-        
-        // We don't simulate explicit cancelation here
-        // since we expect expiration handler to call disconnect
-        
-        // Call expiration handler
-        backgroundTaskScheduler.beginBackgroundTask_expirationHandler!()
-        
-        // Check the background task is terminated
-        AssertAsync.willBeEqual(backgroundTaskScheduler.endBackgroundTask_called, task)
-    }
-}
-
-final class HealthCheckMiddleware_Tests: XCTestCase {
-    var middleware: HealthCheckMiddleware!
-    var webSocketClient: WebSocketClientMock!
-    
-    // The database is not needed for the middleware but it's a requirement by the protocol that we provide a valid
-    // db session, so we need to have it.
-    var database: DatabaseContainer!
-    
-    // MARK: - Setup
-    
-    override func setUp() {
-        super.setUp()
-        
-        webSocketClient = WebSocketClientMock()
-        middleware = HealthCheckMiddleware(webSocketClient: webSocketClient)
-        
-        database = DatabaseContainerMock()
-    }
-    
-    override func tearDown() {
-        AssertAsync.canBeReleased(&webSocketClient)
-        AssertAsync.canBeReleased(&database)
-        
-        super.tearDown()
-    }
-    
-    // MARK: - Tests
-    
-    func test_middleware_forwardsNonHealthCheckEvents() throws {
-        let event = TestEvent()
-        
-        // Simulate incoming public event
-        let forwardedEvent = middleware.handle(event: event, session: database.viewContext)
-        
-        // Assert event is forwared as it is
-        XCTAssertEqual(forwardedEvent as? TestEvent, event)
-    }
-    
-    func test_middleware_filtersHealthCheckEvents_ifClientIsDeallocated() throws {
-        let event = HealthCheckEvent(connectionId: .unique)
-        
-        // Deallocate the client
-        AssertAsync.canBeReleased(&webSocketClient)
-        
-        // Simulate `HealthCheckEvent`
-        let forwardedEvent = middleware.handle(event: event, session: database.viewContext)
-        
-        // Assert event is not forwarded
-        XCTAssertNil(forwardedEvent)
-    }
-    
-    func test_middleware_handlesHealthCheckEvents() throws {
-        let event = HealthCheckEvent(connectionId: .unique)
-        
-        // Simulate `HealthCheckEvent`
-        let forwardedEvent = middleware.handle(event: event, session: database.viewContext)
-
-        // Assert event is not forwared
-        XCTAssertNil(forwardedEvent)
-        // Connection state is updated
-        XCTAssertEqual(middleware.webSocketClient?.connectionState, .connected(connectionId: event.connectionId))
-    }
-    
-    func test_middleware_healthCheckEvents_parsedCorrectly() throws {
-        let eventDecoder = EventDecoder<NoExtraData>()
-        
-        let json = XCTestCase.mockData(fromFile: "HealthCheck")
-        let event = try eventDecoder.decode(from: json) as? HealthCheckEvent
-        
-        XCTAssertEqual(event?.connectionId, "60782eca-0a05-154b-0000-000000a85747")
+        // We should see `CurrentUserDTO` being saved before we get connectionId
+        AssertAsync.willBeEqual(currentUser?.user.id, payloadCurrentUser.id)
+        AssertAsync.willBeEqual(webSocketClient.connectionState, .connected(connectionId: connectionId))
     }
 }
 
@@ -743,7 +566,7 @@ private class MockReconnectionStrategy: WebSocketClientReconnectionStrategy {
     
     var reconnectionDelay: TimeInterval?
     
-    func sucessfullyConnected() {
+    func successfullyConnected() {
         sucessfullyConnected_calledCount += 1
     }
     
@@ -762,18 +585,33 @@ extension WebSocketEngineError: Equatable {
 class MockBackgroundTaskScheduler: BackgroundTaskScheduler {
     var beginBackgroundTask_called: Bool = false
     var beginBackgroundTask_expirationHandler: (() -> Void)?
-    var beginBackgroundTask: UIBackgroundTaskIdentifier!
-    
-    var endBackgroundTask_called: UIBackgroundTaskIdentifier?
-    
-    func beginBackgroundTask(expirationHandler: (() -> Void)?) -> UIBackgroundTaskIdentifier {
+    var beginBackgroundTask_returns: Bool = true
+    func beginTask(expirationHandler: (() -> Void)?) -> Bool {
         beginBackgroundTask_called = true
         beginBackgroundTask_expirationHandler = expirationHandler
-        return beginBackgroundTask
+        return beginBackgroundTask_returns
+    }
+
+    var endBackgroundTask_called: Bool = false
+    func endTask() {
+        endBackgroundTask_called = true
+    }
+
+    var startListeningForAppStateUpdates_called: Bool = false
+    var startListeningForAppStateUpdates_onBackground: (() -> Void)?
+    var startListeningForAppStateUpdates_onForeground: (() -> Void)?
+    func startListeningForAppStateUpdates(
+        onEnteringBackground: @escaping () -> Void,
+        onEnteringForeground: @escaping () -> Void
+    ) {
+        startListeningForAppStateUpdates_called = true
+        startListeningForAppStateUpdates_onBackground = onEnteringBackground
+        startListeningForAppStateUpdates_onForeground = onEnteringForeground
     }
     
-    func endBackgroundTask(_ identifier: UIBackgroundTaskIdentifier) {
-        endBackgroundTask_called = identifier
+    var stopListeningForAppStateUpdates_called: Bool = false
+    func stopListeningForAppStateUpdates() {
+        stopListeningForAppStateUpdates_called = true
     }
 }
 

@@ -9,7 +9,8 @@ import XCTest
 class ChannelUpdaterMock<ExtraData: ExtraDataTypes>: ChannelUpdater<ExtraData> {
     @Atomic var update_channelQuery: _ChannelQuery<ExtraData>?
     @Atomic var update_channelCreatedCallback: ((ChannelId) -> Void)?
-    @Atomic var update_completion: ((Error?) -> Void)?
+    @Atomic var update_completion: ((Result<ChannelPayload<ExtraData>, Error>) -> Void)?
+    @Atomic var update_callCount = 0
 
     @Atomic var updateChannel_payload: ChannelEditDetailPayload<ExtraData>?
     @Atomic var updateChannel_completion: ((Error?) -> Void)?
@@ -41,9 +42,11 @@ class ChannelUpdaterMock<ExtraData: ExtraDataTypes>: ChannelUpdater<ExtraData> {
 
     @Atomic var createNewMessage_cid: ChannelId?
     @Atomic var createNewMessage_text: String?
+    @Atomic var createNewMessage_isSilent: Bool?
     @Atomic var createNewMessage_command: String?
     @Atomic var createNewMessage_arguments: String?
-    @Atomic var createNewMessage_attachments: [AttachmentEnvelope]?
+    @Atomic var createNewMessage_attachments: [AnyAttachmentPayload]?
+    @Atomic var createNewMessage_mentionedUserIds: [UserId]?
     @Atomic var createNewMessage_quotedMessageId: MessageId?
     @Atomic var createNewMessage_pinning: MessagePinning?
     @Atomic var createNewMessage_extraData: ExtraData.Message?
@@ -64,6 +67,10 @@ class ChannelUpdaterMock<ExtraData: ExtraDataTypes>: ChannelUpdater<ExtraData> {
     
     @Atomic var channelWatchers_query: ChannelWatcherListQuery?
     @Atomic var channelWatchers_completion: ((Error?) -> Void)?
+    
+    @Atomic var freezeChannel_freeze: Bool?
+    @Atomic var freezeChannel_cid: ChannelId?
+    @Atomic var freezeChannel_completion: ((Error?) -> Void)?
     
     // Cleans up all recorded values
     func cleanUp() {
@@ -101,9 +108,11 @@ class ChannelUpdaterMock<ExtraData: ExtraDataTypes>: ChannelUpdater<ExtraData> {
         
         createNewMessage_cid = nil
         createNewMessage_text = nil
+        createNewMessage_isSilent = nil
         createNewMessage_command = nil
         createNewMessage_arguments = nil
         createNewMessage_attachments = nil
+        createNewMessage_mentionedUserIds = nil
         createNewMessage_extraData = nil
         createNewMessage_completion = nil
         
@@ -122,16 +131,21 @@ class ChannelUpdaterMock<ExtraData: ExtraDataTypes>: ChannelUpdater<ExtraData> {
         
         channelWatchers_query = nil
         channelWatchers_completion = nil
+        
+        freezeChannel_freeze = nil
+        freezeChannel_cid = nil
+        freezeChannel_completion = nil
     }
     
     override func update(
         channelQuery: _ChannelQuery<ExtraData>,
         channelCreatedCallback: ((ChannelId) -> Void)?,
-        completion: ((Error?) -> Void)?
+        completion: ((Result<ChannelPayload<ExtraData>, Error>) -> Void)?
     ) {
         update_channelQuery = channelQuery
         update_channelCreatedCallback = channelCreatedCallback
         update_completion = completion
+        update_callCount += 1
     }
 
     override func updateChannel(channelPayload: ChannelEditDetailPayload<ExtraData>, completion: ((Error?) -> Void)? = nil) {
@@ -170,18 +184,22 @@ class ChannelUpdaterMock<ExtraData: ExtraDataTypes>: ChannelUpdater<ExtraData> {
         in cid: ChannelId,
         text: String,
         pinning: MessagePinning?,
+        isSilent: Bool,
         command: String?,
         arguments: String?,
-        attachments: [AttachmentEnvelope],
+        attachments: [AnyAttachmentPayload],
+        mentionedUserIds: [UserId],
         quotedMessageId: MessageId?,
         extraData: ExtraData.Message,
         completion: ((Result<MessageId, Error>) -> Void)? = nil
     ) {
         createNewMessage_cid = cid
         createNewMessage_text = text
+        createNewMessage_isSilent = isSilent
         createNewMessage_command = command
         createNewMessage_arguments = arguments
         createNewMessage_attachments = attachments
+        createNewMessage_mentionedUserIds = mentionedUserIds
         createNewMessage_quotedMessageId = quotedMessageId
         createNewMessage_pinning = pinning
         createNewMessage_extraData = extraData
@@ -224,5 +242,11 @@ class ChannelUpdaterMock<ExtraData: ExtraDataTypes>: ChannelUpdater<ExtraData> {
     override func channelWatchers(query: ChannelWatcherListQuery, completion: ((Error?) -> Void)? = nil) {
         channelWatchers_query = query
         channelWatchers_completion = completion
+    }
+    
+    override func freezeChannel(_ freeze: Bool, cid: ChannelId, completion: ((Error?) -> Void)? = nil) {
+        freezeChannel_freeze = freeze
+        freezeChannel_cid = cid
+        freezeChannel_completion = completion
     }
 }

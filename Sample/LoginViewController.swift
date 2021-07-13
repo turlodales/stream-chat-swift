@@ -20,25 +20,34 @@ class LoginViewController: UITableViewController {
         config.isLocalStorageEnabled = Configuration.isLocalStorageEnabled
         config.shouldFlushLocalStorageOnStart = Configuration.shouldFlushLocalStorageOnStart
         config.baseURL = Configuration.baseURL
-
-        let tokenProvider: TokenProvider = Configuration.token.map { .static($0) } ?? .guest(
-            userId: Configuration.userId,
-            name: Configuration.userName
-        )
         
-        let chatClient = ChatClient(
-            config: config,
-            tokenProvider: tokenProvider,
-            completion: {
-                guard let error = $0 else { return }
-                DispatchQueue.main.async {
-                    let viewController = UIApplication.shared.keyWindow?.rootViewController
-                    viewController?.alert(title: "Error", message: "Error logging in: \(error)") {
-                        viewController?.moveToStoryboard(.main, options: [.transitionFlipFromRight])
-                    }
+        let chatClient = ChatClient(config: config)
+        
+        let completion: (Error?) -> Void = {
+            guard let error = $0 else { return }
+            DispatchQueue.main.async {
+                let viewController = UIApplication.shared.keyWindow?.rootViewController
+                viewController?.alert(title: "Error", message: "Error logging in: \(error)") {
+                    viewController?.moveToStoryboard(.main, options: [.transitionFlipFromRight])
                 }
             }
-        )
+        }
+        
+        if let token = Configuration.token {
+            chatClient.connectUser(
+                userInfo: .init(id: Configuration.userId),
+                token: token,
+                completion: completion
+            )
+        } else {
+            chatClient.connectGuestUser(
+                userInfo: UserInfo<NoExtraData>(
+                    id: Configuration.userId,
+                    name: Configuration.userName
+                ),
+                completion: completion
+            )
+        }
         
         return chatClient
     }
@@ -120,11 +129,9 @@ extension LoginViewController {
             
             channelList.controller = channelListController
    
-            let navigation = UINavigationController(
-                navigationBarClass: channelList.components.navigation.navigationBar.self,
-                toolbarClass: nil
+            let navigation = channelList.components.navigationVC.init(
+                rootViewController: channelList
             )
-            navigation.viewControllers = [channelList]
 
             UIView.transition(with: view.window!, duration: 0.5, options: .transitionFlipFromLeft, animations: {
                 self.view.window?.rootViewController = navigation
@@ -136,9 +143,9 @@ extension LoginViewController {
 }
 
 final class MyChatChannelListRouter: ChatChannelListRouter {
-    override func openChat(for channel: _ChatChannel<NoExtraData>) {
+    override func showMessageList(for cid: ChannelId) {
         let chatScreen = ChatMessageListVC()
-        chatScreen.channelController = rootViewController.controller.client.channelController(for: channel.cid)
-        navigationController?.pushViewController(chatScreen, animated: true)
+        chatScreen.channelController = rootViewController.controller.client.channelController(for: cid)
+        rootNavigationController?.pushViewController(chatScreen, animated: true)
     }
 }

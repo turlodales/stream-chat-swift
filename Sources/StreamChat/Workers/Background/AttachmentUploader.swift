@@ -44,7 +44,7 @@ class AttachmentUploader: Worker {
         do {
             try observer.startObserving()
             observer.onChange = { [weak self] in self?.handleChanges(changes: $0) }
-            let changes = observer.items.map { ListChange.insert($0, index: .init(row: 0, section: 0)) }
+            let changes = observer.items.map { ListChange.insert($0, index: .init(item: 0, section: 0)) }
             handleChanges(changes: changes)
         } catch {
             log.error("Failed to start AttachmentUploader worker. \(error)")
@@ -71,35 +71,14 @@ class AttachmentUploader: Worker {
             else { return }
 
             guard
-                let attachment = session.attachment(id: attachmentID)?.asAnyModel(),
-                let uploadingState = attachment.uploadingState
+                let attachment = session.attachment(id: attachmentID)?.asAnyModel()
             else {
                 self?.removeAttachmentIDAndContinue(attachmentID)
                 return
             }
 
-            guard
-                let fileData = try? Data(contentsOf: uploadingState.localFileURL)
-            else {
-                self?.updateAttachmentIfNeeded(
-                    attachmentID,
-                    newState: .uploadingFailed,
-                    completion: {
-                        self?.removeAttachmentIDAndContinue(attachmentID)
-                    }
-                )
-                return
-            }
-
-            let multipartFormData = MultipartFormData(
-                fileData,
-                fileName: uploadingState.localFileURL.lastPathComponent,
-                mimeType: uploadingState.localFileURL.attachmentFile?.type.mimeType
-            )
-
-            self?.apiClient.uploadFile(
-                endpoint: .uploadAttachment(with: attachmentID, type: attachment.type),
-                multipartFormData: multipartFormData,
+            self?.apiClient.uploadAttachment(
+                attachment,
                 progress: {
                     self?.updateAttachmentIfNeeded(
                         attachmentID,
@@ -111,8 +90,8 @@ class AttachmentUploader: Worker {
                         attachmentID,
                         newState: result.error == nil ? .uploaded : .uploadingFailed,
                         attachmentUpdates: { attachmentDTO in
-                            guard case let .success(payload) = result else { return }
-                            attachmentDTO.update(uploadedFileURL: payload.file)
+                            guard case let .success(url) = result else { return }
+                            attachmentDTO.update(uploadedFileURL: url)
                         },
                         completion: {
                             self?.removeAttachmentIDAndContinue(attachmentID)

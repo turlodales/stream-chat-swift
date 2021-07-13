@@ -4,9 +4,15 @@
 
 import Foundation
 
-public typealias ChatMessageGiphyAttachment = _ChatMessageAttachment<AttachmentGiphyPayload>
+/// A type alias for attachment with `GiphyAttachmentPayload` payload type.
+///
+/// The ephemeral message containing `ChatMessageGiphyAttachment` attachment will be created
+/// when `/giphy` command is used.
+public typealias ChatMessageGiphyAttachment = _ChatMessageAttachment<GiphyAttachmentPayload>
 
-public struct AttachmentGiphyPayload: AttachmentPayloadType {
+/// Represents a payload for attachments with `.giphy` type.
+public struct GiphyAttachmentPayload: AttachmentPayload {
+    /// An attachment type all `GiphyAttachmentPayload` instances conform to. Is set to `.giphy`.
     public static let type: AttachmentType = .giphy
     
     /// A  title, usually the search request used to find the gif.
@@ -17,11 +23,11 @@ public struct AttachmentGiphyPayload: AttachmentPayloadType {
     public let actions: [AttachmentAction]
 }
 
-extension AttachmentGiphyPayload: Equatable {}
+extension GiphyAttachmentPayload: Equatable {}
 
 // MARK: - Encodable
 
-extension AttachmentGiphyPayload: Encodable {
+extension GiphyAttachmentPayload: Encodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: AttachmentCodingKeys.self)
 
@@ -33,20 +39,14 @@ extension AttachmentGiphyPayload: Encodable {
 
 // MARK: - Decodable
 
-extension AttachmentGiphyPayload: Decodable {
+extension GiphyAttachmentPayload: Decodable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: AttachmentCodingKeys.self)
-
-        guard
-            let previewURL = try container
-            .decodeIfPresent(String.self, forKey: .thumbURL)?
-            .attachmentFixedURL
-        else { throw ClientError.AttachmentDecoding() }
-
+        
         self.init(
             title: try container.decode(String.self, forKey: .title),
-            previewURL: previewURL,
-            actions: try container.decode([AttachmentAction].self, forKey: .actions)
+            previewURL: try container.decode(URL.self, forKey: .thumbURL),
+            actions: try container.decodeIfPresent([AttachmentAction].self, forKey: .actions) ?? []
         )
     }
 }

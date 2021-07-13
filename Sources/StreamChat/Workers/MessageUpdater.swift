@@ -129,8 +129,10 @@ class MessageUpdater<ExtraData: ExtraDataTypes>: Worker {
         command: String?,
         arguments: String?,
         parentMessageId: MessageId,
-        attachments: [AttachmentEnvelope],
+        attachments: [AnyAttachmentPayload],
+        mentionedUserIds: [UserId],
         showReplyInChannel: Bool,
+        isSilent: Bool,
         quotedMessageId: MessageId?,
         extraData: ExtraData.Message,
         completion: ((Result<MessageId, Error>) -> Void)? = nil
@@ -145,8 +147,11 @@ class MessageUpdater<ExtraData: ExtraDataTypes>: Worker {
                 arguments: arguments,
                 parentMessageId: parentMessageId,
                 attachments: attachments,
+                mentionedUserIds: mentionedUserIds,
                 showReplyInChannel: showReplyInChannel,
+                isSilent: isSilent,
                 quotedMessageId: quotedMessageId,
+                createdAt: nil,
                 extraData: extraData
             )
             

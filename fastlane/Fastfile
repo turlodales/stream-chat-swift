@@ -110,6 +110,7 @@ lane :match_me do |options|
         "io.getstream.iOS.iMessageClone",
         "io.getstream.iOS.SlackClone",
         "io.getstream.iOS.MessengerClone",
+        "io.getstream.iOS.YouTubeClone",
       ],
       readonly: readonly,
       force_for_new_devices: !is_ci
@@ -211,6 +212,7 @@ lane :testflight_build do
         "io.getstream.iOS.iMessageClone",
         "io.getstream.iOS.SlackClone",
         "io.getstream.iOS.MessengerClone",
+        "io.getstream.iOS.YouTubeClone",
       ],
       readonly: true
     )
@@ -238,7 +240,7 @@ end
 
 desc "Get next PR number from github to be used in CHANGELOG"
 lane :get_next_issue_number do
-  result = github_api(api_token: ENV["GITHUB_TOKEN"], path: "/repos/GetStream/stream-chat-swift/issues")
+  result = github_api(api_token: ENV["FASTLANE_GITHUB_TOKEN"], path: "/repos/GetStream/stream-chat-swift/issues")
   
   next_issue_number = result[:json][0]["number"] + 1
   next_issue_link = "[##{next_issue_number}](https://github.com/GetStream/stream-chat-swift/issues/#{next_issue_number})"
@@ -327,8 +329,54 @@ lane :test_release do |options|
   )
 end
 
-desc "Runs stress tests for in Debug config"
-lane :stress_test do |options|
+desc "Runs tests in Release config on macOS"
+lane :test_release_macos do
+
+  setCIEnvironmentVariable("../Tests/StreamChatTests/StreamChatTestPlan.xctestplan")
+
+  match_macos()
+
+  scan(
+    project: "StreamChat.xcodeproj",
+    scheme: "StreamChat",
+    testplan: "StreamChatTestPlan",
+    configuration: "ReleaseTests",
+    clean: true,
+    disable_xcpretty: true,
+    destination: 'platform=macOS,arch=x86_64' # will select first from macOS and macOS Catalyst. Let's hope it always will be macOS
+  )
+end
+
+desc "Runs tests in Debug config on macOS"
+lane :test_debug_macos do
+
+  setCIEnvironmentVariable("../Tests/StreamChatTests/StreamChatTestPlan.xctestplan")
+
+  match_macos()
+
+  scan(
+    project: "StreamChat.xcodeproj",
+    scheme: "StreamChat",
+    testplan: "StreamChatTestPlan",
+    configuration: "Debug",
+    clean: true,
+    disable_xcpretty: true,
+    destination: 'platform=macOS,arch=x86_64' # will select first from macOS and macOS Catalyst. Let's hope it always will be macOS
+  )
+end
+
+def match_macos
+  ["development", "appstore"].each do |type|
+    match(
+      type: type,
+      app_identifier: "io.getstream.StreamChat",
+      platform: "macos"
+    )
+  end
+end
+
+desc "Runs stress tests for Debug config"
+lane :stress_test do
   scan(
     project: "StreamChat.xcodeproj",
     scheme: "StreamChat",
@@ -400,6 +448,11 @@ end
 desc "Builds MessengerClone app"
 lane :build_messenger_clone do |options|
   build_example_app("MessengerClone", options)
+end
+
+desc "Builds YouTubeClone app"
+lane :build_youtube_clone do |options|
+  build_example_app("YouTubeClone", options)
 end
 
 def build_example_app(scheme, options)

@@ -15,6 +15,15 @@ The **StreamChatUI SDK**  is the official iOS SDK for [Stream Chat](https://gets
 
 --- 
 
+## Which Version Should I Choose?
+
+- **4.x** is the next major version, about to be released in July '21. It's mostly compatible with **3.x**, while exposing many more customization options. Choose this one, should you start a project today.
+- **3.x** is the current production version. This version doesn't allow full customizability of the UI elements.
+- **2.x** is in maintenance mode. We strongly encourage you to plan an upgrade. 
+
+### 4.x Beta Available
+[The upcoming v4 has a public beta available](https://github.com/GetStream/stream-chat-swift/releases/tag/4.0-beta.1). If your development timeline fits our release schedule, we strongly encourage you to give it a try and share your feedback with us by opening an issue.
+
 ## Main Features
 
 - **Uses `UIKit` patterns and paradigms:** The API follows the design of native system SDKs. It makes integration with your existing code easy and familiar.
@@ -69,17 +78,17 @@ Please check [our wiki page for migration](https://github.com/GetStream/stream-c
 
 ## Roadmap
 
-- [ ] Open UI components for subclassing and customization (3/2021, available in 🅱️ `3.2.0-beta`)
+- [x] Open UI components for subclassing and customization (`4.0-beta`)
 - [x] Pinned messages (released in `3.1.4`)
 - [x] Multi-tenancy, teams (released in `3.1.4`)
-- [ ] Local notification support (4/2021)
-- [ ] SwiftUI wrappers for UI components (4/2021)
-- [ ] Better photo gallery experience (4/2021)
-- [ ] Silent messages (4/2021)
-- [ ] Expired tokens (4/2021)
-- [ ] Channel invites (4/2021)
-- [ ] Paginating reactions (4/2021)
-- [ ] Message search (5/2021)
+- [x] Better photo gallery experience (`4.0-beta`)
+- [x] Expiring tokens (`4.0-beta`)
+- [ ] SwiftUI wrappers for UI components (expected in the next release)
+- [ ] Silent messages (expected in the next release)
+- [ ] Local notification support (6/2021) _delayed from 4/2021_
+- [ ] Channel invites (6/2021) _delayed from 4/2021_
+- [ ] Paginating reactions (6/2021) _delayed from 4/2021_
+- [ ] Message search (6/2021)
 - [ ] RxSwift wrappers (tbd)
 
 ---

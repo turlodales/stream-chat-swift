@@ -393,18 +393,20 @@ final class MessageUpdater_Tests: StressTestCase {
         let text: String = .unique
         let parentMessageId: MessageId = .unique
         let showReplyInChannel = true
+        let isSilent = false
         let command: String = .unique
         let arguments: String = .unique
         let extraData: NoExtraData = .defaultValue
 
-        let imageAttachmentEnvelope = AttachmentEnvelope.mockImage
-        let fileAttachmentEnvelope = AttachmentEnvelope.mockFile
-        let customAttachmentEnvelope = AttachmentEnvelope(payload: TestAttachmentPayload.unique)
-        let attachmentEnvelopes: [AttachmentEnvelope] = [
+        let imageAttachmentEnvelope = AnyAttachmentPayload.mockImage
+        let fileAttachmentEnvelope = AnyAttachmentPayload.mockFile
+        let customAttachmentEnvelope = AnyAttachmentPayload(payload: TestAttachmentPayload.unique)
+        let attachmentEnvelopes: [AnyAttachmentPayload] = [
             imageAttachmentEnvelope,
             fileAttachmentEnvelope,
             customAttachmentEnvelope
         ]
+        let mentionedUserIds: [UserId] = [currentUserId]
 
         // Create new reply message
         let newMessageId: MessageId = try waitFor { completion in
@@ -416,7 +418,9 @@ final class MessageUpdater_Tests: StressTestCase {
                 arguments: arguments,
                 parentMessageId: parentMessageId,
                 attachments: attachmentEnvelopes,
+                mentionedUserIds: mentionedUserIds,
                 showReplyInChannel: showReplyInChannel,
+                isSilent: isSilent,
                 quotedMessageId: nil,
                 extraData: extraData
             ) { result in
@@ -428,7 +432,7 @@ final class MessageUpdater_Tests: StressTestCase {
             }
         }
 
-        func id(for envelope: AttachmentEnvelope) -> AttachmentId {
+        func id(for envelope: AnyAttachmentPayload) -> AttachmentId {
             .init(cid: cid, messageId: newMessageId, index: attachmentEnvelopes.firstIndex(of: envelope)!)
         }
         
@@ -439,7 +443,7 @@ final class MessageUpdater_Tests: StressTestCase {
         XCTAssertEqual(message.arguments, arguments)
         XCTAssertEqual(message.parentMessageId, parentMessageId)
         XCTAssertEqual(message.showReplyInChannel, showReplyInChannel)
-        XCTAssertEqual(message.attachments.count, 3)
+        XCTAssertEqual(message.attachmentCounts.count, 3)
         XCTAssertEqual(message.imageAttachments, [imageAttachmentEnvelope.attachment(id: id(for: imageAttachmentEnvelope))])
         XCTAssertEqual(message.fileAttachments, [fileAttachmentEnvelope.attachment(id: id(for: fileAttachmentEnvelope))])
         XCTAssertEqual(
@@ -449,6 +453,8 @@ final class MessageUpdater_Tests: StressTestCase {
         XCTAssertEqual(message.extraData, extraData)
         XCTAssertEqual(message.localState, .pendingSend)
         XCTAssertTrue(message.isPinned)
+        XCTAssertEqual(message.isSilent, isSilent)
+        XCTAssertEqual(message.mentionedUsers.map(\.id), mentionedUserIds)
     }
     
     func test_createNewMessage_propagatesErrorWhenSavingFails() throws {
@@ -472,7 +478,9 @@ final class MessageUpdater_Tests: StressTestCase {
                 arguments: .unique,
                 parentMessageId: .unique,
                 attachments: [],
+                mentionedUserIds: [.unique],
                 showReplyInChannel: false,
+                isSilent: false,
                 quotedMessageId: nil,
                 extraData: .defaultValue
             ) { completion($0) }

@@ -6,6 +6,10 @@ import Foundation
 // MARK: - Strings
 
 internal enum L10n {
+  /// %d of %d
+  internal static func currentSelection(_ p1: Int, _ p2: Int) -> String {
+    return L10n.tr("Localizable", "current-selection", p1, p2)
+  }
 
   internal enum Alert {
     internal enum Actions {
@@ -13,7 +17,14 @@ internal enum L10n {
       internal static let cancel = L10n.tr("Localizable", "alert.actions.cancel")
       /// Delete
       internal static let delete = L10n.tr("Localizable", "alert.actions.delete")
+      /// Ok
+      internal static let ok = L10n.tr("Localizable", "alert.actions.ok")
     }
+  }
+
+  internal enum Attachment {
+    /// Attachment size exceed the limit.
+    internal static let maxSizeExceeded = L10n.tr("Localizable", "attachment.max-size-exceeded")
   }
 
   internal enum Channel {
@@ -49,8 +60,8 @@ internal enum L10n {
       internal static let cancel = L10n.tr("Localizable", "composer.picker.cancel")
       /// File
       internal static let file = L10n.tr("Localizable", "composer.picker.file")
-      /// Photo
-      internal static let image = L10n.tr("Localizable", "composer.picker.image")
+      /// Photo or Video
+      internal static let media = L10n.tr("Localizable", "composer.picker.media")
       /// Choose attachment type: 
       internal static let title = L10n.tr("Localizable", "composer.picker.title")
     }
@@ -143,7 +154,7 @@ internal enum L10n {
     internal enum TypingIndicator {
       /// Someone is typing
       internal static let typingUnknown = L10n.tr("Localizable", "messageList.typingIndicator.typing-unknown")
-      /// Plural format key: "%@%#@typing@"
+      /// Plural format key: "%1$@%2$#@typing@"
       internal static func users(_ p1: Any, _ p2: Int) -> String {
         return L10n.tr("Localizable", "messageList.typingIndicator.users", String(describing: p1), p2)
       }

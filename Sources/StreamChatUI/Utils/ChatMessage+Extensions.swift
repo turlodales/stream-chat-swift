@@ -5,33 +5,37 @@
 import Foundation
 import StreamChat
 
-extension _ChatMessage {
-    /// Says whether actions are available on the message (e.g. `edit`, `delete`, `resend`, etc.).
+public extension _ChatMessage {
+    /// A boolean value that checks if actions are available on the message (e.g. `edit`, `delete`, `resend`, etc.).
     var isInteractionEnabled: Bool {
         guard
             type != .ephemeral,
-            deletedAt == nil
+            isDeleted == false
         else { return false }
 
-        return localState == nil || lastActionFailed
+        return localState == nil || isLastActionFailed
     }
 
-    /// Says whether the last action (`send`, `edit` or `delete`) on the message failed.
-    var lastActionFailed: Bool {
+    /// A boolean value that checks if the last action (`send`, `edit` or `delete`) on the message failed.
+    var isLastActionFailed: Bool {
+        guard isDeleted == false else { return false }
+
         switch localState {
         case .sendingFailed, .syncingFailed, .deletingFailed:
-            return deletedAt == nil
+            return true
         default:
             return false
         }
     }
 
-    /// Says whether the message is part of message thread.
-    var isPartOfThread: Bool {
-        let isThreadStart = replyCount > 0
-        let isThreadReplyInChannel = showReplyInChannel
+    /// A boolean value that checks if the message is the root of a thread.
+    var isRootOfThread: Bool {
+        replyCount > 0
+    }
 
-        return isThreadStart || isThreadReplyInChannel
+    /// A boolean value that checks if the message is part of a thread.
+    var isPartOfThread: Bool {
+        parentMessageId != nil
     }
 
     /// The text which should be shown in a text view inside the message bubble.
@@ -40,20 +44,16 @@ extension _ChatMessage {
             return nil
         }
 
-        guard deletedAt == nil else {
-            return L10n.Message.deletedMessagePlaceholder
-        }
-
-        return text
+        return isDeleted ? L10n.Message.deletedMessagePlaceholder : text
     }
 
-    /// Says whether the message is visible for current user only.
-    var onlyVisibleForCurrentUser: Bool {
+    /// A boolean value that checks if the message is visible for current user only.
+    var isOnlyVisibleForCurrentUser: Bool {
         guard isSentByCurrentUser else {
             return false
         }
 
-        return deletedAt != nil || type == .ephemeral
+        return isDeleted || type == .ephemeral
     }
 
     /// Returns last active thread participant.
@@ -65,5 +65,10 @@ extension _ChatMessage {
         return threadParticipants
             .sorted(by: { sortingCriteriaDate($0) > sortingCriteriaDate($1) })
             .first
+    }
+
+    /// A boolean value that says if the message is deleted.
+    var isDeleted: Bool {
+        deletedAt != nil
     }
 }

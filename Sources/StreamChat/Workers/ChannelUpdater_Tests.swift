@@ -47,8 +47,8 @@ class ChannelUpdater_Tests: StressTestCase {
         // Simulate `update(channelQuery:)` call
         let query = _ChannelQuery<ExtraData>(cid: .unique)
         var completionCalled = false
-        channelUpdater.update(channelQuery: query, completion: { error in
-            XCTAssertNil(error)
+        channelUpdater.update(channelQuery: query, completion: { result in
+            XCTAssertNil(result.error)
             completionCalled = true
         })
         
@@ -71,7 +71,7 @@ class ChannelUpdater_Tests: StressTestCase {
         // Simulate `update(channelQuery:)` call
         let query = _ChannelQuery<ExtraData>(cid: .unique)
         var completionCalledError: Error?
-        channelUpdater.update(channelQuery: query, completion: { completionCalledError = $0 })
+        channelUpdater.update(channelQuery: query, completion: { completionCalledError = $0.error })
         
         // Simulate API response with failure
         let error = TestError()
@@ -137,11 +137,11 @@ class ChannelUpdater_Tests: StressTestCase {
         let arguments: String = .unique
         let extraData: NoExtraData = .defaultValue
 
-        let imageAttachmentEnvelope = AttachmentEnvelope.mockImage
-        let fileAttachmentEnvelope = AttachmentEnvelope.mockFile
-        let customAttachmentEnvelope = AttachmentEnvelope(payload: TestAttachmentPayload.unique)
+        let imageAttachmentEnvelope = AnyAttachmentPayload.mockImage
+        let fileAttachmentEnvelope = AnyAttachmentPayload.mockFile
+        let customAttachmentEnvelope = AnyAttachmentPayload(payload: TestAttachmentPayload.unique)
 
-        let attachmentEnvelopes: [AttachmentEnvelope] = [
+        let attachmentEnvelopes: [AnyAttachmentPayload] = [
             imageAttachmentEnvelope,
             fileAttachmentEnvelope,
             customAttachmentEnvelope
@@ -153,21 +153,24 @@ class ChannelUpdater_Tests: StressTestCase {
                 in: cid,
                 text: text,
                 pinning: MessagePinning(expirationDate: .unique),
+                isSilent: false,
                 command: command,
                 arguments: arguments,
                 attachments: attachmentEnvelopes,
+                mentionedUserIds: [currentUserId],
                 quotedMessageId: nil,
                 extraData: extraData
             ) { result in
-                if let newMessageId = try? result.get() {
+                do {
+                    let newMessageId = try result.get()
                     completion(newMessageId)
-                } else {
-                    XCTFail("Saving the message failed.")
+                } catch {
+                    XCTFail("Saving the message failed. \(error)")
                 }
             }
         }
 
-        func id(for envelope: AttachmentEnvelope) -> AttachmentId {
+        func id(for envelope: AnyAttachmentPayload) -> AttachmentId {
             .init(cid: cid, messageId: newMessageId, index: attachmentEnvelopes.firstIndex(of: envelope)!)
         }
         
@@ -178,7 +181,7 @@ class ChannelUpdater_Tests: StressTestCase {
         XCTAssertEqual(message.text, text)
         XCTAssertEqual(message.command, command)
         XCTAssertEqual(message.arguments, arguments)
-        XCTAssertEqual(message.attachments.count, 3)
+        XCTAssertEqual(message.attachmentCounts.count, 3)
         XCTAssertEqual(message.imageAttachments, [imageAttachmentEnvelope.attachment(id: id(for: imageAttachmentEnvelope))])
         XCTAssertEqual(message.fileAttachments, [fileAttachmentEnvelope.attachment(id: id(for: fileAttachmentEnvelope))])
         XCTAssertEqual(
@@ -188,6 +191,8 @@ class ChannelUpdater_Tests: StressTestCase {
         XCTAssertEqual(message.extraData, extraData)
         XCTAssertEqual(message.localState, .pendingSend)
         XCTAssertEqual(message.isPinned, true)
+        XCTAssertEqual(message.isSilent, false)
+        XCTAssertEqual(message.mentionedUsers.map(\.id), [currentUserId])
     }
     
     func test_createNewMessage_propagatesErrorWhenSavingFails() throws {
@@ -218,8 +223,10 @@ class ChannelUpdater_Tests: StressTestCase {
             channelUpdater.createNewMessage(
                 in: .unique,
                 text: .unique,
+                isSilent: false,
                 command: .unique,
                 arguments: .unique,
+                mentionedUserIds: [.unique],
                 quotedMessageId: nil,
                 extraData: .defaultValue
             ) { completion($0) }
@@ -815,5 +822,44 @@ class ChannelUpdater_Tests: StressTestCase {
         AssertAsync {
             Assert.willBeFalse(channel?.lastActiveWatchers.contains(where: { $0.id == firstWatcherId }) ?? true)
         }
+    }
+    
+    // MARK: - Freeze channel
+    
+    func test_freezeChannel_makesCorrectAPICall() {
+        let cid = ChannelId.unique
+        let freeze = Bool.random()
+        
+        channelUpdater.freezeChannel(freeze, cid: cid)
+        
+        let referenceEndpoint: Endpoint<EmptyResponse> = .freezeChannel(freeze, cid: cid)
+        
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+    }
+    
+    func test_freezeChannel_successfulResponse_isPropagatedToCompletion() {
+        var completionCalled = false
+        let cid = ChannelId.unique
+        let freeze = Bool.random()
+        channelUpdater.freezeChannel(freeze, cid: cid) { error in
+            XCTAssertNil(error)
+            completionCalled = true
+        }
+        
+        XCTAssertFalse(completionCalled)
+        
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        
+        AssertAsync.willBeTrue(completionCalled)
+    }
+    
+    func test_freezeChannel_errorResponse_isPropagatedToCompletion() {
+        var completionCalledError: Error?
+        channelUpdater.freezeChannel(.random(), cid: .unique) { completionCalledError = $0 }
+        
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        
+        AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
 }

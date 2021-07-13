@@ -2,46 +2,35 @@
 // Copyright © 2021 Stream.io Inc. All rights reserved.
 //
 
-import UIKit
+import Foundation
 
 class WebSocketClient {
-    /// Additional options for configuring web socket behavior.
-    struct Options: OptionSet {
-        let rawValue: Int
-        /// When the app enters background, `WebSocketClient` starts a long term background task and stays connected.
-        static let staysConnectedInBackground = Options(rawValue: 1 << 0)
-    }
-    
     /// The notification center `WebSocketClient` uses to send notifications about incoming events.
     let eventNotificationCenter: EventNotificationCenter
     
     /// The current state the web socket connection.
-    @Atomic fileprivate(set) var connectionState: WebSocketConnectionState = .disconnected() {
+    @Atomic private(set) var connectionState: WebSocketConnectionState = .disconnected() {
         didSet {
             log.info("Web socket connection state changed: \(connectionState)")
-            connectionStateDelegate?.webSocketClient(self, didUpdateConectionState: connectionState)
+            connectionStateDelegate?.webSocketClient(self, didUpdateConnectionState: connectionState)
             
             if connectionState.isConnected {
-                reconnectionStrategy.sucessfullyConnected()
+                reconnectionStrategy.successfullyConnected()
             }
             
             pingController.connectionStateDidChange(connectionState)
-            
-            if case .disconnected = connectionState {
-                // No reconnection attempts are scheduled
-                cancelBackgroundTaskIfNeeded()
-            }
-            
-            // Publish Connection event with the new state
+
+            let previousStatus = ConnectionStatus(webSocketConnectionState: oldValue)
             let event = ConnectionStatusUpdated(webSocketConnectionState: connectionState)
-            eventNotificationCenter.process(event)
+
+            if event.connectionStatus != previousStatus {
+                // Publish Connection event with the new state
+                eventNotificationCenter.process(event)
+            }
         }
     }
     
     weak var connectionStateDelegate: ConnectionStateDelegate?
-    
-    /// Web socket connection options
-    var options: Options = [.staysConnectedInBackground]
     
     /// The endpoint used for creating a web socket connection.
     ///
@@ -68,13 +57,6 @@ class WebSocketClient {
     
     /// An object describing reconnection behavior after the web socket is disconnected.
     private var reconnectionStrategy: WebSocketClientReconnectionStrategy
-    
-    /// Used for starting and ending background tasks. Typically, this is provided by `UIApplication` which conforms
-    /// to `BackgroundTaskScheduler` automatically.
-    private lazy var backgroundTaskScheduler: BackgroundTaskScheduler? = environment.backgroundTaskScheduler
-    
-    /// The identifier of the currently running background task. `nil` of no background task is running.
-    private var activeBackgroundTask: UIBackgroundTaskIdentifier?
     
     /// The internet connection observer we use for recovering when the connection was offline for some time.
     private let internetConnection: InternetConnection
@@ -122,9 +104,6 @@ class WebSocketClient {
         self.internetConnection = internetConnection
 
         self.eventNotificationCenter = eventNotificationCenter
-        self.eventNotificationCenter.add(middleware: HealthCheckMiddleware(webSocketClient: self))
-        
-        startListeningForAppStateUpdates()
     }
     
     /// Connects the web connect.
@@ -165,54 +144,10 @@ class WebSocketClient {
             engine?.disconnect()
         }
     }
-    
-    private func startListeningForAppStateUpdates() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleAppDidEnterBackground),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
-        )
-        
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleAppDidBecomeActive),
-            name: UIApplication.didBecomeActiveNotification,
-            object: nil
-        )
-    }
-    
-    @objc private func handleAppDidEnterBackground() {
-        guard options.contains(.staysConnectedInBackground), connectionState.isActive else { return }
-        
-        let backgroundTask = backgroundTaskScheduler?.beginBackgroundTask { [weak self] in
-            self?.disconnect(source: .systemInitiated)
-            // We need to call `endBackgroundTask` else our app will be killed
-            self?.cancelBackgroundTaskIfNeeded()
-        }
-        
-        if backgroundTask != .invalid {
-            activeBackgroundTask = backgroundTask
-        } else {
-            // Can't initiate a background task, close the connection
-            disconnect(source: .systemInitiated)
-        }
-    }
-    
-    @objc private func handleAppDidBecomeActive() {
-        cancelBackgroundTaskIfNeeded()
-    }
-    
-    private func cancelBackgroundTaskIfNeeded() {
-        if let backgroundTask = activeBackgroundTask {
-            backgroundTaskScheduler?.endBackgroundTask(backgroundTask)
-            activeBackgroundTask = nil
-        }
-    }
 }
 
 protocol ConnectionStateDelegate: AnyObject {
-    func webSocketClient(_ client: WebSocketClient, didUpdateConectionState state: WebSocketConnectionState)
+    func webSocketClient(_ client: WebSocketClient, didUpdateConnectionState state: WebSocketConnectionState)
 }
 
 extension WebSocketClient {
@@ -237,17 +172,6 @@ extension WebSocketClient {
                 return StarscreamWebSocketProvider(request: $0, sessionConfiguration: $1, callbackQueue: $2)
             }
         }
-        
-        var backgroundTaskScheduler: BackgroundTaskScheduler? = {
-            if Bundle.main.isAppExtension {
-                /// No background task scheduler exists for app extensions.
-                return nil
-            } else {
-                /// We can't use `UIApplication.shared` directly because there's no way to convince the compiler
-                /// this code is accessible only for non-extension executables.
-                return UIApplication.value(forKeyPath: "sharedApplication") as? UIApplication
-            }
-        }()
     }
 }
 
@@ -264,7 +188,14 @@ extension WebSocketClient: WebSocketEngineDelegate {
             log.debug("Event received:\n\(messageData.debugPrettyPrintedJSON)")
 
             let event = try eventDecoder.decode(from: messageData)
-            eventNotificationCenter.process(event)
+            if let healthCheckEvent = event as? HealthCheckEvent {
+                eventNotificationCenter.process(healthCheckEvent) { [weak self] connectionId in
+                    self?.pingController.pongRecieved()
+                    self?.connectionState = .connected(connectionId: connectionId)
+                }
+            } else {
+                eventNotificationCenter.process(event)
+            }
         } catch is ClientError.UnsupportedEventType {
             log.info("Skipping unsupported event type with payload: \(message)")
             
@@ -284,7 +215,9 @@ extension WebSocketClient: WebSocketEngineDelegate {
     
     func webSocketDidDisconnect(error engineError: WebSocketEngineError?) {
         // Reconnection shouldn't happen for manually initiated disconnect
+        // or system initated disconnect (app enters background)
         let shouldReconnect = connectionState != .disconnecting(source: .userInitiated)
+            && connectionState != .disconnecting(source: .systemInitiated)
         
         let disconnectionError: Error?
         if case let .disconnecting(.serverInitiated(webSocketError)) = connectionState {
@@ -372,33 +305,4 @@ extension ClientError {
 struct WebSocketErrorContainer: Decodable {
     /// A server error was received.
     let error: ErrorPayload
-}
-
-/// Used for starting and ending background tasks. `UIApplication` which conforms to `BackgroundTaskScheduler` automatically.
-protocol BackgroundTaskScheduler {
-    func beginBackgroundTask(expirationHandler: (() -> Void)?) -> UIBackgroundTaskIdentifier
-    func endBackgroundTask(_ identifier: UIBackgroundTaskIdentifier)
-}
-
-extension UIApplication: BackgroundTaskScheduler {}
-
-struct HealthCheckMiddleware: EventMiddleware {
-    private(set) weak var webSocketClient: WebSocketClient?
-
-    func handle(event: Event, session: DatabaseSession) -> Event? {
-        guard let healthCheckEvent = event as? HealthCheckEvent else {
-            // Do nothing and forward the event
-            return event
-        }
-        
-        if let webSocketClient = webSocketClient {
-            webSocketClient.pingController.pongRecieved()
-            if webSocketClient.connectionState.isConnected == false {
-                webSocketClient.connectionState = .connected(connectionId: healthCheckEvent.connectionId)
-            }
-        }
-        
-        // Don't forward the event
-        return nil
-    }
 }

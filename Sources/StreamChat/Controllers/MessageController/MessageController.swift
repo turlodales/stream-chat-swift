@@ -223,8 +223,10 @@ public extension _ChatMessageController {
         pinning: MessagePinning? = nil,
 //        command: String? = nil,
 //        arguments: String? = nil,
-        attachments: [AttachmentEnvelope] = [],
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
         showReplyInChannel: Bool = false,
+        isSilent: Bool = false,
         quotedMessageId: MessageId? = nil,
         extraData: ExtraData.Message = .defaultValue,
         completion: ((Result<MessageId, Error>) -> Void)? = nil
@@ -237,7 +239,9 @@ public extension _ChatMessageController {
             arguments: nil,
             parentMessageId: messageId,
             attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
             showReplyInChannel: showReplyInChannel,
+            isSilent: isSilent,
             quotedMessageId: quotedMessageId,
             extraData: extraData
         ) { result in
@@ -465,9 +469,16 @@ private extension _ChatMessageController {
     func setRepliesObserver() {
         _repliesObserver.computeValue = { [unowned self] in
             let sortAscending = self.listOrdering == .topToBottom ? false : true
+            let deletedMessageVisibility = self.client.databaseContainer.viewContext
+                .deletedMessagesVisibility ?? .visibleForCurrentUser
+
             let observer = ListDatabaseObserver(
                 context: self.client.databaseContainer.viewContext,
-                fetchRequest: MessageDTO.repliesFetchRequest(for: self.messageId, sortAscending: sortAscending),
+                fetchRequest: MessageDTO.repliesFetchRequest(
+                    for: self.messageId,
+                    sortAscending: sortAscending,
+                    deletedMessagesVisibility: deletedMessageVisibility
+                ),
                 itemCreator: { $0.asModel() as _ChatMessage<ExtraData> }
             )
             observer.onChange = { changes in

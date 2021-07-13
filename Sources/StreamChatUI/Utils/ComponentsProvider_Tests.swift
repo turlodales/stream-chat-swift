@@ -14,16 +14,16 @@ class ComponentsProvider_Tests: XCTestCase {
         let parentView = TestViewWithExtraData<ExtraData>()
         let subView = TestViewWithExtraData<ExtraData>()
         var components = Components()
-        // Set some random subclass to check if the coponents are passed down
-        components.createChannelButton = TestCreateChannelButton.self
+        // Set some random subclass to check if the components are passed down
+        components.galleryView = TestChatMessageGalleryView.self
         
         parentView.addSubview(subView)
         parentView.components = components
         
         // We can only compare string descriptions, which should be good enough
         XCTAssertEqual(
-            String(describing: subView.components.createChannelButton),
-            String(describing: components.createChannelButton)
+            String(describing: subView.components.galleryView),
+            String(describing: components.galleryView)
         )
     }
     
@@ -32,8 +32,8 @@ class ComponentsProvider_Tests: XCTestCase {
         let intermediateView = UIView()
         let subView = TestViewWithExtraData<ExtraData>()
         var components = Components()
-        // Set some random subclass to check if the coponents are passed down
-        components.createChannelButton = TestCreateChannelButton.self
+        // Set some random subclass to check if the components are passed down
+        components.galleryView = TestChatMessageGalleryView.self
         
         parentView.addSubview(intermediateView)
         intermediateView.addSubview(subView)
@@ -41,8 +41,8 @@ class ComponentsProvider_Tests: XCTestCase {
         
         // We can only compare string descriptions, which should be good enough
         XCTAssertEqual(
-            String(describing: subView.components.createChannelButton),
-            String(describing: components.createChannelButton)
+            String(describing: subView.components.galleryView),
+            String(describing: components.galleryView)
         )
     }
     
@@ -55,16 +55,16 @@ class ComponentsProvider_Tests: XCTestCase {
         
         // We can only compare string descriptions, which should be good enough
         XCTAssertEqual(
-            String(describing: subView.components.createChannelButton),
-            String(describing: defaultComponents.createChannelButton)
+            String(describing: subView.components.galleryView),
+            String(describing: defaultComponents.galleryView)
         )
     }
     
     func test_components_passedDownToVCView() {
         let vc = TestViewWithExtraDataController<ExtraData>()
         var components = Components()
-        // Set some random subclass to check if the coponents are passed down
-        components.createChannelButton = TestCreateChannelButton.self
+        // Set some random subclass to check if the components are passed down
+        components.galleryView = TestChatMessageGalleryView.self
         
         vc.components = components
         
@@ -73,16 +73,16 @@ class ComponentsProvider_Tests: XCTestCase {
         
         // We can only compare string descriptions, which should be good enough
         XCTAssertEqual(
-            String(describing: vc.subView.components.createChannelButton),
-            String(describing: components.createChannelButton)
+            String(describing: vc.subView.components.galleryView),
+            String(describing: components.galleryView)
         )
     }
     
     func test_vcSubviews_initedFromConfig() {
         let vc = TestViewWithExtraDataController<ExtraData>()
         var components = Components()
-        // Set some random subclass to check if the coponents are passed down
-        components.createChannelButton = TestCreateChannelButton.self
+        // Set some random subclass to check if the components are passed down
+        components.galleryView = TestChatMessageGalleryView.self
         
         vc.components = components
         
@@ -92,7 +92,7 @@ class ComponentsProvider_Tests: XCTestCase {
         // We can only compare string descriptions, which should be good enough
         XCTAssertEqual(
             String(describing: type(of: vc.TestCreateChannelButton)),
-            String(describing: components.createChannelButton)
+            String(describing: components.galleryView)
         )
     }
 }
@@ -101,7 +101,7 @@ private class TestViewWithExtraData<ExtraData: ExtraDataTypes>: UIView, Componen
 
 private class TestViewWithExtraDataController<ExtraData: ExtraDataTypes>: UIViewController, ComponentsProvider {
     let subView = TestViewWithExtraData<ExtraData>()
-    lazy var TestCreateChannelButton = components.createChannelButton.init()
+    lazy var TestCreateChannelButton = components.galleryView.init()
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -111,4 +111,4 @@ private class TestViewWithExtraDataController<ExtraData: ExtraDataTypes>: UIView
     }
 }
 
-private class TestCreateChannelButton: CreateChatChannelButton {}
+private class TestChatMessageGalleryView: ChatMessageGalleryView {}

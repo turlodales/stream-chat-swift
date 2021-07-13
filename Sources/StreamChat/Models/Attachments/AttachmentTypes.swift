@@ -4,22 +4,7 @@
 
 import Foundation
 
-public extension URL {
-    var attachmentFile: AttachmentFile? {
-        guard isFileURL else { return nil }
-        
-        let fileType = AttachmentFileType(ext: pathExtension)
-        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
-
-        return .init(
-            type: fileType,
-            size: attributes?[.size] as? Int64 ?? 0,
-            mimeType: fileType.mimeType
-        )
-    }
-}
-
-enum AttachmentCodingKeys: String, CodingKey {
+enum AttachmentCodingKeys: String, CodingKey, CaseIterable {
     case title
     case type
     case image
@@ -121,11 +106,13 @@ public extension AttachmentType {
 
     /// Application custom types.
     static let linkPreview = Self(rawValue: "linkPreview")
+    /// Is used when attachment with missing `type` comes.
+    static let unknown = Self(rawValue: "unknown")
 }
 
 /// An attachment file description.
 public struct AttachmentFile: Codable, Hashable {
-    private enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case mimeType = "mime_type"
         case size = "file_size"
     }
@@ -151,6 +138,21 @@ public struct AttachmentFile: Codable, Hashable {
         self.type = type
         self.size = size
         self.mimeType = mimeType
+    }
+
+    public init(url: URL) throws {
+        guard url.isFileURL else {
+            throw ClientError.InvalidAttachmentFileURL(url)
+        }
+
+        let fileType = AttachmentFileType(ext: url.pathExtension)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+
+        self.init(
+            type: fileType,
+            size: attributes[.size] as? Int64 ?? 0,
+            mimeType: fileType.mimeType
+        )
     }
     
     public init(from decoder: Decoder) throws {
@@ -231,22 +233,10 @@ public enum AttachmentFileType: String, Codable, Equatable, CaseIterable {
     }
 }
 
-extension String {
-    var attachmentFixedURL: URL? {
-        if let url = URL(string: self), url.isFileURL {
-            return url
+extension ClientError {
+    class InvalidAttachmentFileURL: ClientError {
+        init(_ url: URL) {
+            super.init("The \(url) is invalid since it is not a file URL.")
         }
-
-        var urlString = self
-        
-        if urlString.hasPrefix("//") {
-            urlString = "https:\(urlString)"
-        }
-        
-        if !urlString.lowercased().hasPrefix("http") {
-            urlString = "https://\(urlString)"
-        }
-        
-        return URL(string: urlString)
     }
 }

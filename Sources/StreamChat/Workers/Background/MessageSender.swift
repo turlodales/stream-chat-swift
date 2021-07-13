@@ -51,7 +51,7 @@ class MessageSender<ExtraData: ExtraDataTypes>: Worker {
                 
                 // Send the existing unsent message first. We can simulate callback from the observer and ignore
                 // the index path completely.
-                if let changes = self?.observer.items.map({ ListChange.insert($0, index: .init(row: 0, section: 0)) }) {
+                if let changes = self?.observer.items.map({ ListChange.insert($0, index: .init(item: 0, section: 0)) }) {
                     self?.handleChanges(changes: changes)
                 }
             } catch {
@@ -66,11 +66,15 @@ class MessageSender<ExtraData: ExtraDataTypes>: Worker {
         changes.forEach { change in
             switch change {
             case .insert(let dto, index: _), .update(let dto, index: _):
-                let cid = try! ChannelId(cid: dto.channel.cid)
-                // Create the array if it didn't exist
-                newRequests[cid] = newRequests[cid] ?? []
-                newRequests[cid]!.append(.init(messageId: dto.id, createdLocallyAt: dto.locallyCreatedAt ?? dto.createdAt))
-                
+                database.backgroundReadOnlyContext.performAndWait {
+                    guard let cid = dto.channel.map({ try! ChannelId(cid: $0.cid) }) else {
+                        log.error("Skipping sending of the message \(dto.id) because the channel info is missing.")
+                        return
+                    }
+                    // Create the array if it didn't exist
+                    newRequests[cid] = newRequests[cid] ?? []
+                    newRequests[cid]!.append(.init(messageId: dto.id, createdLocallyAt: dto.locallyCreatedAt ?? dto.createdAt))
+                }
             case .move, .remove:
                 break
             }
@@ -148,7 +152,12 @@ private class MessageSendingQueue<ExtraData: ExtraDataTypes> {
                     return
                 }
                 
-                let cid = try! ChannelId(cid: dto.channel.cid)
+                guard let cid = dto.channel.map({ try! ChannelId(cid: $0.cid) }) else {
+                    log.info("Skipping sending message with id \(dto.id) because it doesn't have a valid channel.")
+                    self?.removeRequestAndContinue(request)
+                    return
+                }
+
                 let requestBody = dto.asRequestBody() as MessageRequestBody<ExtraData>
                 
                 // Change the message state to `.sending` and the proceed with the actual sending
@@ -196,6 +205,7 @@ private class MessageSendingQueue<ExtraData: ExtraDataTypes> {
             let messageDTO = try $0.saveMessage(payload: message, for: cid)
             if messageDTO.localMessageState == .sending {
                 messageDTO.localMessageState = nil
+                messageDTO.locallyCreatedAt = nil
             }
         }, completion: {
             if let error = $0 {
@@ -213,7 +223,7 @@ private class MessageSendingQueue<ExtraData: ExtraDataTypes> {
             }
         }, completion: {
             if let error = $0 {
-                log.error("Error changin localMessageState message with id \(id) to `sendingFailed`: \(error)")
+                log.error("Error changing localMessageState message with id \(id) to `sendingFailed`: \(error)")
             }
             completion()
         })

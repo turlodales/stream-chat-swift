@@ -61,9 +61,12 @@ protocol MessageDatabaseSession {
         command: String?,
         arguments: String?,
         parentMessageId: MessageId?,
-        attachments: [AttachmentEnvelope],
+        attachments: [AnyAttachmentPayload],
+        mentionedUserIds: [UserId],
         showReplyInChannel: Bool,
+        isSilent: Bool,
         quotedMessageId: MessageId?,
+        createdAt: Date?,
         extraData: ExtraData
     ) throws -> MessageDTO
     
@@ -116,7 +119,9 @@ extension MessageDatabaseSession {
         text: String,
         pinning: MessagePinning?,
         quotedMessageId: MessageId?,
-        attachments: [AttachmentEnvelope] = [],
+        isSilent: Bool = false,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
         extraData: ExtraData = .defaultValue
     ) throws -> MessageDTO {
         try createNewMessage(
@@ -127,8 +132,11 @@ extension MessageDatabaseSession {
             arguments: nil,
             parentMessageId: nil,
             attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
             showReplyInChannel: false,
+            isSilent: isSilent,
             quotedMessageId: quotedMessageId,
+            createdAt: nil,
             extraData: extraData
         )
     }
@@ -159,6 +167,14 @@ protocol ChannelReadDatabaseSession {
     func saveChannelRead<ExtraData: ExtraDataTypes>(
         payload: ChannelReadPayload<ExtraData>,
         for cid: ChannelId
+    ) throws -> ChannelReadDTO
+    
+    /// Creates a new `ChannelReadDTO` object in the database.
+    func saveChannelRead(
+        cid: ChannelId,
+        userId: UserId,
+        lastReadAt: Date,
+        unreadMessageCount: Int
     ) throws -> ChannelReadDTO
     
     /// Fetches `ChannelReadDTO` with the given `cid` and `userId` from the DB.
@@ -215,7 +231,7 @@ protocol AttachmentDatabaseSession {
     /// with the given `messageId` in the channel with the given `cid`.
     @discardableResult
     func saveAttachment(
-        payload: AttachmentPayload,
+        payload: MessageAttachmentPayload,
         id: AttachmentId
     ) throws -> AttachmentDTO
     
@@ -223,7 +239,7 @@ protocol AttachmentDatabaseSession {
     /// with the given `messageId` in the channel with the given `cid`.
     @discardableResult
     func createNewAttachment(
-        attachment: AttachmentEnvelope,
+        attachment: AnyAttachmentPayload,
         id: AttachmentId
     ) throws -> AttachmentDTO
 }

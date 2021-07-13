@@ -10,6 +10,8 @@ public extension Appearance {
 
         /// General textColor, should be something that contrasts great with your `background` Color
         public var text: UIColor = .streamBlack
+        public var textInverted: UIColor = .streamWhite
+        public var textDisabled: UIColor = .streamGrayDisabledText
 
         /// Static color which should stay the same in dark and light mode, because it's only used as text on small UI Elements
         /// such as `ChatUnreadCountView`, `GiphyBadge` or Commands icon.
@@ -30,6 +32,10 @@ public extension Appearance {
         public var background2: UIColor = .streamGrayGainsboro
         public var background3: UIColor = .streamOverlay
         public var background4: UIColor = .streamOverlayDark
+        public var background5: UIColor = .streamOverlayDarkStatic
+        public var background6: UIColor = .streamGrayWhisper
+        public var background7: UIColor = .streamDarkGray
+        public var background8: UIColor = .streamWhite
 
         public var overlayBackground: UIColor = .streamOverlayLight
         public var popoverBackground: UIColor = .streamWhite
@@ -43,12 +49,14 @@ public extension Appearance {
         public var lightBorder: UIColor = .streamWhiteSnow
         public var border: UIColor = .streamGrayGainsboro
         public var border2: UIColor = .streamGray
+        public var border3: UIColor = .streamGrayWhisper
 
         // MARK: - Tint and alert
 
         public var alert: UIColor = .streamAccentRed
         public var alternativeActiveTint: UIColor = .streamAccentGreen
         public var inactiveTint: UIColor = .streamGray
+        public var alternativeInactiveTint: UIColor = .streamGrayGainsboro
     }
 }
 
@@ -62,6 +70,7 @@ private extension UIColor {
     static let streamGray = mode(0x7a7a7a, 0x7a7a7a)
     static let streamGrayGainsboro = mode(0xdbdbdb, 0x2d2f2f)
     static let streamGrayWhisper = mode(0xecebeb, 0x1c1e22)
+    static let streamDarkGray = mode(0x7a7a7a, 0x7a7a7a)
     static let streamWhiteSmoke = mode(0xf2f2f2, 0x13151b)
     static let streamWhiteSnow = mode(0xfcfcfc, 0x070a0d)
     static let streamOverlayLight = mode(0xfcfcfc, lightAlpha: 0.9, 0x070a0d, darkAlpha: 0.9)
@@ -70,6 +79,7 @@ private extension UIColor {
     static let streamAccentBlue = mode(0x005fff, 0x005fff)
     static let streamAccentRed = mode(0xff3742, 0xff3742)
     static let streamAccentGreen = mode(0x20e070, 0x20e070)
+    static let streamGrayDisabledText = mode(0x72767e, 0x72767e)
     
     // Currently we are not using the correct shadow color from figma's color palette. This is to avoid
     // an issue with snapshots inconsistency between Intel vs M1. We can't use shadows with transparency.
@@ -82,6 +92,7 @@ private extension UIColor {
     static let streamBGGradientTo = mode(0xfcfcfc, 0x070a0d)
     static let streamOverlay = mode(0x000000, lightAlpha: 0.2, 0x000000, darkAlpha: 0.4)
     static let streamOverlayDark = mode(0x000000, lightAlpha: 0.6, 0xffffff, darkAlpha: 0.8)
+    static let streamOverlayDarkStatic = mode(0x000000, lightAlpha: 0.6, 0x000000, darkAlpha: 0.6)
 
     static func mode(_ light: Int, lightAlpha: CGFloat = 1.0, _ dark: Int, darkAlpha: CGFloat = 1.0) -> UIColor {
         if #available(iOS 13.0, *) {

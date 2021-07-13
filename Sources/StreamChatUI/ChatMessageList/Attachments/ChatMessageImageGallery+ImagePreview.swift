@@ -6,14 +6,28 @@ import Nuke
 import StreamChat
 import UIKit
 
-extension _ChatMessageImageGallery {
-    open class ImagePreview: _View, ThemeProvider {
+/// The type preview should conform to in order the gallery can be shown from it.
+public protocol GalleryItemPreview {
+    /// Attachment identifier.
+    var attachmentId: AttachmentId? { get }
+    
+    /// `UIImageView` that is displayed the attachment preview.
+    var imageView: UIImageView { get }
+}
+
+extension _ChatMessageGalleryView {
+    open class ImagePreview: _View, ThemeProvider, GalleryItemPreview {
         public var content: ChatMessageImageAttachment? {
             didSet { updateContentIfNeeded() }
         }
+        
+        public var attachmentId: AttachmentId? {
+            content?.id
+        }
 
         public var didTapOnAttachment: ((ChatMessageImageAttachment) -> Void)?
-        
+        public var didTapOnUploadingActionButton: ((ChatMessageImageAttachment) -> Void)?
+
         private var imageTask: ImageTask? {
             didSet { oldValue?.cancel() }
         }
@@ -28,18 +42,12 @@ extension _ChatMessageImageGallery {
         }()
 
         public private(set) lazy var loadingIndicator = components
-            .messageList
-            .messageContentSubviews
-            .attachmentSubviews
             .loadingIndicator
             .init()
             .withoutAutoresizingMaskConstraints
 
         public private(set) lazy var uploadingOverlay = components
-            .messageList
-            .messageContentSubviews
-            .attachmentSubviews
-            .imageGalleryItemUploadingOverlay
+            .imageUploadingOverlay
             .init()
             .withoutAutoresizingMaskConstraints
 
@@ -55,6 +63,12 @@ extension _ChatMessageImageGallery {
             
             let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(didTapOnAttachment(_:)))
             addGestureRecognizer(tapRecognizer)
+            
+            uploadingOverlay.didTapActionButton = { [weak self] in
+                guard let self = self, let attachment = self.content else { return }
+                
+                self.didTapOnUploadingActionButton?(attachment)
+            }
         }
 
         override open func setUpLayout() {
@@ -67,21 +81,22 @@ extension _ChatMessageImageGallery {
         }
 
         override open func updateContent() {
+            super.updateContent()
+
             let attachment = content
 
-            if let url = attachment?.payload?.imagePreviewURL {
-                loadingIndicator.isVisible = true
-                imageTask = loadImage(with: url, options: .shared, into: imageView, completion: { [weak self] _ in
+            loadingIndicator.isVisible = true
+            imageTask = imageView
+                .loadImage(
+                    from: attachment?.payload.imagePreviewURL,
+                    resize: false,
+                    components: components
+                ) { [weak self] _ in
                     self?.loadingIndicator.isVisible = false
                     self?.imageTask = nil
-                })
-            } else {
-                loadingIndicator.isVisible = false
-                imageView.image = nil
-                imageTask = nil
-            }
+                }
 
-            uploadingOverlay.content = content
+            uploadingOverlay.content = content?.uploadingState
             uploadingOverlay.isVisible = attachment?.uploadingState != nil
         }
 

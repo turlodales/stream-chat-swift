@@ -17,22 +17,9 @@ open class _ChatMessageInteractiveAttachmentView<ExtraData: ExtraDataTypes>: _Vi
     // MARK: - Subviews
 
     public private(set) lazy var preview = components
-        .messageList
-        .messageContentSubviews
-        .attachmentSubviews
-        .giphyAttachmentView
+        .giphyView
         .init()
         .withoutAutoresizingMaskConstraints
-
-    public private(set) lazy var titleLabel: UILabel = {
-        let label = UILabel()
-        label.font = appearance.fonts.bodyItalic
-        label.adjustsFontForContentSizeCategory = true
-        label.textAlignment = .center
-        return label
-            .withoutAutoresizingMaskConstraints
-            .withBidirectionalLanguagesSupport
-    }()
 
     public private(set) lazy var separator = UIView()
         .withoutAutoresizingMaskConstraints
@@ -59,21 +46,16 @@ open class _ChatMessageInteractiveAttachmentView<ExtraData: ExtraDataTypes>: _Vi
 
     override open func setUpLayout() {
         addSubview(preview)
-        addSubview(titleLabel)
         addSubview(separator)
         addSubview(actionsStackView)
 
         NSLayoutConstraint.activate([
-            preview.leadingAnchor.pin(equalTo: layoutMarginsGuide.leadingAnchor),
-            preview.trailingAnchor.pin(equalTo: layoutMarginsGuide.trailingAnchor),
-            preview.topAnchor.pin(equalTo: layoutMarginsGuide.topAnchor),
+            preview.leadingAnchor.pin(equalTo: leadingAnchor),
+            preview.trailingAnchor.pin(equalTo: trailingAnchor),
+            preview.topAnchor.pin(equalTo: topAnchor),
             preview.heightAnchor.pin(equalTo: preview.widthAnchor),
             
-            titleLabel.topAnchor.pin(equalToSystemSpacingBelow: preview.bottomAnchor, multiplier: 1),
-            titleLabel.leadingAnchor.pin(equalTo: leadingAnchor),
-            titleLabel.trailingAnchor.pin(equalTo: trailingAnchor),
-            
-            separator.topAnchor.pin(equalToSystemSpacingBelow: titleLabel.bottomAnchor, multiplier: 1),
+            separator.topAnchor.pin(equalTo: preview.bottomAnchor),
             separator.leadingAnchor.pin(equalTo: leadingAnchor),
             separator.trailingAnchor.pin(equalTo: trailingAnchor),
             separator.heightAnchor.pin(equalToConstant: 1),
@@ -88,11 +70,9 @@ open class _ChatMessageInteractiveAttachmentView<ExtraData: ExtraDataTypes>: _Vi
     override open func updateContent() {
         preview.content = content
 
-        titleLabel.text = "\"" + (content?.payload?.title ?? "") + "\""
-
         actionsStackView.removeAllArrangedSubviews()
         
-        (content?.payload?.actions ?? [])
+        (content?.actions ?? [])
             .map(createActionButton)
             .forEach(actionsStackView.addArrangedSubview)
     }
@@ -101,10 +81,7 @@ open class _ChatMessageInteractiveAttachmentView<ExtraData: ExtraDataTypes>: _Vi
 
     private func createActionButton(for action: AttachmentAction) -> ActionButton {
         let button = components
-            .messageList
-            .messageContentSubviews
-            .attachmentSubviews
-            .interactiveAttachmentActionButton
+            .giphyActionButton
             .init()
 
         button.didTap = { [weak self] in

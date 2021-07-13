@@ -31,7 +31,8 @@ class DatabaseContainerMock: DatabaseContainer {
         shouldResetEphemeralValuesOnStart: Bool = true,
         modelName: String = "StreamChatModel",
         bundle: Bundle? = nil,
-        localCachingSettings: ChatClientConfig.LocalCaching? = nil
+        localCachingSettings: ChatClientConfig.LocalCaching? = nil,
+        deletedMessagesVisibility: ChatClientConfig.DeletedMessageVisibility? = nil
     ) throws {
         init_kind = kind
         try super.init(
@@ -40,7 +41,8 @@ class DatabaseContainerMock: DatabaseContainer {
             shouldResetEphemeralValuesOnStart: shouldResetEphemeralValuesOnStart,
             modelName: modelName,
             bundle: bundle,
-            localCachingSettings: localCachingSettings
+            localCachingSettings: localCachingSettings,
+            deletedMessagesVisibility: deletedMessagesVisibility
         )
     }
     
@@ -213,7 +215,7 @@ extension DatabaseContainer {
         updatedAt: Date = .unique,
         latestReactions: [MessageReactionPayload<NoExtraData>] = [],
         ownReactions: [MessageReactionPayload<NoExtraData>] = [],
-        attachments: [AttachmentPayload] = [],
+        attachments: [MessageAttachmentPayload] = [],
         localState: LocalMessageState? = nil,
         type: MessageType? = nil,
         numberOfReplies: Int = 0

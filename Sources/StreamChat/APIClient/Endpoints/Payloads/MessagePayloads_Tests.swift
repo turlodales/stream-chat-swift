@@ -38,6 +38,7 @@ class MessagePayload_Tests: XCTestCase {
         XCTAssertEqual(payload.pinnedAt, "2021-04-15T06:43:08.776911Z".toDate())
         XCTAssertEqual(payload.pinExpires, "2021-05-15T06:43:08.776911Z".toDate())
         XCTAssertEqual(payload.pinnedBy?.id, "broken-waterfall-5")
+        XCTAssertEqual(payload.quotedMessageId, "4C0CC2DA-8AB5-421F-808E-50DC7E40653D")
     }
 
     func test_messagePayload_isSerialized_withDefaultExtraData_withBrokenAttachmentPayload() throws {
@@ -65,11 +66,12 @@ class MessagePayload_Tests: XCTestCase {
         XCTAssertEqual(payload.isSilent, true)
         XCTAssertEqual(payload.channel?.cid.rawValue, "messaging:channel-ex7-63")
         XCTAssertEqual(payload.quotedMessage?.id, "4C0CC2DA-8AB5-421F-808E-50DC7E40653D")
-        XCTAssertEqual(payload.attachments.count, 1)
+        XCTAssertEqual(payload.attachments.count, 2)
         XCTAssertEqual(payload.pinned, true)
         XCTAssertEqual(payload.pinnedAt, "2021-04-15T06:43:08.776911Z".toDate())
         XCTAssertEqual(payload.pinExpires, "2021-05-15T06:43:08.776911Z".toDate())
         XCTAssertEqual(payload.pinnedBy?.id, "broken-waterfall-5")
+        XCTAssertEqual(payload.quotedMessageId, "4C0CC2DA-8AB5-421F-808E-50DC7E40653D")
     }
     
     func test_messagePayload_isSerialized_withCustomExtraData() throws {
@@ -101,6 +103,7 @@ class MessagePayload_Tests: XCTestCase {
         XCTAssertEqual(payload.pinnedAt, "2021-04-15T06:43:08.776911Z".toDate())
         XCTAssertEqual(payload.pinExpires, "2021-05-15T06:43:08.776911Z".toDate())
         XCTAssertEqual(payload.pinnedBy?.id, "broken-waterfall-5")
+        XCTAssertEqual(payload.quotedMessageId, "4C0CC2DA-8AB5-421F-808E-50DC7E40653D")
     }
 }
 
@@ -114,27 +117,69 @@ class MessageRequestBody_Tests: XCTestCase {
             args: .unique,
             parentId: .unique,
             showReplyInChannel: true,
+            isSilent: true,
             quotedMessageId: "quoted-message-id",
+            mentionedUserIds: [.unique],
             pinned: true,
             pinExpires: "2021-05-15T06:43:08.776Z".toDate(),
             extraData: .init(secretNote: "Anakin is Vader ;-)")
         )
         
-        let serialized = try JSONEncoder.stream.encode(payload)
+        let serializedJSON = try JSONEncoder.stream.encode(payload)
         let expected: [String: Any] = [
             "id": payload.id,
             "text": payload.text,
             "parent_id": payload.parentId!,
             "show_in_channel": true,
+            "silent": true,
             "args": payload.args!,
             "quoted_message_id": "quoted-message-id",
+            "mentioned_users": payload.mentionedUserIds,
             "secret_note": "Anakin is Vader ;-)",
             "command": payload.command!,
             "pinned": true,
             "pin_expires": "2021-05-15T06:43:08.776Z"
         ]
+        let expectedJSON = try JSONSerialization.data(withJSONObject: expected, options: [])
         
-        AssertJSONEqual(serialized, expected)
+        AssertJSONEqual(serializedJSON, expectedJSON)
+    }
+    
+    /// Check whether the message body is serialized when `isSilent` is not provided in `init`
+    func test_isSerializedWithoutSilent() throws {
+        let payload: MessageRequestBody<CustomData> = .init(
+            id: .unique,
+            user: .dummy(userId: .unique),
+            text: .unique,
+            command: .unique,
+            args: .unique,
+            parentId: .unique,
+            showReplyInChannel: true,
+            quotedMessageId: "quoted-message-id",
+            mentionedUserIds: [.unique],
+            pinned: true,
+            pinExpires: "2021-05-15T06:43:08.776Z".toDate(),
+            extraData: .init(secretNote: "Anakin is Vader ;-)")
+        )
+        
+        let serializedJSON = try JSONEncoder.stream.encode(payload)
+        let expected: [String: Any] = [
+            "id": payload.id,
+            "text": payload.text,
+            "parent_id": payload.parentId!,
+            "show_in_channel": true,
+            "silent": false,
+            "args": payload.args!,
+            "quoted_message_id": "quoted-message-id",
+            "mentioned_users": payload.mentionedUserIds,
+            "secret_note": "Anakin is Vader ;-)",
+            "command": payload.command!,
+            "pinned": true,
+            "pin_expires": "2021-05-15T06:43:08.776Z"
+        ]
+        let expectedJSON = try JSONSerialization.data(withJSONObject: expected, options: [])
+        
+        AssertJSONEqual(serializedJSON, expectedJSON)
     }
 }
 

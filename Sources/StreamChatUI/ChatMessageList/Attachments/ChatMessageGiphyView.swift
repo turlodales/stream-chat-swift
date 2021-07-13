@@ -12,12 +12,12 @@ public typealias ChatMessageGiphyView = _ChatMessageGiphyView<NoExtraData>
 open class _ChatMessageGiphyView<ExtraData: ExtraDataTypes>: _View, ComponentsProvider {
     public var content: ChatMessageGiphyAttachment? {
         didSet {
-            let isDifferentImage = oldValue?.payload?.previewURL != content?.payload?.previewURL
+            let isDifferentImage = oldValue?.previewURL != content?.previewURL
             guard hasFailed || isDifferentImage else { return }
             updateContentIfNeeded()
         }
     }
-
+    
     private var imageTask: ImageTask? {
         didSet { oldValue?.cancel() }
     }
@@ -25,17 +25,11 @@ open class _ChatMessageGiphyView<ExtraData: ExtraDataTypes>: _View, ComponentsPr
     public private(set) lazy var imageView = UIImageView().withoutAutoresizingMaskConstraints
 
     public private(set) lazy var badge = components
-        .messageList
-        .messageContentSubviews
-        .attachmentSubviews
         .giphyBadgeView
         .init()
         .withoutAutoresizingMaskConstraints
 
     public private(set) lazy var loadingIndicator = components
-        .messageList
-        .messageContentSubviews
-        .attachmentSubviews
         .loadingIndicator
         .init()
         .withoutAutoresizingMaskConstraints
@@ -75,7 +69,7 @@ open class _ChatMessageGiphyView<ExtraData: ExtraDataTypes>: _View, ComponentsPr
         imageTask = nil
         imageView.clear()
 
-        if let url = content?.payload?.previewURL {
+        if let url = content?.previewURL {
             imageTask = ImagePipeline.shared.loadData(with: url) { [weak self] result in
                 guard case let .success((rawGif, _)) = result else {
                     self?.hasFailed = true

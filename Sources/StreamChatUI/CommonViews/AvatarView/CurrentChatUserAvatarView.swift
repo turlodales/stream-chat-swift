@@ -29,7 +29,6 @@ open class _CurrentChatUserAvatarView<ExtraData: ExtraDataTypes>: _Control, Them
     
     /// The view that shows the current user's avatar.
     open private(set) lazy var avatarView: ChatAvatarView = components
-        .currentUser
         .avatarView.init()
         .withoutAutoresizingMaskConstraints
     
@@ -71,11 +70,14 @@ open class _CurrentChatUserAvatarView<ExtraData: ExtraDataTypes>: _Control, Them
     }
     
     @objc override open func updateContent() {
-        if let imageURL = controller?.currentUser?.imageURL {
-            avatarView.imageView.loadImage(from: imageURL)
-        } else {
-            avatarView.imageView.image = nil
-        }
+        let currentUserImageUrl = controller?.currentUser?.imageURL
+        let placeholderImage = appearance.images.userAvatarPlaceholder1
+        avatarView.imageView.loadImage(
+            from: currentUserImageUrl,
+            placeholder: placeholderImage,
+            preferredSize: .avatarThumbnailSize,
+            components: components
+        )
         
         alpha = state == .normal ? 1 : 0.5
     }

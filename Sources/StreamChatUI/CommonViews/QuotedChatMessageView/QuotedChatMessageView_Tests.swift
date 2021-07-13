@@ -5,6 +5,7 @@
 @testable import StreamChat
 import StreamChatTestTools
 @testable import StreamChatUI
+import SwiftUI
 import XCTest
 
 class QuotedChatMessageView_Tests: XCTestCase {
@@ -35,27 +36,87 @@ class QuotedChatMessageView_Tests: XCTestCase {
     }
 
     func test_withImageAttachmentAppearance() {
-        let attachment = ChatMessageImageAttachment(imageURL: TestImages.yoda.url)
+        let attachment = ChatMessageImageAttachment.mock(
+            id: .unique,
+            imageURL: TestImages.yoda.url,
+            title: ""
+        )
+        view.content = makeContent(text: "Hello Vader!", attachments: [attachment.asAnyAttachment])
+
+        AssertSnapshot(view)
+
+        view.content = makeContent(text: "", attachments: [attachment.asAnyAttachment])
+
+        AssertSnapshot(view, suffix: "-emptyText")
+    }
+
+    func test_withFileAttachmentAppearance() {
+        let attachment = ChatMessageFileAttachment.mock(
+            id: .unique,
+            title: "Data.csv",
+            assetURL: .unique(),
+            file: AttachmentFile(type: .csv, size: 0, mimeType: "text/csv"),
+            localState: nil
+        )
+
+        view.content = makeContent(text: "Hello Vader!", attachments: [attachment.asAnyAttachment])
+
+        AssertSnapshot(view)
+
+        view.content = makeContent(text: "", attachments: [attachment.asAnyAttachment])
+
+        AssertSnapshot(view, suffix: "-emptyText")
+    }
+
+    func test_withLinkAttachmentAppearance() {
+        let attachment = ChatMessageLinkAttachment.mock(
+            id: .unique,
+            originalURL: URL(string: "https://www.yoda.com")!,
+            assetURL: .unique(),
+            previewURL: TestImages.yoda.url
+        )
+
         view.content = makeContent(text: "Hello Vader!", attachments: [attachment.asAnyAttachment])
 
         AssertSnapshot(view)
     }
 
+    func test_withGiphyAttachmentAppearance() {
+        let attachment = ChatMessageGiphyAttachment(
+            id: .unique,
+            type: .giphy,
+            payload: .init(title: "", previewURL: TestImages.yoda.url, actions: []),
+            uploadingState: nil
+        )
+
+        view.content = makeContent(text: "Hello Vader!", attachments: [attachment.asAnyAttachment])
+
+        AssertSnapshot(view)
+
+        view.content = makeContent(text: "", attachments: [attachment.asAnyAttachment])
+
+        AssertSnapshot(view, suffix: "-emptyText")
+    }
+
     func test_withLongTextAppearance() {
-        let attachment = ChatMessageImageAttachment(imageURL: TestImages.yoda.url)
+        let attachment = ChatMessageImageAttachment.mock(
+            id: .unique,
+            imageURL: TestImages.yoda.url,
+            title: ""
+        )
         view.content = makeContent(text: "Hello Darth Vader! Where is my light saber?", attachments: [attachment.asAnyAttachment])
 
         AssertSnapshot(view)
     }
 
     func test_withAvatarAlignmentRightAppearance() {
-        view.content = makeContent(text: "Hello Vader!", avatarAlignment: .right)
+        view.content = makeContent(text: "Hello Vader!", avatarAlignment: .trailing)
 
         AssertSnapshot(view)
     }
 
     func test_withAvatarAlignmentLeftAppearance() {
-        view.content = makeContent(text: "Hello Vader!", avatarAlignment: .left)
+        view.content = makeContent(text: "Hello Vader!", avatarAlignment: .leading)
 
         AssertSnapshot(view)
     }
@@ -106,9 +167,40 @@ class QuotedChatMessageView_Tests: XCTestCase {
         }
 
         let view = TestView().withoutAutoresizingMaskConstraints
-        let attachment = ChatMessageImageAttachment(imageURL: TestImages.yoda.url)
+        let attachment = ChatMessageImageAttachment.mock(
+            id: .unique,
+            imageURL: TestImages.yoda.url,
+            title: ""
+        )
         view.content = makeContent(text: "Hello Vader!", attachments: [attachment.asAnyAttachment])
         view.addSizeConstraints()
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    @available(iOS 13.0, *)
+    func test_wrappedInSwiftUI() {
+        struct CustomView: View {
+            @EnvironmentObject var components: Components.ObservableObject
+            let content: QuotedChatMessageView.Content
+
+            var body: some View {
+                components.quotedMessageView.asView(content)
+            }
+        }
+
+        let view = CustomView(
+            content: .init(
+                message: .mock(
+                    id: .unique,
+                    cid: .unique,
+                    text: "Hello world!",
+                    author: .mock(id: .unique, imageURL: TestImages.yoda.url)
+                ),
+                avatarAlignment: .leading
+            )
+        )
+        .environmentObject(Components().asObservableObject)
 
         AssertSnapshot(view, variants: [.defaultLight])
     }
@@ -128,31 +220,17 @@ extension QuotedChatMessageView_Tests {
     func makeContent(
         text: String,
         isSentByCurrentUser: Bool = false,
-        avatarAlignment: QuotedAvatarAlignment = .left,
-        attachments: [ChatMessageAttachment] = []
+        avatarAlignment: QuotedAvatarAlignment = .leading,
+        attachments: [AnyChatMessageAttachment] = []
     ) -> QuotedChatMessageView.Content {
         let message = ChatMessage.mock(
             id: .unique,
+            cid: .unique,
             text: text,
             author: .mock(id: .unique),
             attachments: attachments,
             isSentByCurrentUser: isSentByCurrentUser
         )
         return .init(message: message, avatarAlignment: avatarAlignment)
-    }
-}
-
-extension ChatMessageImageAttachment {
-    init(imageURL: URL) {
-        self.init(
-            id: .unique,
-            type: .image,
-            payload: .init(
-                title: nil,
-                imageURL: imageURL,
-                imagePreviewURL: imageURL
-            ),
-            uploadingState: nil
-        )
     }
 }

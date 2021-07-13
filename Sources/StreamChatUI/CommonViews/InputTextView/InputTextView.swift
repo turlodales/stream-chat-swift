@@ -5,20 +5,36 @@
 import StreamChat
 import UIKit
 
+/// The delegate of the `InputTextView` that notifies when an attachment is pasted in the text view.
+public protocol InputTextViewClipboardAttachmentDelegate: AnyObject {
+    /// Notifies that an `UIImage` has been pasted into the text view
+    /// - Parameters:
+    ///   - inputTextView: The `InputTextView` in which the image was pasted
+    ///   - image: The `UIImage`
+    func inputTextView(_ inputTextView: InputTextView, didPasteImage image: UIImage)
+}
+
 /// A view for inputting text with placeholder support. Since it is a subclass
 /// of `UITextView`, the `UITextViewDelegate` can be used to observe text changes.
 open class InputTextView: UITextView, AppearanceProvider {
-    public lazy var placeholderLabel: UILabel = UILabel()
+    /// The delegate which gets notified when an attachment is pasted into the text view
+    open weak var clipboardAttachmentDelegate: InputTextViewClipboardAttachmentDelegate?
+    
+    /// Whether this text view should allow images to be pasted
+    open var isPastingImagesEnabled: Bool = true
+    
+    /// Label used as placeholder for textView when it's empty.
+    open private(set) lazy var placeholderLabel: UILabel = UILabel()
         .withoutAutoresizingMaskConstraints
         .withBidirectionalLanguagesSupport
     
-    override public var text: String! {
+    override open var text: String! {
         didSet {
             textDidChangeProgrammatically()
         }
     }
     
-    override public var attributedText: NSAttributedString! {
+    override open var attributedText: NSAttributedString! {
         didSet {
             textDidChangeProgrammatically()
         }
@@ -32,15 +48,13 @@ open class InputTextView: UITextView, AppearanceProvider {
         setUpLayout()
         setUpAppearance()
     }
-    
-    // MARK: Public
         
     open func setUp() {
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(textDidChange),
+            selector: #selector(handleTextChange),
             name: UITextView.textDidChangeNotification,
-            object: nil
+            object: self
         )
     }
     
@@ -71,12 +85,44 @@ open class InputTextView: UITextView, AppearanceProvider {
         isScrollEnabled = false
     }
 
-    func textDidChangeProgrammatically() {
+    /// Sets the given text in the current caret position.
+    /// In case the caret is selecting a range of text, it replaces that text.
+    ///
+    /// - Parameter text: A string to replace the text in the caret position.
+    open func replaceSelectedText(_ text: String) {
+        guard let selectedRange = selectedTextRange else {
+            self.text.append(text)
+            return
+        }
+
+        replace(selectedRange, withText: text)
+    }
+
+    open func textDidChangeProgrammatically() {
         delegate?.textViewDidChange?(self)
-        textDidChange()
+        handleTextChange()
     }
         
-    @objc func textDidChange() {
+    @objc open func handleTextChange() {
         placeholderLabel.isHidden = !text.isEmpty
+    }
+    
+    // MARK: - Actions on the UITextView
+    
+    override open func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        // If action is paste and the pasteboard has an image, we allow it
+        if action == #selector(paste(_:)) && isPastingImagesEnabled && UIPasteboard.general.hasImages {
+            return true
+        }
+
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override open func paste(_ sender: Any?) {
+        if let pasteboardImage = UIPasteboard.general.image {
+            clipboardAttachmentDelegate?.inputTextView(self, didPasteImage: pasteboardImage)
+        } else {
+            super.paste(sender)
+        }
     }
 }
