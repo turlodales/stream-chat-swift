@@ -1,13 +1,13 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChatUI
 import UIKit
 
 final class SlackChatChannelListItemView: ChatChannelListItemView {
-    override func setUpAppearance() {
-        super.setUpAppearance()
+    override func layoutSubviews() {
+        super.layoutSubviews()
         avatarView.layer.cornerRadius = 4
     }
 

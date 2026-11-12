@@ -1,21 +1,24 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
 import UIKit
 
 /// A view that displays a bubble around a message.
-open class ChatMessageBubbleView: _View, AppearanceProvider, SwiftUIRepresentable {
+open class ChatMessageBubbleView: _View, AppearanceProvider {
     /// A type describing the content of this view.
     public struct Content {
         /// The background color of the bubble.
         public let backgroundColor: UIColor
+        /// The border color of the bubble.
+        public let borderColor: UIColor
         /// The mask saying which corners should be rounded.
         public let roundedCorners: CACornerMask
 
-        public init(backgroundColor: UIColor, roundedCorners: CACornerMask) {
+        public init(backgroundColor: UIColor, borderColor: UIColor, roundedCorners: CACornerMask) {
             self.backgroundColor = backgroundColor
+            self.borderColor = borderColor
             self.roundedCorners = roundedCorners
         }
     }
@@ -28,15 +31,15 @@ open class ChatMessageBubbleView: _View, AppearanceProvider, SwiftUIRepresentabl
     override open func setUpAppearance() {
         super.setUpAppearance()
 
-        layer.borderColor = appearance.colorPalette.border3.cgColor
         layer.cornerRadius = 18
         layer.borderWidth = 1
     }
 
     override open func updateContent() {
         super.updateContent()
-        
+
         layer.maskedCorners = content?.roundedCorners ?? .all
+        layer.borderColor = content?.borderColor.cgColor
         backgroundColor = content?.backgroundColor ?? .clear
     }
 }

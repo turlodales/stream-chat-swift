@@ -1,12 +1,12 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
 
 extension ChatUser {
-    static var unique: ChatUser {
+    public static var unique: ChatUser {
         .mock(
             id: .unique,
             isOnline: true,

@@ -1,0 +1,268 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+/// An object which represents the currently logged in user.
+public final class ConnectedUser: Sendable {
+    private let authenticationRepository: AuthenticationRepository
+    private let currentUserUpdater: CurrentUserUpdater
+    @MainActor private var stateBuilder: StateBuilder<ConnectedUserState>
+    private let userUpdater: UserUpdater
+    
+    init(user: CurrentChatUser, client: ChatClient, environment: Environment = .init()) {
+        authenticationRepository = client.authenticationRepository
+        currentUserUpdater = environment.currentUserUpdaterBuilder(
+            client.databaseContainer,
+            client.apiClient
+        )
+        stateBuilder = StateBuilder {
+            environment.stateBuilder(
+                user,
+                client.databaseContainer
+            )
+        }
+        userUpdater = environment.userUpdaterBuilder(
+            client.databaseContainer,
+            client.apiClient
+        )
+    }
+    
+    // MARK: - Accessing the State
+    
+    /// An observable object representing the current state of the user.
+    @MainActor public var state: ConnectedUserState { stateBuilder.state }
+    
+    // MARK: - Connected User Data
+    
+    /// Updates the currently logged-in user's data.
+    ///
+    /// - Note: This does partial update and only updates existing data when a non-nil value is specified. Use ``unset`` for clearing the existing state.
+    ///
+    /// - Parameters:
+    ///   - name: The name to be set to the user.
+    ///   - imageURL: The URL of the avatar image.
+    ///   - privacySettings: The privacy settings of the user. Example: If the user does not want to expose typing events or read events.
+    ///   - role: The role for the user.
+    ///   - teamRoles: The roles for the user in the teams. Example: `["teamId": "role"]`.
+    ///   - extraData: Additional data associated with the user.
+    ///   - unset: Existing values for specified fields are removed. For example, `image` or `name`.
+    ///
+    /// - Throws: An error while communicating with the Stream API or when user is not logged in.
+    public func update(
+        name: String? = nil,
+        imageURL: URL? = nil,
+        privacySettings: UserPrivacySettings? = nil,
+        role: UserRole? = nil,
+        teamRoles: [TeamId: UserRole]? = nil,
+        extraData: [String: RawJSON] = [:],
+        unset: Set<String> = []
+    ) async throws {
+        try await currentUserUpdater.updateUserData(
+            currentUserId: try currentUserId(),
+            name: name,
+            imageURL: imageURL,
+            privacySettings: privacySettings,
+            role: role,
+            teamsRole: teamRoles,
+            userExtraData: extraData,
+            unset: unset
+        )
+    }
+    
+    // MARK: - Managing Channels
+    
+    /// Mark all the user's channels as read.
+    ///
+    /// - Throws: An error while communicating with the Stream API or when user is not logged in.
+    public func markAllChannelsRead() async throws {
+        try await currentUserUpdater.markAllRead(currentUserId: try currentUserId())
+    }
+    
+    // MARK: - Managing User Devices
+    
+    /// Loads an array of devices associated with the logged-in user.
+    ///
+    /// - Note: Devices can be read later from ``ConnectedUserState/devices``.
+    ///
+    /// - Throws: An error while communicating with the Stream API or when user is not logged in.
+    /// - Returns: An array of devices receiving push notifications.
+    public func loadDevices() async throws -> [Device] {
+        try await currentUserUpdater.fetchDevices(currentUserId: try currentUserId())
+    }
+    
+    /// Registers the current user's device for push notifications.
+    ///
+    /// Registering a device associates it with the user and tells the push provider to send new message notifications to that device.
+    ///
+    /// - Tip: Register the user's device for remote push notifications once your user is successfully connected to Chat.
+    ///
+    /// - Note: It is safe to call this on every app launch: no request is sent when the device is already registered
+    /// for the current user with the same push provider and provider name.
+    ///
+    /// - Parameters:
+    ///   - device: The device information required for registering the device. Use ``PushDevice/apn(token:providerName:)`` for APN.
+    ///   - forceRegistration: Sends the registration request even when the device is already registered. Defaults to `false`.
+    ///
+    /// - Throws: An error while communicating with the Stream API or when user is not logged in.
+    public func addDevice(_ device: PushDevice, forceRegistration: Bool = false) async throws {
+        try await currentUserUpdater.addDevice(device, currentUserId: try currentUserId(), forceRegistration: forceRegistration)
+    }
+    
+    /// Removes the specified device from the current user.
+    ///
+    /// Unregistering a device removes the device from the user and stops further new message notifications.
+    ///
+    /// - Parameter deviceId: The id of the device to unregister from push notifications.
+    ///
+    /// - Throws: An error while communicating with the Stream API or when user is not logged in.
+    public func removeDevice(_ deviceId: DeviceId) async throws {
+        try await currentUserUpdater.removeDevice(id: deviceId, currentUserId: try currentUserId())
+    }
+    
+    // MARK: - Moderating Users
+    
+    /// Mutes the user in all the channels.
+    ///
+    /// - Note: Messages from muted users are not delivered via push notifications.
+    ///
+    /// - Parameter userId: The id of the user to mute.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    public func muteUser(_ userId: UserId) async throws {
+        try await userUpdater.muteUser(userId)
+    }
+
+    /// Mutes the users in all the channels.
+    ///
+    /// - Note: Messages from muted users are not delivered via push notifications.
+    ///
+    /// - Parameters:
+    ///   - userIds: The ids of the users to mute.
+    ///   - expirationInMinutes: The duration of the mute in minutes. When `nil`, the mute does not expire.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    ///
+    /// - Returns: The created mutes and the ids of the users which could not be found.
+    @discardableResult
+    public func muteUsers(_ userIds: Set<UserId>, expiration expirationInMinutes: Int? = nil) async throws -> MuteUsersResponse {
+        try await currentUserUpdater.muteUsers(userIds, expiration: expirationInMinutes)
+    }
+
+    /// Unmutes the user in all the channels.
+    ///
+    /// - Parameter userId: The id of the user to unmute.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    public func unmuteUser(_ userId: UserId) async throws {
+        try await userUpdater.unmuteUser(userId)
+    }
+
+    /// Unmutes the users in all the channels.
+    ///
+    /// - Parameter userIds: The ids of the users to unmute.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    ///
+    /// - Returns: The ids of the users which could not be found.
+    @discardableResult
+    public func unmuteUsers(_ userIds: Set<UserId>) async throws -> UnmuteUsersResponse {
+        try await currentUserUpdater.unmuteUsers(userIds)
+    }
+    
+    /// Blocks the user in all the channels.
+    ///
+    /// - Parameter userId: The id of the user to mute.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    public func blockUser(_ userId: UserId) async throws {
+        try await userUpdater.blockUser(userId)
+    }
+    
+    /// Unblocks the user in all the channels.
+    ///
+    /// - Parameter userId: The id of the user to unmute.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    public func unblockUser(_ userId: UserId) async throws {
+        try await userUpdater.unblockUser(userId)
+    }
+    
+    /// Get all blocked users.
+    ///
+    /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    ///
+    public func loadBlockedUsers() async throws -> [BlockedUserDetails] {
+        try await currentUserUpdater.loadBlockedUsers()
+    }
+    
+    /// Flags the specified user.
+    ///
+    /// - Parameters:
+    ///   - userId: The id of the user to flag.
+    ///   - reason: The reason of the flag request.
+    ///   - extraData: Additional data associated with the flag request.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    public func flag(
+        _ userId: UserId,
+        reason: String? = nil,
+        extraData: [String: RawJSON]? = nil
+    ) async throws {
+        try await userUpdater.flag(userId, reason: reason, extraData: extraData)
+    }
+    
+    /// Unflags the specified user.
+    ///
+    /// - Parameter userId: The id of the user to unflag.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    @available(*, deprecated, message: "Unflagging a user is not supported")
+    public func unflag(_ userId: UserId) async throws {
+        try await userUpdater.unflag(userId)
+    }
+    
+    // MARK: Managing Local Attachment Downloads
+    
+    /// Deletes all the local downloads of file attachments.
+    ///
+    /// - Parameter completion: Called when files have been deleted or when an error occurred.
+    ///
+    /// - Throws: An error while deleting local downloads.
+    public func deleteAllLocalAttachmentDownloads() async throws {
+        try await currentUserUpdater.deleteAllLocalAttachmentDownloads()
+    }
+    
+    // MARK: - Private
+    
+    private func currentUserId() throws -> UserId {
+        guard let id = authenticationRepository.currentUserId else { throw ClientError.CurrentUserDoesNotExist() }
+        return id
+    }
+}
+
+extension ConnectedUser {
+    struct Environment: Sendable {
+        var stateBuilder: @Sendable @MainActor (
+            _ user: CurrentChatUser,
+            _ database: DatabaseContainer
+        ) -> ConnectedUserState = { @MainActor in
+            ConnectedUserState(user: $0, database: $1)
+        }
+        
+        var currentUserUpdaterBuilder: @Sendable (
+            _ database: DatabaseContainer,
+            _ apiClient: APIClient
+        ) -> CurrentUserUpdater = {
+            CurrentUserUpdater(database: $0, apiClient: $1)
+        }
+        
+        var userUpdaterBuilder: @Sendable (
+            _ database: DatabaseContainer,
+            _ apiClient: APIClient
+        ) -> UserUpdater = {
+            UserUpdater(database: $0, apiClient: $1)
+        }
+    }
+}

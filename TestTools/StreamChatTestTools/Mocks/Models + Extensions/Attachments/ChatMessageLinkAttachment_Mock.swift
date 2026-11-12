@@ -1,9 +1,9 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
-@testable import StreamChat
 import Foundation
+@testable import StreamChat
 
 extension ChatMessageLinkAttachment {
     /// Creates a new `ChatMessageLinkAttachment` object from the provided data.
@@ -29,6 +29,7 @@ extension ChatMessageLinkAttachment {
                 assetURL: assetURL,
                 previewURL: previewURL
             ),
+            downloadingState: nil,
             uploadingState: nil
         )
     }

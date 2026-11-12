@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -9,138 +9,187 @@ import XCTest
 final class ChannelUserTypingStateUpdaterMiddleware_Tests: XCTestCase {
     var database: DatabaseContainer_Spy!
     var middleware: UserTypingStateUpdaterMiddleware!
-    
-    // MARK: - Set up
-    
+
     override func setUp() {
         super.setUp()
-        
+
         database = DatabaseContainer_Spy()
         middleware = UserTypingStateUpdaterMiddleware()
     }
-    
+
     override func tearDown() {
-        AssertAsync.canBeReleased(&database)
         database = nil
+        AssertAsync.canBeReleased(&database)
         super.tearDown()
     }
-    
-    // MARK: - Tests
-    
+
     func test_middleware_forwardsNonTypingEvents() throws {
         let event = TestEvent()
-        
-        // Handle non-typing event
+
         let forwardedEvent = middleware.handle(event: event, session: database.viewContext)
-        
-        // Assert event is forwarded as it is
+
         XCTAssertEqual(forwardedEvent as! TestEvent, event)
     }
-    
+
     func test_middleware_forwardsTypingEvent_ifDatabaseWriteGeneratesError() throws {
         let cid: ChannelId = .unique
         let userId: UserId = .unique
-        
-        // Create channel in the database
+
         try database.createChannel(cid: cid)
-        
-        // Create user in the database
         try database.createUser(id: userId)
-        
-        // Set error to be thrown on write
+
         let error = TestError()
         database.write_errorResponse = error
-        
-        // Simulate typing event
-        let event = TypingEventDTO.startTyping(cid: cid, userId: userId)
+
+        let event = TypingStartEventDTO.startTyping(cid: cid, userId: userId)
         let forwardedEvent = middleware.handle(event: event, session: database.viewContext)
-        
-        // Assert `TypingEvent` is forwarded even though database error happened
-        XCTAssertEqual(forwardedEvent as! TypingEventDTO, event)
+
+        XCTAssertEqual(forwardedEvent as! TypingStartEventDTO, event)
     }
-    
+
     func test_middleware_handlesTypingStartedEventCorrectly() throws {
         let cid: ChannelId = .unique
         let userId: UserId = .unique
-        
-        // Create channel in the database
-        try database.createChannel(cid: cid)
-        
-        // Create user in the database
-        try database.createUser(id: userId)
-        
-        // Load the channel
-        var channel = try self.channel(with: cid)
 
-        // Assert there is no typing users so far
+        try database.createChannel(cid: cid)
+        try database.createUser(id: userId)
+
+        var channel = try self.channel(with: cid)
         XCTAssertTrue(channel.currentlyTypingUsers.isEmpty)
-        
-        // Simulate start typing event
-        let event = TypingEventDTO.startTyping(cid: cid, userId: userId)
+
+        let event = TypingStartEventDTO.startTyping(cid: cid, userId: userId)
         let forwardedEvent = middleware.handle(event: event, session: database.viewContext)
 
         channel = try self.channel(with: cid)
-        // Assert `TypingEvent` is forwarded as it is
-        XCTAssertEqual(forwardedEvent as! TypingEventDTO, event)
-        // Assert channel's currentlyTypingUsers are updated correctly
+        XCTAssertEqual(forwardedEvent as! TypingStartEventDTO, event)
         XCTAssertEqual(channel.currentlyTypingUsers.first?.id, userId)
         XCTAssertEqual(channel.currentlyTypingUsers.count, 1)
     }
-    
+
+    func test_middleware_handlesTypingStartedEvent_withMemberInfo() throws {
+        let cid: ChannelId = .unique
+        let userId: UserId = .unique
+        let member = MemberInfoPayload(
+            channelRole: .member,
+            extraData: ["is_premium": .bool(true), "nickname": .string("Marty")]
+        )
+
+        try database.createChannel(cid: cid)
+
+        let event = TypingStartEventDTO.startTyping(cid: cid, userId: userId, member: member)
+        _ = middleware.handle(event: event, session: database.viewContext)
+
+        let typingUser = try XCTUnwrap(try channel(with: cid).typingUsers.first)
+        XCTAssertEqual(typingUser.user.id, userId)
+        XCTAssertEqual(typingUser.memberInfo?.channelRole, .member)
+        XCTAssertEqual(typingUser.memberInfo?.extraData["is_premium"], .bool(true))
+        XCTAssertEqual(typingUser.memberInfo?.extraData["nickname"], .string("Marty"))
+    }
+
     func test_middleware_handlesTypingFinishedEventCorrectly() throws {
         let cid: ChannelId = .unique
         let userId: UserId = .unique
-        
-        // Create channel in the database
+
         try database.createChannel(cid: cid)
-        // Create user in the database
         try database.createUser(id: userId)
-        // Set created user as a typing user
         try database.writeSynchronously { session in
             let channel = try XCTUnwrap(session.channel(cid: cid))
             let user = try XCTUnwrap(session.user(id: userId))
             channel.currentlyTypingUsers.insert(user)
         }
-        
-        // Load the channel
-        let channel = try self.channel(with: cid)
 
-        // Simulate stop typing events
-        let event = TypingEventDTO.stopTyping(cid: cid, userId: userId)
+        let event = TypingStopEventDTO.stopTyping(cid: cid, userId: userId)
         let forwardedEvent = middleware.handle(event: event, session: database.viewContext)
-        
-        // Assert `TypingEvent` is forwarded as it is
-        XCTAssertEqual(forwardedEvent as! TypingEventDTO, event)
-        // Assert channel's currentlyTypingUsers are updated correctly
+
+        let channel = try self.channel(with: cid)
+        XCTAssertEqual(forwardedEvent as! TypingStopEventDTO, event)
         XCTAssertTrue(channel.currentlyTypingUsers.isEmpty)
     }
-    
+
     func test_middleware_handlesCleanUpTypingEventCorrectly() throws {
         let cid: ChannelId = .unique
         let userId: UserId = .unique
-        
-        // Create channel in the database
+
         try database.createChannel(cid: cid)
-        // Create user in the database
         try database.createUser(id: userId)
-        // Set created user as a typing user
         try database.writeSynchronously { session in
             let channel = try XCTUnwrap(session.channel(cid: cid))
             let user = try XCTUnwrap(session.user(id: userId))
             channel.currentlyTypingUsers.insert(user)
         }
-        
-        // Load the channel
-        let channel = try self.channel(with: cid)
 
-        // Simulate CleanUpTypingEvent
         let event = CleanUpTypingEvent(cid: cid, userId: userId)
         let forwardedEvent = middleware.handle(event: event, session: database.viewContext)
-        
-        // Assert `CleanUpTypingEvent` is forwarded as it is
+
+        let channel = try self.channel(with: cid)
         XCTAssertEqual(forwardedEvent as! CleanUpTypingEvent, event)
-        // Assert channel's currentlyTypingUsers are updated correctly
         XCTAssertTrue(channel.currentlyTypingUsers.isEmpty)
+    }
+
+    func test_middleware_clearsMemberInfoWhenTypingStops() throws {
+        let cid: ChannelId = .unique
+        let userId: UserId = .unique
+        let member = MemberInfoPayload(extraData: ["is_premium": .bool(true)])
+
+        try database.createChannel(cid: cid)
+
+        _ = middleware.handle(
+            event: TypingStartEventDTO.startTyping(cid: cid, userId: userId, member: member),
+            session: database.viewContext
+        )
+        _ = middleware.handle(
+            event: TypingStopEventDTO.stopTyping(cid: cid, userId: userId),
+            session: database.viewContext
+        )
+
+        let channelDTO = try XCTUnwrap(database.viewContext.channel(cid: cid))
+        XCTAssertTrue(channelDTO.typingMemberInfos.isEmpty)
+        XCTAssertTrue(try channel(with: cid).typingUsers.isEmpty)
+    }
+
+    func test_middleware_scopesMemberInfoToTheChannel() throws {
+        let cidA: ChannelId = .unique
+        let cidB: ChannelId = .unique
+        let userId: UserId = .unique
+        let member = MemberInfoPayload(extraData: ["is_premium": .bool(true)])
+
+        try database.createChannel(cid: cidA)
+        try database.createChannel(cid: cidB)
+
+        _ = middleware.handle(
+            event: TypingStartEventDTO.startTyping(cid: cidA, userId: userId, member: member),
+            session: database.viewContext
+        )
+
+        XCTAssertEqual(try channel(with: cidA).typingUsers.first?.memberInfo?.extraData["is_premium"], .bool(true))
+        XCTAssertTrue(try channel(with: cidB).typingUsers.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(database.viewContext.channel(cid: cidB)).typingMemberInfos.isEmpty)
+    }
+
+    func test_middleware_clearsMemberInfoFromPreviousChannelWhenUserMoves() throws {
+        let cidA: ChannelId = .unique
+        let cidB: ChannelId = .unique
+        let userId: UserId = .unique
+        let member = MemberInfoPayload(extraData: ["is_premium": .bool(true)])
+
+        try database.createChannel(cid: cidA)
+        try database.createChannel(cid: cidB)
+        try database.createUser(id: userId)
+
+        _ = middleware.handle(
+            event: TypingStartEventDTO.startTyping(cid: cidA, userId: userId, member: member),
+            session: database.viewContext
+        )
+        _ = middleware.handle(
+            event: TypingStartEventDTO.startTyping(cid: cidB, userId: userId, member: member),
+            session: database.viewContext
+        )
+
+        let channelA = try XCTUnwrap(database.viewContext.channel(cid: cidA))
+        let channelB = try XCTUnwrap(database.viewContext.channel(cid: cidB))
+        XCTAssertTrue(channelA.typingMemberInfos.isEmpty)
+        XCTAssertEqual(channelB.typingMemberInfos.count, 1)
+        XCTAssertEqual(try channel(with: cidB).typingUsers.first?.memberInfo?.extraData["is_premium"], .bool(true))
     }
 }
 

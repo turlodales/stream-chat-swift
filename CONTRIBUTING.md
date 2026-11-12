@@ -40,3 +40,7 @@ We accumulate changes and release them in batches, unless high priority.
 We make sure to put staged changes (on default branch but not released in a version) as "Upcoming" in [CHANGELOG](https://github.com/GetStream/stream-chat-swift/blob/main/CHANGELOG.md).
 
 If possible, we deprecate stuff before removing them directly. Deprecated stuff will be removed after a minor release, and will include a migration/upgrade guide.
+
+## Documentation updates
+
+At the moment, docs updates are limited to the SDK teams at Stream. In case you want to modify the docs, please create an issue with your desired changes.

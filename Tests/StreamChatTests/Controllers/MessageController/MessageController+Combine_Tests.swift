@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Combine
@@ -8,7 +8,6 @@ import CoreData
 @testable import StreamChatTestTools
 import XCTest
 
-@available(iOS 13, *)
 final class MessageController_Combine_Tests: iOS13TestCase {
     var messageController: ChatMessageController_Mock!
     var cancellables: Set<AnyCancellable>!
@@ -18,7 +17,7 @@ final class MessageController_Combine_Tests: iOS13TestCase {
         messageController = ChatMessageController_Mock.mock()
         cancellables = []
     }
-    
+
     override func tearDown() {
         // Release existing subscriptions and make sure the controller gets released, too
         cancellables = nil
@@ -26,69 +25,69 @@ final class MessageController_Combine_Tests: iOS13TestCase {
         messageController = nil
         super.tearDown()
     }
-    
+
     func test_statePublisher() {
         // Setup Recording publishers
         var recording = Record<DataController.State, Never>.Recording()
-        
+
         // Setup the chain
         messageController
             .statePublisher
             .sink(receiveValue: { recording.receive($0) })
             .store(in: &cancellables)
-        
+
         // Keep only the weak reference to the controller. The existing publisher should keep it alive.
-        weak var controller: ChatMessageController_Mock? = messageController
+        let controller = { [weak messageController] in messageController }
         messageController = nil
-        
-        controller?.delegateCallback { $0.controller(controller!, didChangeState: .remoteDataFetched) }
-        
+
+        controller()?.delegateCallback { [controller = controller()] in $0.controller(controller!, didChangeState: .remoteDataFetched) }
+
         AssertAsync.willBeEqual(recording.output, [.localDataFetched, .remoteDataFetched])
     }
 
     func test_messageChangePublisher() {
         // Setup Recording publishers
         var recording = Record<EntityChange<ChatMessage>, Never>.Recording()
-        
+
         // Setup the chain
         messageController
             .messageChangePublisher
             .sink(receiveValue: { recording.receive($0) })
             .store(in: &cancellables)
-        
+
         // Keep only the weak reference to the controller. The existing publisher should keep it alive.
-        weak var controller: ChatMessageController_Mock? = messageController
+        let controller = { [weak messageController] in messageController }
         messageController = nil
 
         let newMessage: ChatMessage = .unique
-        controller?.message_mock = newMessage
-        controller?.delegateCallback {
+        controller()?.message_mock = newMessage
+        controller()?.delegateCallback { [controller = controller()] in
             $0.messageController(controller!, didChangeMessage: .create(newMessage))
         }
-        
+
         XCTAssertEqual(recording.output, [.create(newMessage)])
     }
-    
+
     func test_repliesChangesPublisher() {
         // Setup Recording publishers
         var recording = Record<[ListChange<ChatMessage>], Never>.Recording()
-        
+
         // Setup the chain
         messageController
             .repliesChangesPublisher
             .sink(receiveValue: { recording.receive($0) })
             .store(in: &cancellables)
-        
+
         // Keep only the weak reference to the controller. The existing publisher should keep it alive.
-        weak var controller: ChatMessageController_Mock? = messageController
+        let controller = { [weak messageController] in messageController }
         messageController = nil
 
         let newReply: ChatMessage = .unique
-        controller?.replies_mock = [newReply]
-        controller?.delegateCallback {
+        controller()?.replies_mock = [newReply]
+        controller()?.delegateCallback { [controller = controller()] in
             $0.messageController(controller!, didChangeReplies: [.insert(newReply, index: .init())])
         }
-        
+
         XCTAssertEqual(recording.output, [[.insert(newReply, index: .init())]])
     }
 
@@ -103,10 +102,11 @@ final class MessageController_Combine_Tests: iOS13TestCase {
             .store(in: &cancellables)
 
         // Keep only the weak reference to the controller. The existing publisher should keep it alive.
-        weak var controller: ChatMessageController_Mock? = messageController
+        let controller = { [weak messageController] in messageController }
         messageController = nil
 
         let newReaction: ChatMessageReaction = .init(
+            id: .unique,
             type: "like",
             score: 1,
             createdAt: .unique,
@@ -114,8 +114,8 @@ final class MessageController_Combine_Tests: iOS13TestCase {
             author: .unique,
             extraData: [:]
         )
-        controller?.reactions = []
-        controller?.delegateCallback {
+        controller()?.reactions = []
+        controller()?.delegateCallback { [controller = controller()] in
             $0.messageController(controller!, didChangeReactions: [newReaction])
         }
 

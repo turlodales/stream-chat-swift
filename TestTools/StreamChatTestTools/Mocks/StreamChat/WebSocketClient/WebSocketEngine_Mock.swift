@@ -1,68 +1,82 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
 
-final class WebSocketEngine_Mock: WebSocketEngine {
+final class WebSocketEngine_Mock: WebSocketEngine, @unchecked Sendable {
     var request: URLRequest
     var sessionConfiguration: URLSessionConfiguration
     var isConnected: Bool = false
     var callbackQueue: DispatchQueue
     weak var delegate: WebSocketEngineDelegate?
-    
+
     /// How many times was `connect()` called
     @Atomic var connect_calledCount = 0
-    
+
     /// How many times was `disconnect()` called
     @Atomic var disconnect_calledCount = 0
-    
+
     /// How many times was `sendPing()` called
     @Atomic var sendPing_calledCount = 0
-    
+
+    /// The JSON messages sent with `send(jsonMessage:)`
+    @Atomic var send_jsonMessages: [Data] = []
+
     convenience init() {
         self.init(request: .init(url: URL(string: "test_url")!), sessionConfiguration: .ephemeral, callbackQueue: .main)
     }
-    
+
     required init(request: URLRequest, sessionConfiguration: URLSessionConfiguration, callbackQueue: DispatchQueue) {
         self.request = request
         self.sessionConfiguration = sessionConfiguration
         self.callbackQueue = callbackQueue
     }
-    
+
     func connect() {
         connect_calledCount += 1
     }
-    
+
     func disconnect() {
         disconnect_calledCount += 1
     }
     
+    func disconnect(with code: URLSessionWebSocketTask.CloseCode) {
+        disconnect_calledCount += 1
+    }
+    
+    func send(message: any SendableEvent) {}
+    
+    func send(jsonMessage: any Codable) {
+        guard let data = try? JSONEncoder.default.encode(jsonMessage) else { return }
+        send_jsonMessages.append(data)
+    }
+
     func sendPing() {
         sendPing_calledCount += 1
     }
-    
+
     // MARK: - Functions to simulate behavior
-    
+
     func simulateConnectionSuccess() {
         isConnected = true
         delegate?.webSocketDidConnect()
     }
-    
+
     func simulateMessageReceived(_ json: [String: Any] = [:]) {
         let data = try! JSONSerialization.data(withJSONObject: json, options: [])
         simulateMessageReceived(data)
     }
-    
+
     func simulateMessageReceived(_ data: Data) {
-        delegate?.webSocketDidReceiveMessage(String(data: data, encoding: .utf8)!)
+        delegate?.webSocketDidReceiveMessage(data)
     }
-    
+
     func simulatePong() {
         simulateMessageReceived(.healthCheckEvent(userId: .unique, connectionId: .unique))
     }
-    
+
     func simulateDisconnect(_ error: WebSocketEngineError? = nil) {
         isConnected = false
         delegate?.webSocketDidDisconnect(error: error)
@@ -78,23 +92,27 @@ extension Dictionary {
                 "id": userId,
                 "banned": false,
                 "unread_channels": 0,
-                "mutes": [],
+                "mutes": [String](),
                 "last_active": "2020-05-02T13:21:03.849219Z",
                 "created_at": "2019-06-05T15:01:52.847807Z",
-                "devices": [],
+                "devices": [String](),
                 "invisible": false,
                 "unread_count": 0,
-                "channel_mutes": [],
+                "channel_mutes": [String](),
                 "image": "https://i.imgur.com/EgEPqWZ.jpg",
                 "updated_at": "2020-05-02T13:21:03.855468Z",
                 "role": "user",
                 "total_unread_count": 0,
+                "unread_threads": 0,
+                "language": "",
+                "teams": [String](),
                 "online": true,
                 "name": "Steep Moon",
-                "test": 1
-            ],
+                "custom": ["test": 1]
+            ] as [String: Any],
             "type": "health.check",
-            "connection_id": connectionId
+            "connection_id": connectionId,
+            "custom": [String: Any]()
         ]
     }
 }

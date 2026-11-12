@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -9,29 +9,23 @@ import XCTest
 
 final class UserController_Tests: XCTestCase {
     fileprivate var env: TestEnvironment!
-    
+
     var userId: UserId!
     var client: ChatClient!
     var controller: ChatUserController!
-    var controllerCallbackQueueID: UUID!
-    /// Workaround for uwrapping **controllerCallbackQueueID!** in each closure that captures it
-    private var callbackQueueID: UUID { controllerCallbackQueueID }
-    
+
     override func setUp() {
         super.setUp()
-        
+
         env = TestEnvironment()
         client = ChatClient.mock
         userId = .unique
         controller = ChatUserController(userId: userId, client: client, environment: env.environment)
-        controllerCallbackQueueID = UUID()
-        controller.callbackQueue = .testQueue(withId: controllerCallbackQueueID)
     }
-    
+
     override func tearDown() {
         env.userUpdater?.cleanUp()
         userId = nil
-        controllerCallbackQueueID = nil
 
         AssertAsync {
             Assert.canBeReleased(&controller)
@@ -41,92 +35,87 @@ final class UserController_Tests: XCTestCase {
 
         super.tearDown()
     }
-    
+
     // MARK: - Controller setup
-    
+
     func test_client_createsUserControllerCorrectly() throws {
         let controller = client.userController(userId: userId)
-        
+
         // Assert `state` is correct.
         XCTAssertEqual(controller.state, .initialized)
-        
+
         // Assert `client` is assigned correctly.
         XCTAssertTrue(controller.client === client)
-        
+
         // Assert `userId` is correct.
         XCTAssertEqual(controller.userId, userId)
     }
-    
+
     func test_initialState() throws {
         // Assert `state` is correct.
         XCTAssertEqual(controller.state, .initialized)
-        
+
         // Assert `client` is assigned correctly.
         XCTAssertTrue(controller.client === client)
-        
+
         // Assert `userId` is correct.
         XCTAssertEqual(controller.userId, userId)
     }
-    
+
     // MARK: - Synchronize tests
-        
+
     func test_synchronize_changesState_and_callsCompletionOnCallbackQueue() {
         // Simulate `synchronize` call.
-        var completionIsCalled = false
-        controller.synchronize { [callbackQueueID] error in
-            // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
-            // Assert there is no error.
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.synchronize { error in
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Assert controller is in `localDataFetched` state.
         XCTAssertEqual(controller.state, .localDataFetched)
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network call.
         env.userUpdater!.loadUser_completion?(nil)
         // Release reference of completion so we can deallocate stuff
         env.userUpdater!.loadUser_completion = nil
-        
+
         // Assert completion is called
         AssertAsync.willBeTrue(completionIsCalled)
-        
+
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_synchronize_changesState_and_propagatesObserverErrorOnCallbackQueue() {
         // Update observer to throw the error.
         let observerError = TestError()
         env.userObserverSynchronizeError = observerError
-        
+
         // Simulate `synchronize` call.
-        var synchronizeError: Error?
-        controller.synchronize { [callbackQueueID] error in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var synchronizeError: Error?
+        controller.synchronize { error in
             synchronizeError = error
         }
-        
+
         // Assert controller is in `localDataFetchFailed` state.
         XCTAssertEqual(controller.state, .localDataFetchFailed(ClientError(with: observerError)))
-        
+
         // Assert error from observer is forwarded.
         AssertAsync.willBeEqual(synchronizeError as? ClientError, ClientError(with: observerError))
     }
-    
+
     func test_synchronize_changesState_and_propagatesUpdaterErrorOnCallbackQueue() {
         // Simulate `synchronize` call.
-        var synchronizeError: Error?
-        controller.synchronize { [callbackQueueID] error in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var synchronizeError: Error?
+        controller.synchronize { error in
             synchronizeError = error
         }
 
@@ -141,157 +130,156 @@ final class UserController_Tests: XCTestCase {
             Assert.willBeEqual(synchronizeError as? TestError, updaterError)
         }
     }
-    
+
     func test_synchronize_doesNotInvokeUpdater_ifObserverFails() {
         // Update observer to throw the error.
         env.userObserverSynchronizeError = TestError()
-        
+
         // Simulate `synchronize` call.
         controller.synchronize()
-        
+
         // Assert updater in not called.
         XCTAssertNil(env.userUpdater?.loadUser_userId)
     }
-    
+
     func test_synchronize_callsUserUpdater_ifObserverSucceeds() {
         // Simulate `synchronize` call.
         controller.synchronize()
-        
+
         // Assert updater in called
         XCTAssertEqual(env.userUpdater!.loadUser_userId, controller.userId)
         XCTAssertNotNil(env.userUpdater!.loadUser_completion)
     }
-    
+
     /// This test simulates a bug where the `user` field was not updated if it wasn't
     /// touched before calling synchronize.
-    func test_userIsFetched_evenAfterCallingSynchronize() throws {
+    @MainActor func test_userIsFetched_evenAfterCallingSynchronize() throws {
         // Simulate `synchronize` call.
         controller.synchronize()
-        
+
         // Create a user in the DB
         try client.databaseContainer.createUser(id: userId, extraData: [:])
-        
+
         // Simulate updater callback
         env.userUpdater?.loadUser_completion?(nil)
+
+        // Wait for delegate callback
+        waitForUser()
         
         // Assert the user is loaded
         XCTAssertEqual(controller.user?.id, userId)
     }
-    
+
     // MARK: - Mute user
-    
+
     func test_muteUser_propagatesError() {
         // Simulate `mute` call and catch the completion.
-        var completionError: Error?
-        controller.mute { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            completionError = $0
+        nonisolated(unsafe) var completionError: Error?
+        controller.mute { error in
+            completionError = error
         }
-        
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.userUpdater!.muteUser_completion?(networkError)
-        
-        // Assert error is propogated.
+
+        // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
     func test_muteUser_propagatesNilError() {
         // Simulate `mute` call and catch the completion.
-        var completionIsCalled = false
-        controller.mute { [callbackQueueID] error in
-            // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
-            // Assert there is no error.
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.mute { error in
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.userUpdater!.muteUser_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.userUpdater!.muteUser_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_muteUser_callsUserUpdater_withCorrectValues() {
         // Simulate `mute` call.
         controller.mute()
-        
+
         // Assert updater is called with correct `userId`
         XCTAssertEqual(env.userUpdater!.muteUser_userId, controller.userId)
     }
-    
+
     // MARK: - Local data fetching triggers
-    
+
     func test_observerIsTriggeredOnlyOnce() {
         // Check initial state
         XCTAssertEqual(controller.state, .initialized)
-        
+
         // Set the delegate
-        controller.delegate = ChatUserController_Delegate(expectedQueueId: callbackQueueID)
-        
+        controller.delegate = ChatUserController_Delegate()
+
         // Assert state changed
         AssertAsync.willBeEqual(controller.state, .localDataFetched)
-        
+
         // Update observer to throw the error
         env.userObserver?.synchronizeError = TestError()
-         
+
         // Set `delegate` / call `synchronize` / access `user` again
         _ = controller.user
-        
+
         // Assert controllers stays in `localDataFetched`
         AssertAsync.staysEqual(controller.state, .localDataFetched)
     }
-    
+
     func test_localDataIsFetched_whenDelegateIsSet() {
         // Check initial state
         XCTAssertEqual(controller.state, .initialized)
-        
+
         // Set the delegate
-        controller.delegate = ChatUserController_Delegate(expectedQueueId: callbackQueueID)
-        
+        controller.delegate = ChatUserController_Delegate()
+
         // Assert state changed
         AssertAsync.willBeEqual(controller.state, .localDataFetched)
     }
-    
+
     func test_localDataIsFetched_whenUserIsAccessed() {
         // Check initial state
         XCTAssertEqual(controller.state, .initialized)
-        
+
         // Access the user
         _ = controller.user
-        
+
         // Assert state changed
         AssertAsync.willBeEqual(controller.state, .localDataFetched)
     }
-    
+
     func test_localDataIsFetched_whenSynchronizedIsCalled() {
         // Check initial state
         XCTAssertEqual(controller.state, .initialized)
-        
+
         // Set the delegate
         controller.synchronize()
-        
+
         // Assert state changed
         AssertAsync.willBeEqual(controller.state, .localDataFetched)
     }
-    
+
     // MARK: - Delegate
 
     func test_delegate_isAssignedCorrectly() {
-        let delegate = ChatUserController_Delegate(expectedQueueId: callbackQueueID)
+        let delegate = ChatUserController_Delegate()
 
         // Set the delegate
         controller.delegate = delegate
@@ -300,54 +288,54 @@ final class UserController_Tests: XCTestCase {
         XCTAssert(controller.delegate === delegate)
     }
 
-    func test_delegate_isNotifiedAboutStateChanges() throws {
+    @MainActor func test_delegate_isNotifiedAboutStateChanges() throws {
         // Set the delegate
-        let delegate = ChatUserController_Delegate(expectedQueueId: callbackQueueID)
+        let delegate = ChatUserController_Delegate()
         controller.delegate = delegate
 
         // Synchronize
         controller.synchronize()
-        
+
         // Assert delegate is notified about state changes
         AssertAsync.willBeEqual(delegate.state, .localDataFetched)
-            
+
         // Simulate network call response
         env.userUpdater!.loadUser_completion!(nil)
-        
+
         // Assert delegate is notified about state changes
         AssertAsync.willBeEqual(delegate.state, .remoteDataFetched)
     }
 
-    func test_delegate_isNotifiedAboutCreatedUser() throws {
+    @MainActor func test_delegate_isNotifiedAboutCreatedUser() throws {
         // Set the delegate
-        let delegate = ChatUserController_Delegate(expectedQueueId: callbackQueueID)
+        let delegate = ChatUserController_Delegate()
         controller.delegate = delegate
-        
+
         // Create user in the database.
         try client.databaseContainer.createUser(id: userId)
-        
+
         // Assert `create` entity change is received by the delegate
         AssertAsync.willBeEqual(delegate.didUpdateUser_change?.fieldChange(\.id), .create(userId))
     }
-    
-    func test_delegate_isNotifiedAboutUpdatedUser() throws {
+
+    @MainActor func test_delegate_isNotifiedAboutUpdatedUser() throws {
         // Set the delegate
-        let delegate = ChatUserController_Delegate(expectedQueueId: callbackQueueID)
+        let delegate = ChatUserController_Delegate()
         controller.delegate = delegate
-        
+
         // Create user in the database.
         let initialExtraData: [String: RawJSON] = [:]
         try client.databaseContainer.createUser(id: userId, extraData: initialExtraData)
-        
+
         // Assert `create` entity change is received by the delegate
         AssertAsync {
             Assert.willBeEqual(delegate.didUpdateUser_change?.fieldChange(\.id), .create(self.userId))
             Assert.willBeEqual(delegate.didUpdateUser_change?.fieldChange(\.extraData), .create(initialExtraData))
         }
-        
+
         // Simulate `synchronize` call to fetch user from remote
         controller.synchronize()
-                
+
         // Simulate response from a backend with updated user
         let newName = String.unique
         try client.databaseContainer.writeSynchronously { session in
@@ -355,215 +343,351 @@ final class UserController_Tests: XCTestCase {
             dto.name = newName
         }
         env.userUpdater!.loadUser_completion!(nil)
-        
+
         // Assert `update` entity change is received by the delegate
         AssertAsync {
             Assert.willBeEqual(delegate.didUpdateUser_change?.fieldChange(\.id), .update(self.userId))
             Assert.willBeEqual(delegate.didUpdateUser_change?.fieldChange(\.name), .update(newName))
         }
     }
-    
+
     func test_delegate_isNotifiedAboutDeletedUser() throws {
         XCTAssert(true)
     }
-    
+
     // MARK: - Unmute user
-    
+
     func test_unmuteUser_propagatesError() {
         // Simulate `unmute` call and catch the completion.
-        var completionError: Error?
-        controller.unmute { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            completionError = $0
+        nonisolated(unsafe) var completionError: Error?
+        controller.unmute { error in
+            completionError = error
         }
-        
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.userUpdater!.unmuteUser_completion?(networkError)
-        
-        // Assert error is propogated.
+
+        // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
     func test_unmuteUser_propagatesNilError() {
         // Simulate `unmute` call and catch the completion.
-        var completionIsCalled = false
-        controller.unmute { [callbackQueueID] error in
-            // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
-            // Assert there is no error.
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.unmute { error in
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.userUpdater!.unmuteUser_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.userUpdater!.unmuteUser_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_unmuteUser_callsUserUpdater_withCorrectValues() {
         // Simulate `unmute` call.
         controller.unmute()
-        
+
         // Assert updater is called with correct `userId`
         XCTAssertEqual(env.userUpdater!.unmuteUser_userId, controller.userId)
     }
-    
+
     // MARK: - Flag user
-    
+
     func test_flagUser_propagatesError() {
         // Simulate `flag` call and catch the completion.
-        var completionError: Error?
-        controller.flag { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            completionError = $0
+        nonisolated(unsafe) var completionError: Error?
+        controller.flag { error in
+            completionError = error
         }
-        
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.userUpdater!.flagUser_completion!(networkError)
-        
-        // Assert error is propogated.
+
+        // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
     func test_flagUser_propagatesNilError() {
         // Simulate `flag` call and catch the completion.
-        var completionIsCalled = false
-        controller.flag { [callbackQueueID] error in
-            // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
-            // Assert there is no error.
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.flag { error in
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.userUpdater!.flagUser_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.userUpdater!.flagUser_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_flagUser_callsUserUpdater_withCorrectValues() {
         // Simulate `flag` call.
         controller.flag()
-        
+
         // Assert updater is called with correct `flag`
         XCTAssertEqual(env.userUpdater!.flagUser_flag, true)
         // Assert updater is called with correct `userId`
         XCTAssertEqual(env.userUpdater!.flagUser_userId, controller.userId)
     }
-    
+
     func test_flagUser_keepsControllerAlive() {
         // Simulate `flag` call.
         controller.flag()
-        
+
         // Create a weak ref and release a controller.
-        weak var weakController = controller
+        let weakController = { [weak controller] in controller }
         controller = nil
-        
+
         // Assert controller is kept alive
-        AssertAsync.staysTrue(weakController != nil)
+        AssertAsync.staysTrue(weakController() != nil)
     }
     
     // MARK: - Unlag user
-    
+
+    @available(*, deprecated, message: "Tests deprecated unflag API")
     func test_unflagUser_propagatesError() {
         // Simulate `unflag` call and catch the completion.
-        var completionError: Error?
-        controller.unflag { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            completionError = $0
+        nonisolated(unsafe) var completionError: Error?
+        controller.unflag { error in
+            completionError = error
         }
-        
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.userUpdater!.flagUser_completion!(networkError)
-        
-        // Assert error is propogated.
+
+        // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
+    @available(*, deprecated, message: "Tests deprecated unflag API")
     func test_unflagUser_propagatesNilError() {
         // Simulate `unflag` call and catch the completion.
-        var completionIsCalled = false
-        controller.unflag { [callbackQueueID] error in
-            // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
-            // Assert there is no error.
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.unflag { error in
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.userUpdater!.flagUser_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.userUpdater!.flagUser_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
+    @available(*, deprecated, message: "Tests deprecated unflag API")
     func test_unflagUser_callsUserUpdater_withCorrectValues() {
         // Simulate `unflag` call.
         controller.unflag()
-        
+
         // Assert updater is called with correct `flag`
         XCTAssertEqual(env.userUpdater!.flagUser_flag, false)
         // Assert updater is called with correct `userId`
         XCTAssertEqual(env.userUpdater!.flagUser_userId, controller.userId)
     }
-    
+
+    @available(*, deprecated, message: "Tests deprecated unflag API")
     func test_unflagUser_keepsControllerAlive() {
         // Simulate `unflag` call.
         controller.unflag()
-        
+
         // Create a weak ref and release a controller.
-        weak var weakController = controller
+        let weakController = { [weak controller] in controller }
         controller = nil
-        
+
         // Assert controller is kept alive
-        AssertAsync.staysTrue(weakController != nil)
+        AssertAsync.staysTrue(weakController() != nil)
+    }
+
+    // MARK: - Block user
+
+    func test_blockUser_propagatesError() {
+        // Simulate `block` call and catch the completion.
+        nonisolated(unsafe) var completionError: Error?
+        controller.block { error in
+            completionError = error
+        }
+
+        // Simulate network response with the error.
+        let networkError = TestError()
+        env.userUpdater!.blockUser_completion!(networkError)
+
+        // Assert error is propagated.
+        AssertAsync.willBeEqual(completionError as? TestError, networkError)
+    }
+
+    func test_blockUser_propagatesNilError() {
+        // Simulate `block` call and catch the completion.
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.block { error in
+            XCTAssertNil(error)
+            completionIsCalled = true
+        }
+
+        // Keep a weak ref so we can check if it's actually deallocated
+        weak var weakController = controller
+
+        // (Try to) deallocate the controller
+        // by not keeping any references to it
+        controller = nil
+
+        // Simulate successful network response.
+        env.userUpdater!.blockUser_completion!(nil)
+        // Release reference of completion so we can deallocate stuff
+        env.userUpdater!.blockUser_completion = nil
+
+        // Assert completion is called.
+        AssertAsync.willBeTrue(completionIsCalled)
+        // `weakController` should be deallocated too
+        AssertAsync.canBeReleased(&weakController)
+    }
+
+    func test_blockUser_callsUserUpdater_withCorrectValues() {
+        // Simulate `block` call.
+        controller.block()
+
+        // Assert updater is called with correct `userId`
+        XCTAssertEqual(env.userUpdater!.blockUser_userId, controller.userId)
+    }
+
+    func test_blockUser_keepsControllerAlive() {
+        // Simulate `block` call.
+        controller.block()
+
+        // Create a weak ref and release a controller.
+        let weakController = { [weak controller] in controller }
+        controller = nil
+
+        // Assert controller is kept alive
+        AssertAsync.staysTrue(weakController() != nil)
+    }
+
+    // MARK: - Unblock user
+
+    func test_unblockUser_propagatesError() {
+        // Simulate `unblock` call and catch the completion.
+        nonisolated(unsafe) var completionError: Error?
+        controller.unblock { error in
+            completionError = error
+        }
+
+        // Simulate network response with the error.
+        let networkError = TestError()
+        env.userUpdater!.unblockUser_completion!(networkError)
+
+        // Assert error is propagated.
+        AssertAsync.willBeEqual(completionError as? TestError, networkError)
+    }
+
+    func test_unblockUser_propagatesNilError() {
+        // Simulate `unblock` call and catch the completion.
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.unblock { error in
+            XCTAssertNil(error)
+            completionIsCalled = true
+        }
+
+        // Keep a weak ref so we can check if it's actually deallocated
+        weak var weakController = controller
+
+        // (Try to) deallocate the controller
+        // by not keeping any references to it
+        controller = nil
+
+        // Simulate successful network response.
+        env.userUpdater!.unblockUser_completion!(nil)
+        // Release reference of completion so we can deallocate stuff
+        env.userUpdater!.unblockUser_completion = nil
+
+        // Assert completion is called.
+        AssertAsync.willBeTrue(completionIsCalled)
+        // `weakController` should be deallocated too
+        AssertAsync.canBeReleased(&weakController)
+    }
+
+    func test_unblockUser_callsUserUpdater_withCorrectValues() {
+        // Simulate `unblock` call.
+        controller.unblock()
+
+        // Assert updater is called with correct `userId`
+        XCTAssertEqual(env.userUpdater!.unblockUser_userId, controller.userId)
+    }
+
+    func test_unblockUser_keepsControllerAlive() {
+        // Simulate `unblock` call.
+        controller.unblock()
+
+        // Create a weak ref and release a controller.
+        let weakController = { [weak controller] in controller }
+        controller = nil
+
+        // Assert controller is kept alive
+        AssertAsync.staysTrue(weakController() != nil)
+    }
+    
+    // MARK: -
+    
+    @MainActor func waitForUser() {
+        guard controller.user == nil else { return }
+        let delegate = DelegateWaiter()
+        controller.delegate = delegate
+        wait(for: [delegate.didUpdateUserExpectation], timeout: defaultTimeout)
+        controller.delegate = nil
+    }
+    
+    private class DelegateWaiter: ChatUserControllerDelegate {
+        let didUpdateUserExpectation = XCTestExpectation(description: "DidChangeVotes")
+
+        func userController(_ controller: StreamChat.ChatUserController, didUpdateUser change: StreamChat.EntityChange<StreamChat.ChatUser>) {
+            didUpdateUserExpectation.fulfill()
+        }
     }
 }
 
 private class TestEnvironment {
     @Atomic var userUpdater: UserUpdater_Mock?
-    @Atomic var userObserver: EntityDatabaseObserver_Mock<ChatUser, UserDTO>?
+    @Atomic var userObserver: BackgroundEntityDatabaseObserver_Mock<ChatUser, UserDTO>?
     @Atomic var userObserverSynchronizeError: Error?
 
     lazy var environment: ChatUserController.Environment = .init(
@@ -576,7 +700,7 @@ private class TestEnvironment {
         },
         userObserverBuilder: { [unowned self] in
             self.userObserver = .init(
-                context: $0,
+                database: $0,
                 fetchRequest: $1,
                 itemCreator: $2,
                 fetchedResultsControllerType: $3

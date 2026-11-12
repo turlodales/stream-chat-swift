@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -20,11 +20,15 @@ public struct ImageAttachmentPayload: AttachmentPayload {
     public var title: String?
     /// A link to the image.
     public var imageURL: URL
-    /// A link to the image preview.
-    public var imagePreviewURL: URL
+    /// The original width of the image in pixels.
+    public var originalWidth: Double?
+    /// The original height of the image in pixels.
+    public var originalHeight: Double?
+    /// The image file size information.
+    public var file: AttachmentFile
     /// An extra data.
     public var extraData: [String: RawJSON]?
-    
+
     /// Decodes extra data as an instance of the given type.
     /// - Parameter ofType: The type an extra data should be decoded as.
     /// - Returns: Extra data of the given type or `nil` if decoding fails.
@@ -36,16 +40,45 @@ public struct ImageAttachmentPayload: AttachmentPayload {
     
     /// Creates `ImageAttachmentPayload` instance.
     ///
-    /// Use this initializer if the attachment is already uploaded and you have the remote URLs.
-    public init(title: String?, imageRemoteURL: URL, imagePreviewRemoteURL: URL? = nil, extraData: [String: RawJSON]?) {
+    /// Use this initializer if the attachment is already uploaded and you have the remote URLs. Create the ``AttachmentFile`` type using the local file URL.
+    ///
+    /// - Parameters:
+    ///   - title: A title, usually the name of the image.
+    ///   - imageRemoteURL: A link to the image.
+    ///   - file: The image file size information.
+    ///   - originalWidth: The original width of the image in pixels.
+    ///   - originalHeight: The original height of the image in pixels.
+    ///   - extraData: Custom data associated with the attachment.
+    public init(
+        title: String?,
+        imageRemoteURL: URL,
+        file: AttachmentFile,
+        originalWidth: Double? = nil,
+        originalHeight: Double? = nil,
+        extraData: [String: RawJSON]? = nil
+    ) {
         self.title = title
         imageURL = imageRemoteURL
-        imagePreviewURL = imagePreviewRemoteURL ?? imageRemoteURL
+        self.file = file
+        self.originalWidth = originalWidth
+        self.originalHeight = originalHeight
         self.extraData = extraData
     }
 }
 
 extension ImageAttachmentPayload: Hashable {}
+
+// MARK: - Local Downloads
+
+extension ImageAttachmentPayload: AttachmentPayloadDownloading {
+    public var localStorageFileName: String {
+        title ?? imageURL.lastPathComponent
+    }
+    
+    public var remoteURL: URL {
+        imageURL
+    }
+}
 
 // MARK: - Encodable
 
@@ -54,6 +87,17 @@ extension ImageAttachmentPayload: Encodable {
         var values = extraData ?? [:]
         values[AttachmentCodingKeys.title.rawValue] = title.map { .string($0) }
         values[AttachmentCodingKeys.imageURL.rawValue] = .string(imageURL.absoluteString)
+
+        if let originalWidth = self.originalWidth, let originalHeight = self.originalHeight {
+            values[AttachmentCodingKeys.originalWidth.rawValue] = .double(originalWidth)
+            values[AttachmentCodingKeys.originalHeight.rawValue] = .double(originalHeight)
+        }
+        
+        if file.size > 0 {
+            values[AttachmentFile.CodingKeys.size.rawValue] = .number(Double(Int(file.size)))
+            values[AttachmentFile.CodingKeys.mimeType.rawValue] = file.mimeType.map { .string($0) }
+        }
+
         try values.encode(to: encoder)
     }
 }
@@ -63,23 +107,32 @@ extension ImageAttachmentPayload: Encodable {
 extension ImageAttachmentPayload: Decodable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: AttachmentCodingKeys.self)
-        
+
         let imageURL = try
             container.decodeIfPresent(URL.self, forKey: .image) ??
             container.decodeIfPresent(URL.self, forKey: .imageURL) ??
             container.decode(URL.self, forKey: .assetURL)
+
+        let title: String? = try {
+            if let title = try container.decodeIfPresent(String.self, forKey: .title) {
+                return title
+            }
+            if let fallback = try container.decodeIfPresent(String.self, forKey: .fallback) {
+                return fallback
+            }
+            return try container.decodeIfPresent(String.self, forKey: .name)
+        }()
         
-        let title = (
-            try container.decodeIfPresent(String.self, forKey: .title) ??
-                container.decodeIfPresent(String.self, forKey: .fallback) ??
-                container.decodeIfPresent(String.self, forKey: .name)
-        )?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let file = try AttachmentFile(from: decoder)
+        let originalWidth = try container.decodeIfPresent(Double.self, forKey: .originalWidth)
+        let originalHeight = try container.decodeIfPresent(Double.self, forKey: .originalHeight)
 
         self.init(
-            title: title,
+            title: title?.trimmingCharacters(in: .whitespacesAndNewlines),
             imageRemoteURL: imageURL,
-            imagePreviewRemoteURL: try container
-                .decodeIfPresent(URL.self, forKey: .thumbURL) ?? imageURL,
+            file: file,
+            originalWidth: originalWidth,
+            originalHeight: originalHeight,
             extraData: try Self.decodeExtraData(from: decoder)
         )
     }

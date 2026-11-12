@@ -1,0 +1,286 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+@testable import StreamChat
+@testable import StreamChatTestTools
+import XCTest
+
+final class ChannelRepository_Tests: XCTestCase {
+    private var repository: ChannelRepository!
+    private var database: DatabaseContainer_Spy!
+    private var apiClient: APIClient_Spy!
+
+    override func setUp() {
+        super.setUp()
+        let client = ChatClient.mock
+        database = client.mockDatabaseContainer
+        apiClient = client.mockAPIClient
+        repository = ChannelRepository(database: database, apiClient: apiClient)
+    }
+
+    override func tearDown() {
+        repository = nil
+        database = nil
+        apiClient = nil
+        super.tearDown()
+    }
+    
+    // MARK: - Get Channel
+    
+    func test_getChannel_storeFalse_successfulResponse() throws {
+        let cid = ChannelId.unique
+        let query = ChannelQuery(cid: cid)
+        let channelPayload = ChannelPayload.dummy(channel: .dummy(cid: cid))
+        apiClient.test_mockResponseResult(.success(channelPayload))
+        let result = try waitFor { done in
+            repository.getChannel(for: query, store: false, completion: done)
+        }
+        let expectedEndpoint = query.endpoint
+        XCTAssertEqual(AnyEndpoint(expectedEndpoint), apiClient.request_endpoint)
+        XCTAssertEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(query.type.rawValue)/\(try XCTUnwrap(query.id))/query")
+        XCTAssertEqual(1, database.writeSessionCounter, "Write is called, but rolled back")
+        
+        let databaseChannel = try database.readSynchronously { $0.channel(cid: cid) }
+        XCTAssertEqual(nil, databaseChannel, "When store is false, nothing is stored")
+        
+        let channel = try XCTUnwrap(result.value)
+        XCTAssertEqual(cid, channel.cid)
+    }
+    
+    func test_getChannel_storeFalse_errorResponse() throws {
+        let cid = ChannelId.unique
+        let query = ChannelQuery(cid: cid)
+        let expectedError = TestError()
+        apiClient.test_mockResponseResult(Result<ChannelPayload, Error>.failure(expectedError))
+        let result = try waitFor { done in
+            repository.getChannel(for: query, store: false, completion: done)
+        }
+        let expectedEndpoint = query.endpoint
+        XCTAssertEqual(AnyEndpoint(expectedEndpoint), apiClient.request_endpoint)
+        XCTAssertEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(query.type.rawValue)/\(try XCTUnwrap(query.id))/query")
+        XCTAssertEqual(0, database.writeSessionCounter)
+        
+        let error = try XCTUnwrap(result.error)
+        XCTAssertEqual(expectedError, error)
+    }
+
+    // MARK: - Mark as read
+
+    func test_markRead_successfulResponse() {
+        let cid = ChannelId.unique
+        let userId = UserId.unique
+
+        apiClient.test_mockResponseResult(Result<EmptyResponse, Error>.success(.init()))
+
+        let expectation = self.expectation(description: "markRead completes")
+        nonisolated(unsafe) var receivedError: Error?
+        repository.markRead(cid: cid, userId: userId) { error in
+            receivedError = error
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        let referenceEndpoint = Endpoint<EmptyResponse>.markRead(type: cid.type.rawValue, id: cid.id, markReadRequest: MarkReadRequest())
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(database.writeSessionCounter, 1)
+        XCTAssertNil(receivedError)
+    }
+
+    func test_markRead_errorResponse() {
+        let cid = ChannelId.unique
+        let userId = UserId.unique
+        let error = TestError()
+
+        // Optimistic local write + rollback write both happen; API failure is reported via completion.
+        apiClient.test_mockResponseResult(Result<EmptyResponse, Error>.failure(error))
+
+        let expectation = self.expectation(description: "markRead completes")
+        nonisolated(unsafe) var receivedError: Error?
+        repository.markRead(cid: cid, userId: userId) { error in
+            receivedError = error
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        let referenceEndpoint = Endpoint<EmptyResponse>.markRead(type: cid.type.rawValue, id: cid.id, markReadRequest: MarkReadRequest())
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(database.writeSessionCounter, 2)
+        XCTAssertEqual(receivedError, error)
+    }
+
+    func test_markRead_clearsLocalUnreadOptimistically() throws {
+        let cid = ChannelId.unique
+        let currentUserPayload = UserPayload.dummy(userId: .unique)
+
+        try database.writeSynchronously { session in
+            try session.saveCurrentUser(payload: .dummy(userId: currentUserPayload.id, role: .user))
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid)))
+            let read = try XCTUnwrap(session.loadOrCreateChannelRead(cid: cid, userId: currentUserPayload.id))
+            read.unreadMessageCount = 5
+        }
+        database.writeSessionCounter = 0
+
+        apiClient.test_mockResponseResult(Result<EmptyResponse, Error>.success(.init()))
+
+        _ = try waitFor { done in
+            repository.markRead(cid: cid, userId: currentUserPayload.id, completion: done)
+        }
+
+        let unreadMessageCount = try database.readSynchronously { session in
+            try XCTUnwrap(session.loadChannelRead(cid: cid, userId: currentUserPayload.id)).unreadMessageCount
+        }
+        XCTAssertEqual(unreadMessageCount, 0)
+    }
+
+    func test_markRead_onAPIFailure_rollsBackLocalUnreadState() throws {
+        let cid = ChannelId.unique
+        let currentUserPayload = UserPayload.dummy(userId: .unique)
+        let previousLastReadAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let previousLastReadMessageId = MessageId.unique
+
+        try database.writeSynchronously { session in
+            try session.saveCurrentUser(payload: .dummy(userId: currentUserPayload.id, role: .user))
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid)))
+            let read = try XCTUnwrap(session.loadOrCreateChannelRead(cid: cid, userId: currentUserPayload.id))
+            read.lastReadAt = previousLastReadAt.bridgeDate
+            read.lastReadMessageId = previousLastReadMessageId
+            read.unreadMessageCount = 5
+        }
+        database.writeSessionCounter = 0
+
+        let error = TestError()
+        apiClient.test_mockResponseResult(Result<EmptyResponse, Error>.failure(error))
+
+        let receivedError = try waitFor { done in
+            repository.markRead(cid: cid, userId: currentUserPayload.id, completion: done)
+        }
+
+        let (unreadMessageCount, lastReadMessageId, lastReadAt) = try database.readSynchronously { session in
+            let read = try XCTUnwrap(session.loadChannelRead(cid: cid, userId: currentUserPayload.id))
+            return (read.unreadMessageCount, read.lastReadMessageId, read.lastReadAt.bridgeDate.timeIntervalSince1970)
+        }
+        XCTAssertEqual(receivedError as? TestError, error)
+        XCTAssertEqual(unreadMessageCount, 5)
+        XCTAssertEqual(lastReadMessageId, previousLastReadMessageId)
+        XCTAssertEqual(lastReadAt, previousLastReadAt.timeIntervalSince1970)
+        XCTAssertEqual(database.writeSessionCounter, 2)
+    }
+
+    // MARK: - Mark as read locally
+
+    func test_markReadLocally_doesNotMakeAPIRequest_writesToDatabase() {
+        let cid = ChannelId.unique
+        let userId = UserId.unique
+
+        let expectation = self.expectation(description: "markReadLocally completes")
+        nonisolated(unsafe) var receivedError: Error?
+        repository.markReadLocally(cid: cid, userId: userId) { error in
+            receivedError = error
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertNil(apiClient.request_endpoint, "markReadLocally must not make a network request")
+        XCTAssertEqual(database.writeSessionCounter, 1)
+        XCTAssertNil(receivedError)
+    }
+
+    func test_markReadLocally_onDatabaseError_callsCompletionWithError() throws {
+        let cid = ChannelId.unique
+        let userId = UserId.unique
+        let dbError = TestError()
+        database.write_errorResponse = dbError
+
+        let expectation = self.expectation(description: "markReadLocally completes")
+        nonisolated(unsafe) var receivedError: Error?
+        repository.markReadLocally(cid: cid, userId: userId) { error in
+            receivedError = error
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertNil(apiClient.request_endpoint)
+        XCTAssertEqual(receivedError as? TestError, dbError)
+    }
+
+    func test_markReadLocally_updatesLastReadAtInDatabase() throws {
+        let cid = ChannelId.unique
+        let currentUserPayload = UserPayload.dummy(userId: .unique)
+
+        try database.writeSynchronously { session in
+            try session.saveCurrentUser(payload: .dummy(userId: currentUserPayload.id, role: .user))
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid)))
+            _ = session.loadOrCreateChannelRead(cid: cid, userId: currentUserPayload.id)
+        }
+
+        let beforeMark = Date()
+        let expectation = self.expectation(description: "markReadLocally completes")
+        repository.markReadLocally(cid: cid, userId: currentUserPayload.id) { _ in
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: defaultTimeout)
+
+        let read = try XCTUnwrap(
+            database.viewContext.loadChannelRead(cid: cid, userId: currentUserPayload.id)
+        )
+        XCTAssertGreaterThanOrEqual(read.lastReadAt.bridgeDate, beforeMark)
+        XCTAssertEqual(read.unreadMessageCount, 0)
+    }
+
+    // MARK: - Mark as unread
+
+    func test_markUnread_successfulResponse() throws {
+        let cid = ChannelId.unique
+        let userId = UserId.unique
+        let messageId = MessageId.unique
+
+        try database.createCurrentUser()
+        try database.writeSynchronously {
+            try $0.saveChannel(payload: .dummy(channel: .dummy(cid: cid)))
+        }
+        database.writeSessionCounter = 0
+
+        let expectation = self.expectation(description: "markUnread completes")
+        nonisolated(unsafe) var receivedError: Error?
+        repository.markUnread(for: cid, userId: userId, from: .init(messageId: messageId), lastReadMessageId: .unique) { result in
+            receivedError = result.error
+            expectation.fulfill()
+        }
+
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        waitForExpectations(timeout: defaultTimeout)
+
+        let referenceEndpoint = Endpoint<EmptyResponse>.markUnread(type: cid.type.rawValue, id: cid.id, markUnreadRequest: .init(messageId: messageId))
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(database.writeSessionCounter, 1)
+        XCTAssertNil(receivedError)
+    }
+
+    func test_markUnread_errorResponse() {
+        let cid = ChannelId.unique
+        let userId = UserId.unique
+        let messageId = MessageId.unique
+
+        let expectation = self.expectation(description: "markUnread completes")
+        nonisolated(unsafe) var receivedError: Error?
+        repository.markUnread(for: cid, userId: userId, from: .init(messageId: messageId), lastReadMessageId: .unique) { result in
+            receivedError = result.error
+            expectation.fulfill()
+        }
+
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        let referenceEndpoint = Endpoint<EmptyResponse>.markUnread(type: cid.type.rawValue, id: cid.id, markUnreadRequest: .init(messageId: messageId))
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(database.writeSessionCounter, 0)
+        XCTAssertEqual(receivedError, error)
+    }
+}

@@ -1,26 +1,27 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
-class AsyncOperation: BaseOperation {
+class AsyncOperation: BaseOperation, @unchecked Sendable {
     enum Output {
         case retry
         case `continue`
     }
 
     private let maxRetries: Int
-    private(set) var executionBlock: (AsyncOperation, @escaping (_ output: Output) -> Void) -> Void
+    private(set) var executionBlock: (AsyncOperation, @escaping @Sendable (_ output: Output) -> Void) -> Void
     private var executedRetries = 0
 
     var canRetry: Bool {
-        executedRetries < maxRetries && !isCancelled
+        executedRetries < maxRetries && !isCancelled && !isFinished
     }
 
-    init(maxRetries: Int = 0, executionBlock: @escaping (AsyncOperation, @escaping (_ output: Output) -> Void) -> Void) {
+    init(maxRetries: Int = 0, executionBlock: @escaping (AsyncOperation, @escaping @Sendable (_ output: Output) -> Void) -> Void) {
         self.maxRetries = maxRetries
         self.executionBlock = executionBlock
+        super.init()
     }
 
     override func start() {
@@ -30,17 +31,25 @@ class AsyncOperation: BaseOperation {
         }
 
         isExecuting = true
-        executionBlock(self, handleResult)
+        execute()
+    }
+
+    private func execute() {
+        executionBlock(self) { [weak self] in
+            self?.handleResult($0)
+        }
     }
 
     private func handleResult(_ output: Output) {
-        if output == .retry && canRetry {
-            executedRetries += 1
-            executionBlock(self, handleResult)
-        } else {
+        let shouldRetry = output == .retry && canRetry
+        guard shouldRetry else {
             isExecuting = false
             isFinished = true
+            return
         }
+
+        executedRetries += 1
+        execute()
     }
 
     func resetRetries() {
@@ -48,10 +57,10 @@ class AsyncOperation: BaseOperation {
     }
 }
 
-class BaseOperation: Operation {
+class BaseOperation: Operation, @unchecked Sendable {
     private var _finished = false
     private var _executing = false
-    private let stateQueue = DispatchQueue(label: "io.getstream.base-operation")
+    private let stateQueue = DispatchQueue(label: "io.getstream.base-operation", attributes: .concurrent)
 
     override var isExecuting: Bool {
         get {

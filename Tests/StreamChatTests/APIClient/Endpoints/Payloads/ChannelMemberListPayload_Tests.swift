@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -9,7 +9,7 @@ import XCTest
 final class ChannelMemberListPayload_Tests: XCTestCase {
     func test_queryJSON_isDeserialized_withDefaultExtraData() throws {
         let json = XCTestCase.mockData(fromJSONFile: "ChannelMembersQuery")
-        let payload = try JSONDecoder.default.decode(ChannelMemberListPayload.self, from: json)
+        let payload = try JSONDecoder.default.decode(MembersResponse.self, from: json)
         XCTAssertEqual(payload.members.count, 1)
     }
 }

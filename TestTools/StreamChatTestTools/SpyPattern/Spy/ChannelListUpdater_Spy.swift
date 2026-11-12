@@ -1,73 +1,194 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
 import XCTest
 
 /// Mock implementation of ChannelListUpdater
-final class ChannelListUpdater_Spy: ChannelListUpdater, Spy {
-    var recordedFunctions: [String] = []
+final class ChannelListUpdater_Spy: ChannelListUpdater, Spy, @unchecked Sendable {
+    let spyState = SpyState()
 
     @Atomic var update_queries: [ChannelListQuery] = []
-    @Atomic var update_completion: ((Result<[ChatChannel], Error>) -> Void)?
-    
+    @Atomic var update_completion: (@Sendable (Result<[ChatChannel], Error>) -> Void)?
+    @Atomic var update_completion_result: Result<[ChatChannel], Error>?
+
     @Atomic var fetch_queries: [ChannelListQuery] = []
-    @Atomic var fetch_completion: ((Result<ChannelListPayload, Error>) -> Void)?
+    @Atomic var fetch_completion: (@Sendable (Result<ChannelListPayload, Error>) -> Void)?
 
-    var resetChannelsQueryResult: Result<(synchedAndWatched: [ChatChannel], unwanted: Set<ChannelId>), Error>?
-    
-    @Atomic var markAllRead_completion: ((Error?) -> Void)?
+    @Atomic var refreshLoadedChannelsResult: Result<Set<ChannelId>, Error>?
 
+    @Atomic var queryGroupedChannels_callCount = 0
+    @Atomic var queryGroupedChannels_groups: [[String: GroupedChannelsGroupRequest]?] = []
+    @Atomic var queryGroupedChannels_limits: [Int?] = []
+    @Atomic var queryGroupedChannels_sorts: [[SortParamRequest]?] = []
+    @Atomic var queryGroupedChannels_watchValues: [Bool] = []
+    @Atomic var queryGroupedChannels_presenceValues: [Bool] = []
+    @Atomic var queryGroupedChannels_result: Result<[ChannelGroup], Error>?
+    @Atomic var queryGroupedChannels_results: [Result<[ChannelGroup], Error>] = []
+
+    @Atomic var markAllRead_completion: (@Sendable (Error?) -> Void)?
+
+    @Atomic var startWatchingChannels_callCount = 0
     @Atomic var startWatchingChannels_cids: [ChannelId] = []
-    @Atomic var startWatchingChannels_completion: ((Error?) -> Void)?
-    
+    @Atomic var startWatchingChannels_completion: (@Sendable (Error?) -> Void)?
+    @Atomic var startWatchingChannels_completion_success = false
+
+    @Atomic var link_callCount = 0
+    @Atomic var link_completion: (@Sendable (Error?) -> Void)?
+
+    @Atomic var unlink_callCount = 0
+
+    @Atomic var clearSearchResults_queries: [ChannelListQuery] = []
+    @Atomic var clearSearchResults_completion: (@Sendable (Error?) -> Void)?
+
+    @Atomic var deleteSearchQuery_queries: [ChannelListQuery] = []
+    @Atomic var deleteSearchQuery_completion: (@Sendable (Error?) -> Void)?
+
     func cleanUp() {
         update_queries.removeAll()
         update_completion = nil
-        
+        update_completion_result = nil
+
         fetch_queries.removeAll()
         fetch_completion = nil
-        
+
+        queryGroupedChannels_callCount = 0
+        queryGroupedChannels_groups.removeAll()
+        queryGroupedChannels_limits.removeAll()
+        queryGroupedChannels_sorts.removeAll()
+        queryGroupedChannels_watchValues.removeAll()
+        queryGroupedChannels_presenceValues.removeAll()
+        queryGroupedChannels_result = nil
+        queryGroupedChannels_results.removeAll()
         markAllRead_completion = nil
-        
+
+        startWatchingChannels_callCount = 0
         startWatchingChannels_cids.removeAll()
         startWatchingChannels_completion = nil
+        startWatchingChannels_completion_success = false
+        clearSearchResults_queries.removeAll()
+        clearSearchResults_completion = nil
+        deleteSearchQuery_queries.removeAll()
+        deleteSearchQuery_completion = nil
     }
-    
+
     override func update(
         channelListQuery: ChannelListQuery,
-        completion: ((Result<[ChatChannel], Error>) -> Void)? = nil
+        completion: (@Sendable (Result<ChannelListUpdateResult, Error>) -> Void)? = nil
     ) {
         _update_queries.mutate { $0.append(channelListQuery) }
-        update_completion = completion
+        let resolvedQuery = loadPredefinedFilter(for: channelListQuery)
+        update_completion = { result in
+            let changedQuery: ChannelListQuery? = {
+                guard let resolvedQuery, !resolvedQuery.isFilterEqual(to: channelListQuery) else { return nil }
+                return resolvedQuery
+            }()
+            completion?(result.map { ChannelListUpdateResult(channels: $0, updatedQuery: changedQuery) })
+        }
+        update_completion_result?.invoke(with: update_completion)
     }
-    
-    override func markAllRead(completion: ((Error?) -> Void)? = nil) {
+
+    override func markAllRead(completion: (@Sendable (Error?) -> Void)? = nil) {
         markAllRead_completion = completion
     }
-    
+
     override func fetch(
         channelListQuery: ChannelListQuery,
-        completion: @escaping (Result<ChannelListPayload, Error>) -> Void
+        completion: @escaping @Sendable (Result<ChannelListPayload, Error>) -> Void
     ) {
         _fetch_queries.mutate { $0.append(channelListQuery) }
         fetch_completion = completion
     }
-
-    override func resetChannelsQuery(
+    
+    override func refreshLoadedChannels(
         for query: ChannelListQuery,
-        pageSize: Int,
-        watchedAndSynchedChannelIds: Set<ChannelId>,
-        synchedChannelIds: Set<ChannelId>,
-        completion: @escaping (Result<(synchedAndWatched: [ChatChannel], unwanted: Set<ChannelId>), Error>) -> Void
+        channelCount: Int,
+        completion: @escaping @Sendable (Result<Set<ChannelId>, any Error>) -> Void
     ) {
         record()
-        resetChannelsQueryResult.map(completion)
+        refreshLoadedChannelsResult?.invoke(with: completion)
     }
 
-    override func startWatchingChannels(withIds ids: [ChannelId], completion: ((Error?) -> Void)?) {
+    override func queryGroupedChannels(
+        groups: [String: GroupedChannelsGroupRequest]?,
+        limit: Int?,
+        sort: [SortParamRequest]?,
+        watch: Bool,
+        presence: Bool,
+        keepingLoadedPages: Bool,
+        completion: @escaping @Sendable (Result<[ChannelGroup], Error>) -> Void
+    ) {
+        _queryGroupedChannels_callCount.mutate { $0 += 1 }
+        _queryGroupedChannels_groups.mutate { $0.append(groups) }
+        _queryGroupedChannels_limits.mutate { $0.append(limit) }
+        _queryGroupedChannels_sorts.mutate { $0.append(sort) }
+        _queryGroupedChannels_watchValues.mutate { $0.append(watch) }
+        _queryGroupedChannels_presenceValues.mutate { $0.append(presence) }
+        var queuedResult: Result<[ChannelGroup], Error>?
+        _queryGroupedChannels_results.mutate { results in
+            guard !results.isEmpty else { return }
+            queuedResult = results.removeFirst()
+        }
+        if let result = queuedResult ?? queryGroupedChannels_result {
+            DispatchQueue.main.async {
+                completion(result)
+            }
+        } else {
+            super.queryGroupedChannels(
+                groups: groups,
+                limit: limit,
+                sort: sort,
+                watch: watch,
+                presence: presence,
+                keepingLoadedPages: keepingLoadedPages,
+                completion: completion
+            )
+        }
+    }
+
+    override func link(
+        channel: ChatChannel,
+        with query: ChannelListQuery,
+        completion: (@Sendable (Error?) -> Void)? = nil
+    ) {
+        _link_callCount.mutate { $0 += 1 }
+        link_completion = completion
+    }
+
+    override func unlink(
+        channel: ChatChannel,
+        with query: ChannelListQuery,
+        completion: (@Sendable (Error?) -> Void)? = nil
+    ) {
+        _unlink_callCount.mutate { $0 += 1 }
+    }
+
+    override func clearSearchResults(
+        for query: ChannelListQuery,
+        completion: (@Sendable (Error?) -> Void)? = nil
+    ) {
+        _clearSearchResults_queries.mutate { $0.append(query) }
+        clearSearchResults_completion = completion
+        super.clearSearchResults(for: query, completion: completion)
+    }
+
+    override func deleteSearchQuery(
+        _ query: ChannelListQuery,
+        completion: (@Sendable (Error?) -> Void)? = nil
+    ) {
+        _deleteSearchQuery_queries.mutate { $0.append(query) }
+        deleteSearchQuery_completion = completion
+        super.deleteSearchQuery(query, completion: completion)
+    }
+
+    override func startWatchingChannels(withIds ids: [ChannelId], completion: (@Sendable (Error?) -> Void)?) {
+        _startWatchingChannels_callCount.mutate { $0 += 1 }
         startWatchingChannels_cids = ids
-        startWatchingChannels_completion = completion
+        if startWatchingChannels_completion_success {
+            completion?(nil)
+        } else {
+            startWatchingChannels_completion = completion
+        }
     }
 }

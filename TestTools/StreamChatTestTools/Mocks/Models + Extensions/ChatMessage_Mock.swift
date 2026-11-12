@@ -1,18 +1,19 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
+import CoreData.NSManagedObjectContext
 import Foundation
 @testable import StreamChat
 
 public extension ChatMessage {
     /// Creates a new `ChatMessage` object from the provided data.
     static func mock(
-        id: MessageId,
-        cid: ChannelId,
-        text: String,
+        id: MessageId = .unique,
+        cid: ChannelId = .unique,
+        text: String = .unique,
         type: MessageType = .reply,
-        author: ChatUser,
+        author: ChatUser = .unique,
         command: String? = nil,
         createdAt: Date = Date(timeIntervalSince1970: 113),
         locallyCreatedAt: Date? = nil,
@@ -27,19 +28,40 @@ public extension ChatMessage {
         isBounced: Bool = false,
         isSilent: Bool = false,
         isShadowed: Bool = false,
+        translations: [TranslationLanguage: String]? = nil,
+        originalLanguage: TranslationLanguage? = nil,
+        moderationsDetails: MessageModerationDetails? = nil,
         reactionScores: [MessageReactionType: Int] = [:],
         reactionCounts: [MessageReactionType: Int] = [:],
+        reactionGroups: [MessageReactionType: ChatMessageReactionGroup] = [:],
         mentionedUsers: Set<ChatUser> = [],
+        mentionedChannelMembers: [UserId: ChatMemberInfo] = [:],
+        mentionedHere: Bool = false,
+        mentionedChannel: Bool = false,
+        mentionedGroups: Set<UserGroupMention> = [],
+        mentionedRoles: [String] = [],
         threadParticipants: [ChatUser] = [],
+        threadParticipantsCount: Int = 0,
         attachments: [AnyChatMessageAttachment] = [],
         latestReplies: [ChatMessage] = [],
         localState: LocalMessageState? = nil,
         isFlaggedByCurrentUser: Bool = false,
         latestReactions: Set<ChatMessageReaction> = [],
         currentUserReactions: Set<ChatMessageReaction> = [],
+        currentUserReactionsCount: Int = 0,
         isSentByCurrentUser: Bool = false,
         pinDetails: MessagePinDetails? = nil,
-        readBy: Set<ChatUser> = []
+        readBy: Set<ChatUser> = [],
+        underlyingContext: NSManagedObjectContext? = nil,
+        textUpdatedAt: Date? = nil,
+        poll: Poll? = nil,
+        draftReply: DraftMessage? = nil,
+        reminder: MessageReminderInfo? = nil,
+        sharedLocation: SharedLocation? = nil,
+        member: ChatMemberInfo? = nil,
+        deletedForMe: Bool = false,
+        // Kept for source compatibility with existing call sites; prefer `member`.
+        channelRole: MemberRole? = nil
     ) -> Self {
         .init(
             id: id,
@@ -56,27 +78,62 @@ public extension ChatMessage {
             showReplyInChannel: showReplyInChannel,
             replyCount: replyCount,
             extraData: extraData,
-            quotedMessage: { quotedMessage },
+            quotedMessage: quotedMessage,
             isBounced: isBounced,
             isSilent: isSilent,
             isShadowed: isShadowed,
+            deletedForMe: deletedForMe,
             reactionScores: reactionScores,
             reactionCounts: reactionCounts,
-            author: { author },
-            mentionedUsers: { mentionedUsers },
-            threadParticipants: { threadParticipants },
-            attachments: { attachments },
-            latestReplies: { latestReplies },
+            reactionGroups: reactionGroups,
+            author: author,
+            mentionedUsers: mentionedUsers,
+            mentionedChannelMembers: mentionedChannelMembers,
+            mentionedHere: mentionedHere,
+            mentionedChannel: mentionedChannel,
+            mentionedGroups: mentionedGroups,
+            mentionedRoles: mentionedRoles,
+            threadParticipants: threadParticipants,
+            attachments: attachments,
+            latestReplies: latestReplies,
             localState: localState,
             isFlaggedByCurrentUser: isFlaggedByCurrentUser,
-            latestReactions: { latestReactions },
-            currentUserReactions: { currentUserReactions },
+            latestReactions: latestReactions,
+            currentUserReactions: currentUserReactions,
             isSentByCurrentUser: isSentByCurrentUser,
             pinDetails: pinDetails,
-            translations: nil,
-            readBy: { readBy },
-            readByCount: { readBy.count },
-            underlyingContext: nil
+            translations: translations,
+            originalLanguage: originalLanguage,
+            moderationDetails: moderationsDetails,
+            readBy: readBy,
+            poll: poll,
+            textUpdatedAt: textUpdatedAt,
+            draftReply: draftReply,
+            reminder: reminder,
+            sharedLocation: sharedLocation,
+            member: member ?? channelRole.map { ChatMemberInfo(channelRole: $0) }
+        )
+    }
+}
+
+extension MessageModerationDetails {
+    static func mock(
+        originalText: String,
+        action: MessageModerationAction,
+        textHarms: [String]? = nil,
+        imageHarms: [String]? = nil,
+        blocklistsMatched: [String]? = nil,
+        semanticFilterMatched: String? = nil,
+        platformCircumvented: Bool = false
+    ) -> Self {
+        .init(
+            originalText: originalText,
+            action: action,
+            blocklistsMatched: blocklistsMatched,
+            textHarms: textHarms,
+            imageHarms: imageHarms,
+            semanticFilterMatched: semanticFilterMatched,
+            platformCircumvented: platformCircumvented
         )
     }
 }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Combine
@@ -8,7 +8,6 @@ import CoreData
 @testable import StreamChatTestTools
 import XCTest
 
-@available(iOS 13, *)
 final class ChannelController_Combine_Tests: iOS13TestCase {
     var channelController: ChannelControllerSpy!
     var cancellables: Set<AnyCancellable>!
@@ -18,7 +17,7 @@ final class ChannelController_Combine_Tests: iOS13TestCase {
         channelController = ChannelControllerSpy()
         cancellables = []
     }
-    
+
     override func tearDown() {
         // Release existing subscriptions and make sure the controller gets released, too
         cancellables = nil
@@ -26,106 +25,106 @@ final class ChannelController_Combine_Tests: iOS13TestCase {
         channelController = nil
         super.tearDown()
     }
-    
+
     func test_statePublisher() {
         // Setup Recording publishers
         var recording = Record<DataController.State, Never>.Recording()
-                
+
         // Setup the chain
         channelController
             .statePublisher
             .sink(receiveValue: { recording.receive($0) })
             .store(in: &cancellables)
-        
+
         // Keep only the weak reference to the controller. The existing publisher should keep it alive.
-        weak var controller: ChannelControllerSpy? = channelController
+        let controller = { [weak channelController] in channelController }
         channelController = nil
-        
-        controller?.delegateCallback { $0.controller(controller!, didChangeState: .remoteDataFetched) }
-        
+
+        controller()?.delegateCallback { [weak controller = controller()] in $0.controller(controller!, didChangeState: .remoteDataFetched) }
+
         XCTAssertEqual(recording.output, [.localDataFetched, .remoteDataFetched])
     }
 
     func test_channelChangePublisher() {
         // Setup Recording publishers
         var recording = Record<EntityChange<ChatChannel>, Never>.Recording()
-        
+
         // Setup the chain
         channelController
             .channelChangePublisher
             .sink(receiveValue: { recording.receive($0) })
             .store(in: &cancellables)
-        
+
         // Keep only the weak reference to the controller. The existing publisher should keep it alive.
-        weak var controller: ChannelControllerSpy? = channelController
+        let controller = { [weak channelController] in channelController }
         channelController = nil
 
         let newChannel: ChatChannel = .mock(cid: .unique, name: .unique, imageURL: .unique(), extraData: [:])
-        controller?.channel_simulated = newChannel
-        controller?.delegateCallback {
+        controller()?.channel_simulated = newChannel
+        controller()?.delegateCallback { [controller = controller()] in
             $0.channelController(controller!, didUpdateChannel: .create(newChannel))
         }
-        
+
         XCTAssertEqual(recording.output, [.create(newChannel)])
     }
-    
+
     func test_messagesChangesPublisher() {
         // Setup Recording publishers
         var recording = Record<[ListChange<ChatMessage>], Never>.Recording()
-        
+
         // Setup the chain
         channelController
             .messagesChangesPublisher
             .sink(receiveValue: { recording.receive($0) })
             .store(in: &cancellables)
-        
+
         // Keep only the weak reference to the controller. The existing publisher should keep it alive.
-        weak var controller: ChannelControllerSpy? = channelController
+        let controller = { [weak channelController] in channelController }
         channelController = nil
 
         let newMessage: ChatMessage = .unique
-        controller?.messages_simulated = [newMessage]
-        controller?.delegateCallback {
+        controller()?.messages_simulated = [newMessage]
+        controller()?.delegateCallback { [controller = controller()] in
             $0.channelController(controller!, didUpdateMessages: [.insert(newMessage, index: .init())])
         }
-        
+
         XCTAssertEqual(recording.output, [[.insert(newMessage, index: .init())]])
     }
-    
+
     func test_memberEventPublisher() {
         // Setup Recording publishers
         var recording = Record<MemberEvent, Never>.Recording()
-        
+
         // Setup the chain
         channelController
             .memberEventPublisher
             .sink(receiveValue: { recording.receive($0) })
             .store(in: &cancellables)
-        
+
         // Keep only the weak reference to the controller. The existing publisher should keep it alive.
-        weak var controller: ChannelControllerSpy? = channelController
+        let controller = { [weak channelController] in channelController }
         channelController = nil
 
         let memberEvent: TestMemberEvent = .unique
-        controller?.delegateCallback {
+        controller()?.delegateCallback { [controller = controller()] in
             $0.channelController(controller!, didReceiveMemberEvent: memberEvent)
         }
-        
+
         XCTAssertEqual(recording.output as! [TestMemberEvent], [memberEvent])
     }
-    
+
     func test_typingUsersPublisher() {
         // Setup Recording publishers
         var recording = Record<Set<ChatUser>, Never>.Recording()
-        
+
         // Setup the chain
         channelController
             .typingUsersPublisher
             .sink(receiveValue: { recording.receive($0) })
             .store(in: &cancellables)
-        
+
         // Keep only the weak reference to the controller. The existing publisher should keep it alive.
-        weak var controller: ChannelControllerSpy? = channelController
+        let controller = { [weak channelController] in channelController }
         channelController = nil
 
         let typingUser = ChatUser(
@@ -136,17 +135,21 @@ final class ChannelController_Combine_Tests: iOS13TestCase {
             isBanned: false,
             isFlaggedByCurrentUser: false,
             userRole: .user,
+            teamsRole: nil,
             createdAt: .unique,
             updatedAt: .unique,
+            deactivatedAt: nil,
             lastActiveAt: .unique,
             teams: [],
+            language: nil,
+            avgResponseTime: nil,
             extraData: [:]
         )
-        
-        controller?.delegateCallback {
+
+        controller()?.delegateCallback { [controller = controller()] in
             $0.channelController(controller!, didChangeTypingUsers: [typingUser])
         }
-        
+
         XCTAssertEqual(recording.output, [[typingUser]])
     }
 }

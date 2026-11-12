@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import AVKit
@@ -8,7 +8,7 @@ import UIKit
 
 /// The quoted author's avatar position in relation with the text message.
 /// New custom alignments can be added with extensions and by overriding the `QuotedChatMessageView.setAvatarAlignment()`.
-public struct QuotedAvatarAlignment: RawRepresentable, Equatable {
+public struct QuotedAvatarAlignment: RawRepresentable, Equatable, Sendable {
     /// The avatar will be aligned to the leading, and the message content on the trailing.
     public static let leading = QuotedAvatarAlignment(rawValue: 0)
     /// The avatar will be aligned to the trailing, and the message content on the leading.
@@ -22,20 +22,24 @@ public struct QuotedAvatarAlignment: RawRepresentable, Equatable {
 }
 
 /// A view that displays a quoted message.
-open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
+open class QuotedChatMessageView: _View, ThemeProvider {
     /// The content of the view.
     public struct Content {
         /// The quoted message.
         public let message: ChatMessage
         /// The avatar position in relation with the text message.
         public let avatarAlignment: QuotedAvatarAlignment
+        /// The channel which the message belongs to.
+        public let channel: ChatChannel?
 
         public init(
             message: ChatMessage,
-            avatarAlignment: QuotedAvatarAlignment
+            avatarAlignment: QuotedAvatarAlignment,
+            channel: ChatChannel? = nil
         ) {
             self.message = message
             self.avatarAlignment = avatarAlignment
+            self.channel = channel
         }
     }
 
@@ -49,11 +53,7 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
     /// A Boolean value that checks if all attachments are empty.
     open var isAttachmentsEmpty: Bool {
         guard let content = self.content else { return true }
-        return content.message.fileAttachments.isEmpty
-            && content.message.imageAttachments.isEmpty
-            && content.message.linkAttachments.isEmpty
-            && content.message.giphyAttachments.isEmpty
-            && content.message.videoAttachments.isEmpty
+        return content.message.allAttachments.isEmpty
     }
 
     /// The container view that holds the `authorAvatarView` and the `contentContainerView`.
@@ -62,10 +62,14 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
         .withAccessibilityIdentifier(identifier: "containerView")
 
     /// The avatar view of the author's quoted message.
-    open private(set) lazy var authorAvatarView: ChatAvatarView = components
-        .avatarView.init()
-        .withoutAutoresizingMaskConstraints
-        .withAccessibilityIdentifier(identifier: "authorAvatarView")
+    open private(set) lazy var authorAvatarView: ChatUserAvatarView = {
+        let view = components
+            .userAvatarView.init()
+            .withoutAutoresizingMaskConstraints
+            .withAccessibilityIdentifier(identifier: "authorAvatarView")
+        view.shouldShowOnlineIndicator = false
+        return view
+    }()
 
     /// The container view that holds the `textView` and the `attachmentPreview`.
     open private(set) lazy var contentContainerView: ContainerStackView = ContainerStackView()
@@ -83,11 +87,20 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
         .withoutAutoresizingMaskConstraints
         .withAccessibilityIdentifier(identifier: "attachmentPreviewView")
 
+    open private(set) lazy var voiceRecordingAttachmentQuotedPreview: VoiceRecordingAttachmentQuotedPreview =
+        components
+            .voiceRecordingAttachmentQuotedPreview
+            .init()
+            .withoutAutoresizingMaskConstraints
+
     /// The size of the avatar view that belongs to the author of the quoted message.
     open var authorAvatarSize: CGSize { .init(width: 24, height: 24) }
 
     /// The size of the attachments preview.s
     open var attachmentPreviewSize: CGSize { .init(width: 34, height: 34) }
+
+    /// The component responsible to detect links in the message text.
+    public let linkDetector = TextLinkDetector()
 
     override open func setUp() {
         super.setUp()
@@ -108,13 +121,11 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
         textView.backgroundColor = .clear
         textView.font = appearance.fonts.subheadline
         textView.textContainerInset = .zero
-        textView.textColor = appearance.colorPalette.text
-
-        authorAvatarView.contentMode = .scaleAspectFit
+        textView.textColor = appearance.colorPalette.textPrimary
 
         contentContainerView.layer.cornerRadius = 16
         contentContainerView.layer.borderWidth = 1
-        contentContainerView.layer.borderColor = appearance.colorPalette.border.cgColor
+        contentContainerView.layer.borderColor = appearance.colorPalette.borderCoreDefault.cgColor
         contentContainerView.layer.masksToBounds = true
     }
 
@@ -132,8 +143,9 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
 
         containerView.addArrangedSubview(authorAvatarView)
         containerView.addArrangedSubview(contentContainerView)
-        
+
         contentContainerView.addArrangedSubview(attachmentPreviewView)
+        contentContainerView.addArrangedSubview(voiceRecordingAttachmentQuotedPreview)
         contentContainerView.addArrangedSubview(textView)
 
         NSLayoutConstraint.activate([
@@ -148,19 +160,20 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
 
         attachmentPreviewView.layer.cornerRadius = attachmentPreviewSize.width / 4
         attachmentPreviewView.layer.masksToBounds = true
+
+        voiceRecordingAttachmentQuotedPreview.isHidden = true
     }
 
     override open func updateContent() {
         guard let message = content?.message else { return }
         guard let avatarAlignment = content?.avatarAlignment else { return }
 
-        textView.text = message.text
-
         contentContainerView.backgroundColor = message.linkAttachments.isEmpty
-            ? appearance.colorPalette.popoverBackground
-            : appearance.colorPalette.highlightedAccentBackground1
-
-        setAvatar(imageUrl: message.author.imageURL)
+            ? appearance.colorPalette.backgroundCoreElevation1
+            : appearance.colorPalette.backgroundCoreSurfaceSubtle
+        
+        setText(message.textContent ?? "")
+        authorAvatarView.content = message.author
         setAvatarAlignment(avatarAlignment)
 
         if isAttachmentsEmpty {
@@ -169,19 +182,36 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
             setAttachmentPreview(for: message)
             showAttachmentPreview()
         }
+
+        if let currentUserLang = content?.channel?.membership?.language,
+           let translatedText = content?.message.translatedText(for: currentUserLang) {
+            textView.text = translatedText
+        }
+
+        if let poll = message.poll, !message.isDeleted {
+            let translationLanguage = components.messageAutoTranslationEnabled
+                ? content?.channel?.membership?.language
+                : nil
+            textView.text = "📊 \(poll.name(in: translationLanguage))"
+        }
     }
 
-    /// Sets the avatar image from a url or sets the placeholder image if the url is `nil`.
-    /// - Parameter imageUrl: The url of the image.
-    open func setAvatar(imageUrl: URL?) {
-        let placeholder = appearance.images.userAvatarPlaceholder1
-        components.imageLoader.loadImage(
-            into: authorAvatarView.imageView,
-            url: imageUrl,
-            imageCDN: components.imageCDN,
-            placeholder: placeholder,
-            preferredSize: .avatarThumbnailSize
+    /// Sets the text of the quoted message.
+    /// - Parameter text: A string representing the text of the quoted message.
+    open func setText(_ text: String) {
+        guard text != textView.text else { return }
+        
+        let color = content?.message.isDeleted == true ? appearance.colorPalette.textTertiary : appearance.colorPalette.textPrimary
+        let attributedText = NSMutableAttributedString(
+            string: text,
+            attributes: [
+                .foregroundColor: color,
+                .font: appearance.fonts.subheadline
+            ]
         )
+
+        attributedText.addLinks(detectedBy: linkDetector)
+        textView.attributedText = attributedText
     }
 
     /// Sets the avatar position in relation of the text bubble.
@@ -214,14 +244,30 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
     /// the attachments preview of the message, or if you want to support your custom attachment.
     /// - Parameter message: The message that contains all the attachments.
     open func setAttachmentPreview(for message: ChatMessage) {
+        let voiceRecordingPayload = message.voiceRecordingAttachments.first?.payload
+        if let voiceRecordingPayload = voiceRecordingPayload {
+            voiceRecordingAttachmentQuotedPreview.content = .init(
+                title: voiceRecordingPayload.title ?? message.text,
+                size: voiceRecordingPayload.file.size,
+                duration: voiceRecordingPayload.duration ?? 0,
+                audioAssetURL: voiceRecordingPayload.voiceRecordingURL
+            )
+        }
+
         if let filePayload = message.fileAttachments.first?.payload {
             attachmentPreviewView.contentMode = .scaleAspectFit
-            attachmentPreviewView.image = appearance.images.fileIcons[filePayload.file.type] ?? appearance.images.fileFallback
+            let fileKey = filePayload.file.type.rawValue
+            attachmentPreviewView.image = appearance.images.fileIconPreviews[fileKey] ?? appearance.images.iconOther
             textView.text = message.text.isEmpty ? filePayload.title : message.text
+        } else if let audioPayload = message.audioAttachments.first?.payload {
+            attachmentPreviewView.contentMode = .scaleAspectFit
+            let fileKey = audioPayload.file.type.rawValue
+            attachmentPreviewView.image = appearance.images.fileIconPreviews[fileKey] ?? appearance.images.iconAudio
+            textView.text = message.text.isEmpty ? audioPayload.title : message.text
         } else if let imagePayload = message.imageAttachments.first?.payload {
             attachmentPreviewView.contentMode = .scaleAspectFill
             setAttachmentPreviewImage(url: imagePayload.imageURL)
-            textView.text = message.text.isEmpty ? "Photo" : message.text
+            textView.text = message.text.isEmpty ? L10n.Composer.QuotedMessage.photo : message.text
         } else if let linkPayload = message.linkAttachments.first?.payload {
             attachmentPreviewView.contentMode = .scaleAspectFill
             setAttachmentPreviewImage(url: linkPayload.previewURL)
@@ -229,34 +275,40 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
         } else if let giphyPayload = message.giphyAttachments.first?.payload {
             attachmentPreviewView.contentMode = .scaleAspectFill
             setAttachmentPreviewImage(url: giphyPayload.previewURL)
-            textView.text = message.text.isEmpty ? "Giphy" : message.text
-        } else if let videoPayload = message.videoAttachments.first?.payload {
+            textView.text = message.text.isEmpty ? L10n.Composer.QuotedMessage.giphy : message.text
+        } else if let videoAttachment = message.videoAttachments.first {
             attachmentPreviewView.contentMode = .scaleAspectFill
-            setVideoAttachmentPreviewImage(url: videoPayload.videoURL)
-            textView.text = message.text.isEmpty ? videoPayload.title : message.text
+            textView.text = message.text.isEmpty ? videoAttachment.payload.title : message.text
+            setVideoAttachmentPreviewImage(attachment: videoAttachment)
+        } else if voiceRecordingPayload != nil {
+            textView.text = nil
+        } else {
+            setUnsupportedAttachmentPreview(for: message)
         }
     }
-    
+
     /// Sets the image from the given URL into `attachmentPreviewView.image`
     /// - Parameter url: The URL from which the image is to be loaded
     open func setAttachmentPreviewImage(url: URL?) {
-        components.imageLoader.loadImage(
+        components.mediaLoader.loadImage(
             into: attachmentPreviewView,
-            url: url,
-            imageCDN: components.imageCDN,
-            preferredSize: attachmentPreviewSize
+            from: url,
+            with: ImageLoaderOptions(resize: .init(attachmentPreviewSize))
         )
     }
-    
-    /// Set the image from the given URL into `attachmentPreviewImage.image`
-    /// - Parameter url: The URL from which to generate the image on the video
-    open func setVideoAttachmentPreviewImage(url: URL?) {
-        guard let url = url else { return }
-        
-        components.videoLoader.loadPreviewForVideo(at: url) { [weak self] in
+
+    /// Set the image from the given video attachment into `attachmentPreviewImage.image`.
+    ///
+    /// Uses the attachment's thumbnail URL when available, falling back to
+    /// generating a preview frame from the video.
+    /// - Parameter attachment: The video attachment to load the preview for.
+    open func setVideoAttachmentPreviewImage(attachment: ChatMessageVideoAttachment) {
+        components.mediaLoader.loadVideoPreview(
+            with: attachment
+        ) { [weak self] in
             switch $0 {
             case let .success(preview):
-                self?.attachmentPreviewView.image = preview
+                self?.attachmentPreviewView.image = preview.image
             case let .failure(error):
                 self?.attachmentPreviewView.image = nil
                 log.error("This \(error) received for processing Video Preview image.")
@@ -266,8 +318,10 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
 
     /// Show the attachment preview view.
     open func showAttachmentPreview() {
+        let containsVoiceRecording = content?.message.voiceRecordingAttachments.isEmpty == false
         Animate {
-            self.attachmentPreviewView.isHidden = false
+            self.voiceRecordingAttachmentQuotedPreview.isHidden = !containsVoiceRecording
+            self.attachmentPreviewView.isHidden = containsVoiceRecording
         }
     }
 
@@ -275,6 +329,14 @@ open class QuotedChatMessageView: _View, ThemeProvider, SwiftUIRepresentable {
     open func hideAttachmentPreview() {
         Animate {
             self.attachmentPreviewView.isHidden = true
+            self.voiceRecordingAttachmentQuotedPreview.isHidden = true
         }
+    }
+
+    /// Sets the unsupported attachment content to the preview view.
+    open func setUnsupportedAttachmentPreview(for message: ChatMessage) {
+        attachmentPreviewView.contentMode = .scaleAspectFit
+        attachmentPreviewView.image = appearance.images.iconOther
+        textView.text = message.text.isEmpty ? L10n.Message.unsupportedAttachment : message.text
     }
 }

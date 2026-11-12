@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -13,7 +13,7 @@ open class CellSeparatorReusableView: _CollectionReusableView, AppearanceProvide
     override open func setUpAppearance() {
         super.setUpAppearance()
         backgroundColor = .clear
-        separatorView.backgroundColor = appearance.colorPalette.border
+        separatorView.backgroundColor = appearance.colorPalette.borderCoreDefault
     }
 
     override open func setUpLayout() {

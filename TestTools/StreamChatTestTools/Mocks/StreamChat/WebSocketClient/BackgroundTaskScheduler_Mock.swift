@@ -1,23 +1,23 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
 
 /// Mock implementation of `BackgroundTaskScheduler`.
-final class BackgroundTaskScheduler_Mock: BackgroundTaskScheduler {
+final class BackgroundTaskScheduler_Mock: BackgroundTaskScheduler, @unchecked Sendable {
     var isAppActive_called: Bool = false
     var isAppActive_returns: Bool = true
     var isAppActive: Bool {
         isAppActive_called = true
         return isAppActive_returns
     }
-    
+
     var beginBackgroundTask_called: Bool = false
-    var beginBackgroundTask_expirationHandler: (() -> Void)?
+    var beginBackgroundTask_expirationHandler: (@MainActor () -> Void)?
     var beginBackgroundTask_returns: Bool = true
-    func beginTask(expirationHandler: (() -> Void)?) -> Bool {
+    func beginTask(expirationHandler: (@MainActor () -> Void)?) -> Bool {
         beginBackgroundTask_called = true
         beginBackgroundTask_expirationHandler = expirationHandler
         return beginBackgroundTask_returns
@@ -39,7 +39,7 @@ final class BackgroundTaskScheduler_Mock: BackgroundTaskScheduler {
         startListeningForAppStateUpdates_onBackground = onEnteringBackground
         startListeningForAppStateUpdates_onForeground = onEnteringForeground
     }
-    
+
     var stopListeningForAppStateUpdates_called: Bool = false
     func stopListeningForAppStateUpdates() {
         stopListeningForAppStateUpdates_called = true
@@ -51,7 +51,7 @@ extension BackgroundTaskScheduler_Mock {
         isAppActive_returns = false
         startListeningForAppStateUpdates_onBackground?()
     }
-    
+
     func simulateAppGoingToForeground() {
         isAppActive_returns = true
         startListeningForAppStateUpdates_onForeground?()

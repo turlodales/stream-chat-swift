@@ -1,22 +1,16 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import XCTest
 
 final class MessageDeliveryStatus_ChannelList_Tests: StreamTestCase {
-
     let message = "message"
     var failedMessage: String { "failed \(message)" }
 
     let threadReply = "thread reply"
     var pendingThreadReply: String { "pending \(threadReply)" }
     var failedThreadReply: String { "failed \(threadReply)" }
-
-    override func setUpWithError() throws {
-        try super.setUpWithError()
-        addTags([.messageDeliveryStatus])
-    }
 
     func test_deliveryStatusClocksShownInPreview_whenTheLastMessageIsInPendingState() {
         linkToScenario(withId: 166)
@@ -25,9 +19,9 @@ final class MessageDeliveryStatus_ChannelList_Tests: StreamTestCase {
             userRobot
                 .login()
                 .openChannel()
-            backendRobot.delayServerResponse(byTimeInterval: 10.0)
         }
         AND("user sends new message") {
+            backendRobot.delayNewMessages(by: 10)
             userRobot.sendMessage(message, waitForAppearance: false)
         }
         WHEN("user retuns to the channel list before the message is sent") {
@@ -58,7 +52,6 @@ final class MessageDeliveryStatus_ChannelList_Tests: StreamTestCase {
             userRobot
                 .assertMessageReadCountInChannelPreview(readBy: 0)
                 .assertMessageDeliveryStatusInChannelPreview(.sent)
-
         }
     }
 
@@ -67,7 +60,6 @@ final class MessageDeliveryStatus_ChannelList_Tests: StreamTestCase {
 
         GIVEN("user opens the channel") {
             userRobot
-                .setConnectivitySwitchVisibility(to: .on)
                 .login()
                 .openChannel()
         }
@@ -82,8 +74,9 @@ final class MessageDeliveryStatus_ChannelList_Tests: StreamTestCase {
         }
         THEN("error indicator is shown for the failed message") {
             userRobot
-                .assertMessageDeliveryStatus(.failed)
-                .assertMessageReadCount(readBy: 0)
+                .assertLastMessageInChannelPreview(failedMessage)
+                .assertMessageDeliveryStatusInChannelPreview(.failed)
+                .assertMessageReadCountInChannelPreview(readBy: 0)
         }
     }
 
@@ -95,7 +88,7 @@ final class MessageDeliveryStatus_ChannelList_Tests: StreamTestCase {
                 .login()
                 .openChannel()
         }
-        AND("user succesfully sends new message") {
+        AND("user successfully sends new message") {
             userRobot.sendMessage(message)
         }
         AND("user retuns to the channel list") {
@@ -111,55 +104,11 @@ final class MessageDeliveryStatus_ChannelList_Tests: StreamTestCase {
             userRobot.assertMessageReadCountInChannelPreview(readBy: 0)
         }
     }
-
-    func test_deliveryStatusHiddenInPreview_whenMessageIsSentAndReadEventsIsDisabled() {
-        linkToScenario(withId: 170)
-
-        GIVEN("user opens chat") {
-            backendRobot.setReadEvents(to: false)
-            userRobot
-                .login()
-                .openChannel()
-        }
-        AND("user sends a new message") {
-            userRobot.sendMessage(message)
-        }
-        WHEN("user retuns to the channel list") {
-            userRobot.tapOnBackButton()
-        }
-        THEN("delivery status is hidden") {
-            userRobot
-                .assertMessageDeliveryStatusInChannelPreview(nil)
-                .assertMessageReadCount(readBy: 0)
-        }
-    }
-
-    func test_deliveryStatusHiddenInPreview_whenMessageIsSentByParticipant() {
-        linkToScenario(withId: 171)
-
-        GIVEN("user opens chat") {
-            userRobot
-                .login()
-                .openChannel()
-        }
-        WHEN("participant sends a new message") {
-            participantRobot.sendMessage(message)
-        }
-        AND("user retuns to the channel list") {
-            userRobot.tapOnBackButton()
-        }
-        THEN("delivery status is hidden") {
-            userRobot
-                .assertMessageDeliveryStatus(nil)
-                .assertMessageReadCount(readBy: 0)
-        }
-    }
 }
 
 // MARK: Thread Reply
 
 extension MessageDeliveryStatus_ChannelList_Tests {
-
     func test_noCheckmarkShownForMessageInPreview_whenThreadReplyIsSent() {
         linkToScenario(withId: 172)
 
@@ -172,7 +121,7 @@ extension MessageDeliveryStatus_ChannelList_Tests {
             participantRobot.sendMessage(message)
         }
         AND("user replies to the message in thread") {
-            userRobot.replyToMessageInThread(threadReply)
+            userRobot.sendMessageInThread(threadReply)
         }
         WHEN("user retuns to the channel list") {
             userRobot.moveToChannelListFromThreadReplies()
@@ -190,7 +139,6 @@ extension MessageDeliveryStatus_ChannelList_Tests {
 
         GIVEN("user opens the channel") {
             userRobot
-                .setConnectivitySwitchVisibility(to: .on)
                 .login()
                 .openChannel()
         }
@@ -201,7 +149,7 @@ extension MessageDeliveryStatus_ChannelList_Tests {
             userRobot.setConnectivity(to: .off)
         }
         AND("user replies to message in thread") {
-            userRobot.replyToMessageInThread(failedThreadReply, waitForAppearance: false)
+            userRobot.sendMessageInThread(failedThreadReply, waitForAppearance: false)
         }
         WHEN("user retuns to the channel list") {
             userRobot.moveToChannelListFromThreadReplies()
@@ -226,7 +174,7 @@ extension MessageDeliveryStatus_ChannelList_Tests {
             participantRobot.sendMessage(message)
         }
         AND("user replies to message in thread") {
-            userRobot.replyToMessageInThread(threadReply)
+            userRobot.sendMessageInThread(threadReply)
         }
         AND("participant reads the user's thread reply") {
             participantRobot.readMessage()
@@ -244,32 +192,6 @@ extension MessageDeliveryStatus_ChannelList_Tests {
         }
     }
 
-    func test_noCheckmarkShownForMessageInPreview_whenThreadReplyIsSentAndReadEventsIsDisabled() {
-        linkToScenario(withId: 176)
-
-        GIVEN("user opens chat") {
-            backendRobot.setReadEvents(to: false)
-            userRobot
-                .login()
-                .openChannel()
-        }
-        AND("participant sends a new message") {
-            participantRobot.sendMessage(message)
-        }
-        AND("user replies to message in thread") {
-            userRobot.replyToMessageInThread(threadReply)
-        }
-        WHEN("user retuns to the channel list") {
-            userRobot.moveToChannelListFromThreadReplies()
-        }
-        THEN("delivery status is hidden") {
-            userRobot
-                .assertLastMessageInChannelPreview(message)
-                .assertMessageDeliveryStatus(nil)
-                .assertMessageReadCount(readBy: 0)
-        }
-    }
-
     func test_noCheckmarkShownForMessageInPreview_whenThreadReplyIsSentByParticipant() {
         linkToScenario(withId: 177)
 
@@ -282,16 +204,16 @@ extension MessageDeliveryStatus_ChannelList_Tests {
             participantRobot.sendMessage(message)
         }
         AND("participant replies to message in thread") {
-            participantRobot.replyToMessageInThread(threadReply)
+            participantRobot.sendMessageInThread(threadReply)
         }
         WHEN("user retuns to the channel list") {
-            userRobot.moveToChannelListFromThreadReplies()
+            userRobot.moveToChannelListFromMessageList()
         }
         THEN("delivery status is hidden") {
             userRobot
                 .assertLastMessageInChannelPreview(message)
-                .assertMessageDeliveryStatus(nil)
-                .assertMessageReadCount(readBy: 0)
+                .assertMessageDeliveryStatusInChannelPreview(nil)
+                .assertMessageReadCountInChannelPreview(readBy: 0)
         }
     }
 }

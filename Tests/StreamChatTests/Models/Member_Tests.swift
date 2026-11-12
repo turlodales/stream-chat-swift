@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -38,5 +38,81 @@ final class MemberRole_Tests: XCTestCase {
         // Try with some role which isn't pre-defined
         json = try embed("some_unknown_role")
         XCTAssertEqual((try? decoder.decode(RoleContainer.self, from: json))?.role, "some_unknown_role")
+    }
+
+    func test_channelRoleValue_mapsDecodedAndPredefinedRoles() throws {
+        struct RoleContainer: Decodable {
+            let role: MemberRole
+        }
+
+        func decodedRole(_ value: String) throws -> MemberRole {
+            let json = try JSONEncoder().encode(["role": value])
+            return try JSONDecoder().decode(RoleContainer.self, from: json).role
+        }
+
+        XCTAssertEqual(MemberRole.member.channelRoleValue, "channel_member")
+        XCTAssertEqual(MemberRole.moderator.channelRoleValue, "channel_moderator")
+        XCTAssertEqual(try decodedRole("member").channelRoleValue, "channel_member")
+        XCTAssertEqual(try decodedRole("channel_member").channelRoleValue, "channel_member")
+        XCTAssertEqual(try decodedRole("moderator").channelRoleValue, "channel_moderator")
+        XCTAssertEqual(try decodedRole("channel_moderator").channelRoleValue, "channel_moderator")
+        XCTAssertEqual(MemberRole.admin.channelRoleValue, "admin")
+        XCTAssertEqual(try decodedRole("some_unknown_role").channelRoleValue, "some_unknown_role")
+    }
+
+    func test_replacing_correctlyUpdatesFields() {
+        // GIVEN
+        let originalMember = ChatChannelMember.mock(
+            id: .unique,
+            name: "original name",
+            imageURL: URL(string: "http://original.com"),
+            isOnline: true,
+            isBanned: false,
+            userRole: .user,
+            language: .english,
+            extraData: ["original": .string("data")],
+            memberExtraData: ["original": .string("member_data")]
+        )
+        
+        // WHEN
+        let newName = "new name"
+        let newImageURL = URL(string: "http://new.com")
+        let newUserExtraData: [String: RawJSON] = ["new": .string("data")]
+        let newMemberExtraData: [String: RawJSON] = ["new": .string("member_data")]
+        
+        let updatedMember = originalMember.replacing(
+            name: newName,
+            imageURL: newImageURL,
+            userExtraData: newUserExtraData,
+            memberExtraData: newMemberExtraData
+        )
+        
+        // THEN
+        // Updated fields
+        XCTAssertEqual(updatedMember.name, newName)
+        XCTAssertEqual(updatedMember.imageURL, newImageURL)
+        XCTAssertEqual(updatedMember.extraData, newUserExtraData)
+        XCTAssertEqual(updatedMember.memberExtraData, newMemberExtraData)
+        
+        // Unchanged fields
+        XCTAssertEqual(updatedMember.id, originalMember.id)
+        XCTAssertEqual(updatedMember.isOnline, originalMember.isOnline)
+        XCTAssertEqual(updatedMember.isBanned, originalMember.isBanned)
+        XCTAssertEqual(updatedMember.userRole, originalMember.userRole)
+        XCTAssertEqual(updatedMember.language, originalMember.language)
+
+        // Test replacing some fields while erasing others
+        let partialUpdatedMember = originalMember.replacing(
+            name: "replaced",
+            imageURL: nil,
+            userExtraData: nil,
+            memberExtraData: nil
+        )
+
+        XCTAssertEqual(partialUpdatedMember.id, originalMember.id)
+        XCTAssertEqual(partialUpdatedMember.name, "replaced")
+        XCTAssertEqual(partialUpdatedMember.imageURL, nil)
+        XCTAssertEqual(partialUpdatedMember.extraData, [:])
+        XCTAssertEqual(partialUpdatedMember.memberExtraData, [:])
     }
 }

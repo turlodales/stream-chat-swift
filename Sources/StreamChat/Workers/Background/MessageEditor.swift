@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -18,95 +18,144 @@ import Foundation
 /// - Message edit retry
 /// - Start editing messages when connection status changes (offline -> online)
 ///
-class MessageEditor: Worker {
+class MessageEditor: Worker, @unchecked Sendable {
     @Atomic private var pendingMessageIDs: Set<MessageId> = []
-    
-    private let observer: ListDatabaseObserver<MessageDTO, MessageDTO>
+
+    private let observer: StateLayerDatabaseObserver<ListResult, MessageId, MessageDTO>
     private let messageRepository: MessageRepository
+    private var continuations = [MessageId: CheckedContinuation<ChatMessage, Error>]()
+    private let continuationsQueue = DispatchQueue(label: "co.getStream.ChatClient.MessageEditor")
 
     init(messageRepository: MessageRepository, database: DatabaseContainer, apiClient: APIClient) {
-        observer = .init(
-            context: database.backgroundReadOnlyContext,
+        observer = StateLayerDatabaseObserver(
+            database: database,
             fetchRequest: MessageDTO.messagesPendingSyncFetchRequest(),
-            itemCreator: { $0 }
+            itemCreator: { $0.id },
+            itemReuseKeyPaths: nil
         )
         self.messageRepository = messageRepository
         super.init(database: database, apiClient: apiClient)
-        
+
         startObserving()
     }
-    
+
     // MARK: - Private
 
     private func startObserving() {
         do {
-            try observer.startObserving()
-            observer.onChange = { [weak self] in self?.handleChanges(changes: $0) }
+            try observer.startObserving(onContextDidChange: { [weak self] _, changes in
+                self?.handleChanges(changes: changes)
+            })
             let changes = observer.items.map { ListChange.insert($0, index: .init(item: 0, section: 0)) }
             handleChanges(changes: changes)
         } catch {
             log.error("Failed to start MessageEditor worker. \(error)")
         }
     }
-    
-    private func handleChanges(changes: [ListChange<MessageDTO>]) {
+
+    private func handleChanges(changes: [ListChange<MessageId>]) {
         guard !changes.isEmpty else { return }
-        
+
+        var wasEmpty: Bool = false
         _pendingMessageIDs.mutate { pendingMessageIDs in
-            let wasEmpty = pendingMessageIDs.isEmpty
+            wasEmpty = pendingMessageIDs.isEmpty
             changes.pendingEditMessageIDs.forEach { pendingMessageIDs.insert($0) }
-            if wasEmpty {
-                processNextMessage()
-            }
+        }
+
+        if wasEmpty {
+            processNextMessage()
         }
     }
 
     private func processNextMessage() {
         database.write { [weak self, weak messageRepository] session in
             guard let messageId = self?.pendingMessageIDs.first else { return }
-            
+
             guard
                 let dto = session.message(id: messageId),
                 dto.localMessageState == .pendingSync
             else {
-                self?.removeMessageIDAndContinue(messageId)
+                self?.removeMessageIDAndContinue(messageId, result: .failure(ClientError.MessageDoesNotExist(messageId: messageId)))
                 return
             }
-            
-            let requestBody = dto.asRequestBody() as MessageRequestBody
-            messageRepository?.updateMessage(withID: messageId, localState: .syncing) {
-                self?.apiClient.request(endpoint: .editMessage(payload: requestBody)) {
-                    let newMessageState: LocalMessageState? = $0.error == nil ? nil : .syncingFailed
-                    
-                    let isBounced = ($0.error as? ClientError)?.isBouncedMessageError ?? false
-                    
+
+            let requestBody = dto.asMessageRequest()
+            let skipPush = dto.skipPush
+            let skipEnrichUrl = dto.skipEnrichUrl
+            messageRepository?.updateMessage(withID: messageId, localState: .syncing) { [weak self, weak messageRepository] _ in
+                self?.apiClient.request(
+                    endpoint: .updateMessage(
+                        id: messageId,
+                        updateMessageRequest: UpdateMessageRequest(
+                            message: requestBody,
+                            skipEnrichUrl: skipEnrichUrl,
+                            skipPush: skipPush
+                        )
+                    )
+                ) { [weak self, weak messageRepository] apiResult in
+                    let newMessageState: LocalMessageState? = apiResult.error == nil ? nil : .syncingFailed
+
                     messageRepository?.updateMessage(
                         withID: messageId,
-                        localState: newMessageState,
-                        isBounced: isBounced
-                    ) {
-                        self?.removeMessageIDAndContinue(messageId)
+                        localState: newMessageState
+                    ) { [weak self] updateResult in
+                        switch apiResult {
+                        case .success:
+                            self?.removeMessageIDAndContinue(messageId, result: updateResult)
+                        case let .failure(apiError):
+                            self?.removeMessageIDAndContinue(messageId, result: .failure(apiError))
+                        }
                     }
                 }
             }
         }
     }
-    
-    private func removeMessageIDAndContinue(_ messageId: MessageId) {
+
+    private func removeMessageIDAndContinue(_ messageId: MessageId, result: Result<ChatMessage, Error>) {
         _pendingMessageIDs.mutate { $0.remove(messageId) }
+        notifyAPIRequestFinished(for: messageId, result: result)
         processNextMessage()
     }
 }
 
-private extension Array where Element == ListChange<MessageDTO> {
+private extension Array where Element == ListChange<MessageId> {
     var pendingEditMessageIDs: [MessageId] {
         compactMap {
             switch $0 {
-            case let .insert(dto, _), let .update(dto, _):
-                return dto.id
+            case let .insert(messageId, _), let .update(messageId, _):
+                return messageId
             case .move, .remove:
                 return nil
             }
+        }
+    }
+}
+
+// MARK: - Chat State Layer
+
+extension MessageEditor {
+    func waitForAPIRequest(messageId: MessageId) async throws -> ChatMessage {
+        try await withCheckedThrowingContinuation { continuation in
+            registerContinuation(forMessage: messageId, continuation: continuation)
+        }
+    }
+    
+    private func registerContinuation(
+        forMessage messageId: MessageId,
+        continuation: CheckedContinuation<ChatMessage, Error>
+    ) {
+        continuationsQueue.async {
+            self.continuations[messageId] = continuation
+        }
+    }
+    
+    private func notifyAPIRequestFinished(
+        for messageId: MessageId,
+        result: Result<ChatMessage, Error>
+    ) {
+        continuationsQueue.async {
+            guard let continuation = self.continuations.removeValue(forKey: messageId) else { return }
+            continuation.resume(with: result)
         }
     }
 }

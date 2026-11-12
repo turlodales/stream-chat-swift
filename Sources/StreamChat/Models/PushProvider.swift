@@ -1,11 +1,11 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
 /// A type that represents the supported push providers.
-public struct PushProvider: RawRepresentable, Hashable, ExpressibleByStringLiteral {
+public struct PushProvider: RawRepresentable, Hashable, ExpressibleByStringLiteral, Sendable {
     public static let firebase: Self = "firebase"
     public static let apn: Self = "apn"
 

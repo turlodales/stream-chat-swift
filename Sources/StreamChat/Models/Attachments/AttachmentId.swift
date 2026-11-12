@@ -1,11 +1,11 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
 /// An object that uniquely identifies a message attachment.
-public struct AttachmentId: Hashable {
+public struct AttachmentId: Hashable, Sendable {
     /// The cid of the channel the attachment belongs to.
     public let cid: ChannelId
 
@@ -30,7 +30,7 @@ public struct AttachmentId: Hashable {
 
 extension AttachmentId: RawRepresentable {
     static let separator: String = "/"
-    
+
     public init?(rawValue: String) {
         let components = rawValue.components(separatedBy: Self.separator)
         guard

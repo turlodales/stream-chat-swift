@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -35,7 +35,6 @@ final class iMessageComposerVC: ComposerVC {
         )
 
         ["😃", "😇", "😅", "😂"].forEach { emoji in
-
             let action = UIAlertAction(title: emoji, style: .default) { _ in
                 let inputTextView = self.composerView.inputMessageView.textView
                 inputTextView.replaceSelectedText(emoji)

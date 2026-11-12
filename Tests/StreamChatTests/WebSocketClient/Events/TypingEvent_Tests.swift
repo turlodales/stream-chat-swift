@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -7,13 +7,13 @@
 import XCTest
 
 final class TypingEvent_Tests: XCTestCase {
-    var eventDecoder: EventDecoder!
+    var eventDecoder: EventDTODecoder!
     var cid: ChannelId = ChannelId(type: .messaging, id: "general")
     var userId = "luke_skywalker"
 
     override func setUp() {
         super.setUp()
-        eventDecoder = EventDecoder()
+        eventDecoder = EventDTODecoder()
     }
 
     override func tearDown() {
@@ -30,9 +30,9 @@ final class TypingEvent_Tests: XCTestCase {
 
         XCTAssertTrue(event.isTyping)
         XCTAssertEqual(event.cid, cid)
-        XCTAssertEqual(event.user.id, userId)
+        XCTAssertEqual(event.user?.id, userId)
     }
-    
+
     func test_parseTypingStoptEvent() throws {
         let json = XCTestCase.mockData(fromJSONFile: "UserStopTyping")
         guard let event = try eventDecoder.decode(from: json) as? TypingEventDTO else {
@@ -42,7 +42,7 @@ final class TypingEvent_Tests: XCTestCase {
 
         XCTAssertFalse(event.isTyping)
         XCTAssertEqual(event.cid, cid)
-        XCTAssertEqual(event.user.id, userId)
+        XCTAssertEqual(event.user?.id, userId)
         XCTAssertFalse(event.isThread)
     }
 
@@ -56,7 +56,7 @@ final class TypingEvent_Tests: XCTestCase {
         XCTAssertTrue(event.isTyping)
         XCTAssertTrue(event.isThread)
     }
-    
+
     func test_parseTypingStoptEventInThread() throws {
         let json = XCTestCase.mockData(fromJSONFile: "UserStopTypingThread")
         guard let event = try eventDecoder.decode(from: json) as? TypingEventDTO else {
@@ -67,69 +67,85 @@ final class TypingEvent_Tests: XCTestCase {
         XCTAssertFalse(event.isTyping)
         XCTAssertTrue(event.isThread)
     }
-    
+
     // MARK: DTO -> Event
-    
+
     func test_startTypingEventDTO_toDomainEvent() throws {
-        // Create database session
         let session = DatabaseContainer_Spy(kind: .inMemory).viewContext
-        
-        // Create event payload
-        let eventPayload = EventPayload(
-            eventType: .userStartTyping,
+        let eventPayload = TypingStartEventDTO(
             cid: .unique,
-            user: .dummy(userId: .unique),
             createdAt: .unique,
-            parentId: .unique
+            parentId: .unique,
+            user: .dummy(userId: .unique)
         )
-        
-        // Create event DTO
-        let dto = try TypingEventDTO(from: eventPayload)
-        
-        // Assert event creation fails due to missing dependencies
-        XCTAssertNil(dto.toDomainEvent(session: session))
-        
-        // Save event payload to database
-        try session.saveUser(payload: eventPayload.user!)
-        
-        // Assert event can be created from DTO and has correct fields
-        let event = try XCTUnwrap(dto.toDomainEvent(session: session) as? TypingEvent)
+
+        let event = try XCTUnwrap(eventPayload.toDomainEvent(session: session) as? TypingEvent)
         XCTAssertEqual(event.cid, eventPayload.cid)
         XCTAssertEqual(event.isTyping, true)
         XCTAssertEqual(event.user.id, eventPayload.user!.id)
+        XCTAssertNil(event.memberInfo)
         XCTAssertEqual(event.parentId, eventPayload.parentId)
         XCTAssertEqual(event.isThread, true)
         XCTAssertEqual(event.createdAt, eventPayload.createdAt)
     }
-    
+
     func test_stopTypingEventDTO_toDomainEvent() throws {
-        // Create database session
         let session = DatabaseContainer_Spy(kind: .inMemory).viewContext
-        
-        // Create event payload
-        let eventPayload = EventPayload(
-            eventType: .userStopTyping,
+        let eventPayload = TypingStopEventDTO(
             cid: .unique,
-            user: .dummy(userId: .unique),
-            createdAt: .unique
+            createdAt: .unique,
+            user: .dummy(userId: .unique)
         )
-        
-        // Create event DTO
-        let dto = try TypingEventDTO(from: eventPayload)
-        
-        // Assert event creation fails due to missing dependencies
-        XCTAssertNil(dto.toDomainEvent(session: session))
-        
-        // Save event payload to database
-        try session.saveUser(payload: eventPayload.user!)
-        
-        // Assert event can be created from DTO and has correct fields
-        let event = try XCTUnwrap(dto.toDomainEvent(session: session) as? TypingEvent)
+
+        let event = try XCTUnwrap(eventPayload.toDomainEvent(session: session) as? TypingEvent)
         XCTAssertEqual(event.cid, eventPayload.cid)
         XCTAssertEqual(event.isTyping, false)
         XCTAssertEqual(event.user.id, eventPayload.user!.id)
         XCTAssertEqual(event.parentId, nil)
         XCTAssertEqual(event.isThread, false)
         XCTAssertEqual(event.createdAt, eventPayload.createdAt)
+    }
+
+    func test_parseTypingStartEvent_withMemberInfo() throws {
+        let json = """
+        {
+          "type": "typing.start",
+          "cid": "messaging:general",
+          "user": {
+            "custom": {},
+            "language": "",
+            "teams": [],
+            "id": "luke_skywalker",
+            "role": "user",
+            "created_at": "2020-12-07T11:36:47.059906Z",
+            "updated_at": "2021-04-22T18:57:47.14206Z",
+            "banned": false,
+            "online": true,
+            "name": "Luke"
+          },
+          "member": {
+            "channel_role": "channel_member",
+            "notifications_muted": false,
+            "custom": {
+              "is_premium": true,
+              "nickname": "Marty"
+            }
+          },
+          "created_at": "2021-04-22T22:05:51.726128615Z",
+          "custom": {}
+        }
+        """.data(using: .utf8)!
+
+        let event = try XCTUnwrap(try eventDecoder.decode(from: json) as? TypingEventDTO)
+
+        XCTAssertEqual(event.user?.id, userId)
+        XCTAssertEqual(event.member?.channelRole, "channel_member")
+        XCTAssertEqual(event.member?.custom?["is_premium"], .bool(true))
+        XCTAssertEqual(event.member?.custom?["nickname"], .string("Marty"))
+
+        let domainEvent = try XCTUnwrap(event.toDomainEvent(session: DatabaseContainer_Spy(kind: .inMemory).viewContext) as? TypingEvent)
+        XCTAssertEqual(domainEvent.memberInfo?.channelRole, .member)
+        XCTAssertEqual(domainEvent.memberInfo?.extraData["is_premium"], .bool(true))
+        XCTAssertEqual(domainEvent.memberInfo?.extraData["nickname"], .string("Marty"))
     }
 }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -8,113 +8,112 @@ import XCTest
 
 final class MemberModelDTO_Tests: XCTestCase {
     var database: DatabaseContainer!
-    
+
     override func setUp() {
         super.setUp()
         database = DatabaseContainer_Spy()
     }
-    
+
     override func tearDown() {
         AssertAsync.canBeReleased(&database)
         database = nil
         super.tearDown()
     }
-    
+
     func test_memberPayload_isStoredAndLoadedFromDB() throws {
         let userId = UUID().uuidString
         let channelId = ChannelId(type: .init(rawValue: "messsaging"), id: UUID().uuidString)
-        
-        let userPayload: UserPayload = .init(
-            id: userId,
-            name: .unique,
-            imageURL: .unique(),
-            role: .admin,
-            createdAt: .unique,
-            updatedAt: .unique,
-            lastActiveAt: .unique,
-            isOnline: true,
-            isInvisible: true,
-            isBanned: true,
+
+        let userPayload: UserPayload = .dummy(
+            userId: userId,
+            teamsRole: ["ios": "guest"],
+            extraData: ["k": .string("v")],
             teams: ["RED", "GREEN"],
-            extraData: ["k": .string("v")]
+            language: "pt",
+            isBanned: true
         )
-        
+
         let payload: MemberPayload = .init(
             user: userPayload,
+            userId: userPayload.id,
             role: .moderator,
+            status: "pending",
             createdAt: .unique,
             updatedAt: .unique,
+            deletedAt: .unique,
             banExpiresAt: .unique,
             isBanned: true,
-            isShadowBanned: true
+            isShadowBanned: true,
+            notificationsMuted: true,
+            extraData: ["is_premium": .bool(true)]
         )
-        
+
         // Asynchronously save the payload to the db
         try database.writeSynchronously { session in
             try! session.saveMember(payload: payload, channelId: channelId)
         }
-        
+
         // Load the member from the db and check it's the same member
         var loadedMember: ChatChannelMember? {
             try? database.viewContext.member(userId: userId, cid: channelId)?.asModel()
         }
 
         AssertAsync {
-            Assert.willBeEqual(payload.role, loadedMember?.memberRole)
+            Assert.willBeEqual(MemberRole(rawChannelValue: payload.channelRole), loadedMember?.memberRole)
+            Assert.willBeEqual(MemberStatus.pending, loadedMember?.memberStatus)
             Assert.willBeEqual(payload.createdAt, loadedMember?.memberCreatedAt)
             Assert.willBeEqual(payload.updatedAt, loadedMember?.memberUpdatedAt)
-            Assert.willBeEqual(payload.isBanned, loadedMember?.isBannedFromChannel)
-            Assert.willBeEqual(payload.banExpiresAt, loadedMember?.banExpiresAt)
-            Assert.willBeEqual(payload.isShadowBanned, loadedMember?.isShadowBannedFromChannel)
+            Assert.willBeEqual(payload.deletedAt, loadedMember?.memberDeletedAt)
+            Assert.willBeEqual(payload.banned, loadedMember?.isBannedFromChannel)
+            Assert.willBeEqual(payload.banExpires, loadedMember?.banExpiresAt)
+            Assert.willBeEqual(payload.shadowBanned, loadedMember?.isShadowBannedFromChannel)
+            Assert.willBeEqual(payload.notificationsMuted, loadedMember?.notificationsMuted)
 
-            Assert.willBeEqual(payload.user.id, loadedMember?.id)
-            Assert.willBeEqual(payload.user.isOnline, loadedMember?.isOnline)
-            Assert.willBeEqual(payload.user.isBanned, loadedMember?.isBanned)
-            Assert.willBeEqual(payload.user.role, loadedMember?.userRole)
-            Assert.willBeEqual(payload.user.createdAt, loadedMember?.userCreatedAt)
-            Assert.willBeEqual(payload.user.updatedAt, loadedMember?.userUpdatedAt)
-            Assert.willBeEqual(payload.user.lastActiveAt, loadedMember?.lastActiveAt)
-            Assert.willBeEqual(payload.user.extraData, loadedMember?.extraData)
-            Assert.willBeEqual(Set(payload.user.teams), loadedMember?.teams)
+            Assert.willBeEqual(payload.user!.id, loadedMember?.id)
+            Assert.willBeEqual(payload.user!.isOnline, loadedMember?.isOnline)
+            Assert.willBeEqual(payload.user!.isBanned, loadedMember?.isBanned)
+            Assert.willBeEqual(payload.user!.role, loadedMember?.userRole.rawValue)
+            Assert.willBeEqual(payload.user!.createdAt, loadedMember?.userCreatedAt)
+            Assert.willBeEqual(payload.user!.updatedAt, loadedMember?.userUpdatedAt)
+            Assert.willBeEqual(payload.user!.lastActiveAt, loadedMember?.lastActiveAt)
+            Assert.willBeEqual(payload.user!.extraData, loadedMember?.extraData)
+            Assert.willBeEqual(Set(payload.user!.teams), loadedMember?.teams)
+            Assert.willBeEqual(payload.user!.language, loadedMember?.language?.languageCode)
+            Assert.willBeEqual(true, loadedMember?.memberExtraData["is_premium"]?.boolValue)
+            Assert.willBeEqual(payload.user!.teamsRole, loadedMember?.teamsRole?.mapValues(\.rawValue))
         }
     }
-    
+
     func test_defaultExtraDataIsUsed_whenExtraDataDecodingFails() throws {
         let userId: UserId = .unique
         let channelId: ChannelId = .unique
-        
-        let userPayload: UserPayload = .init(
-            id: userId,
-            name: .unique,
-            imageURL: .unique(),
-            role: .admin,
-            createdAt: .unique,
-            updatedAt: .unique,
-            lastActiveAt: .unique,
-            isOnline: true,
-            isInvisible: true,
-            isBanned: true,
-            extraData: .init()
+
+        let userPayload: UserPayload = .dummy(
+            userId: userId,
+            teamsRole: ["ios": "guest"],
+            teams: [],
+            isBanned: true
         )
-        
+
         let payload: MemberPayload = .init(
             user: userPayload,
+            userId: userPayload.id,
             role: .moderator,
             createdAt: .unique,
             updatedAt: .unique
         )
-        
+
         try database.writeSynchronously { session in
             // Save the member
             let memberDTO = try! session.saveMember(payload: payload, channelId: channelId)
             // Make the extra data JSON invalid
             memberDTO.user.extraData = #"{"invalid": json}"#.data(using: .utf8)!
         }
-        
+
         let loadedMember: ChatChannelMember? = try? database.viewContext.member(userId: userId, cid: channelId)?.asModel()
         XCTAssertEqual(loadedMember?.extraData, [:])
     }
-    
+
     func test_saveMember_savesQuery_and_linksMember_ifQueryIsProvided() throws {
         let userId: UserId = .unique
         let cid: ChannelId = .unique
@@ -128,10 +127,205 @@ final class MemberModelDTO_Tests: XCTestCase {
             try session.saveChannel(payload: self.dummyPayload(with: cid))
             try session.saveMember(payload: member, channelId: cid, query: query, cache: nil)
         }
-        
+
         // Assert query and member exists in the database and linked.
         let loadedQuery = try XCTUnwrap(database.viewContext.channelMemberListQuery(queryHash: query.queryHash))
         let loadedMember = try XCTUnwrap(database.viewContext.member(userId: userId, cid: cid))
         XCTAssertTrue(loadedQuery.members.contains(loadedMember))
+    }
+
+    func test_saveMembers_whenFirstPage_clearPreviousMembersFromQuery() throws {
+        let cid: ChannelId = .unique
+        let members: MembersResponse = .init(members: [.dummy(), .dummy()])
+        let query = ChannelMemberListQuery(cid: cid, filter: .equal(.isModerator, to: true))
+
+        // Save previous members
+        let previousMembers = try saveDummyMembers(toQuery: query, cid: cid)
+        XCTAssertEqual(previousMembers.count, 4)
+
+        // Save new members
+        nonisolated(unsafe) var newMembers: [ChatChannelMember] = []
+        try database.writeSynchronously { session in
+            newMembers = try session.saveMembers(response: members, channelId: cid, query: query)
+                .map { try $0.asModel() }
+        }
+
+        // Assert the members in the DB are only the new members.
+        let loadedQuery = try XCTUnwrap(database.viewContext.channelMemberListQuery(queryHash: query.queryHash))
+        XCTAssertEqual(Set(loadedQuery.members.map(\.user.id)), Set(newMembers.map(\.id)))
+    }
+
+    func test_saveMembers_whenAnotherPage_doesNotClearPreviousMembersFromQuery() throws {
+        let cid: ChannelId = .unique
+        let members: MembersResponse = .init(members: [.dummy(), .dummy()])
+        nonisolated(unsafe) var query = ChannelMemberListQuery(cid: cid)
+        query.pagination = .init(pageSize: 20, offset: 25)
+
+        // Save previous members
+        let previousMembers = try saveDummyMembers(toQuery: query, cid: cid)
+        XCTAssertEqual(previousMembers.count, 4)
+
+        // Save new members
+        nonisolated(unsafe) var newMembers: [ChatChannelMember] = []
+        try database.writeSynchronously { session in
+            newMembers = try session.saveMembers(response: members, channelId: cid, query: query)
+                .map { try $0.asModel() }
+        }
+
+        // Assert the members in the DB contain the old and new members
+        let loadedQuery = try XCTUnwrap(database.viewContext.channelMemberListQuery(queryHash: query.queryHash))
+        let allMembers = previousMembers + newMembers
+        XCTAssertEqual(Set(loadedQuery.members.map(\.user.id)), Set(allMembers.map(\.id)))
+    }
+
+    // MARK: - willSave (message member info sync)
+
+    func test_willSave_updatesMemberInfoOnExistingMessages_whenExtraDataChanges() throws {
+        let cid = ChannelId.unique
+        let memberId = UserId.unique
+        let messageId = MessageId.unique
+        let otherAuthorMessageId = MessageId.unique
+
+        try database.createMessage(id: messageId, authorId: memberId, cid: cid)
+        try database.createMessage(id: otherAuthorMessageId, authorId: .unique, cid: cid)
+
+        try database.writeSynchronously { session in
+            try session.saveMember(
+                payload: .dummy(
+                    user: .dummy(userId: memberId),
+                    role: .moderator,
+                    notificationsMuted: true,
+                    extraData: ["is_premium": .bool(true)]
+                ),
+                channelId: cid
+            )
+        }
+
+        try database.readSynchronously { session in
+            let messageDTO = try XCTUnwrap(session.message(id: messageId))
+            XCTAssertEqual(messageDTO.channelRole, MemberRole.moderator.rawValue)
+            XCTAssertEqual(messageDTO.memberNotificationsMuted, true)
+            let extraData = try JSONDecoder.default.decode(
+                [String: RawJSON].self,
+                from: try XCTUnwrap(messageDTO.memberExtraData)
+            )
+            XCTAssertEqual(extraData["is_premium"]?.boolValue, true)
+
+            // Messages from other authors in the same channel should be untouched.
+            let otherMessageDTO = try XCTUnwrap(session.message(id: otherAuthorMessageId))
+            XCTAssertNil(otherMessageDTO.channelRole)
+            XCTAssertNil(otherMessageDTO.memberExtraData)
+        }
+    }
+
+    func test_willSave_doesNotUpdateMessagesFromOtherChannels() throws {
+        let cid = ChannelId.unique
+        let otherCid = ChannelId.unique
+        let memberId = UserId.unique
+        let messageInOtherChannelId = MessageId.unique
+
+        try database.createMessage(id: messageInOtherChannelId, authorId: memberId, cid: otherCid)
+
+        try database.writeSynchronously { session in
+            try session.saveMember(
+                payload: .dummy(
+                    user: .dummy(userId: memberId),
+                    extraData: ["is_premium": .bool(true)]
+                ),
+                channelId: cid
+            )
+        }
+
+        try database.readSynchronously { session in
+            let messageDTO = try XCTUnwrap(session.message(id: messageInOtherChannelId))
+            XCTAssertNil(messageDTO.channelRole)
+            XCTAssertNil(messageDTO.memberExtraData)
+        }
+    }
+
+    func test_willSave_doesNotUpdateMessages_whenExtraDataIsUnchanged() throws {
+        let cid = ChannelId.unique
+        let memberId = UserId.unique
+        let messageId = MessageId.unique
+
+        try database.writeSynchronously { session in
+            try session.saveMember(
+                payload: .dummy(user: .dummy(userId: memberId), extraData: ["is_premium": .bool(true)]),
+                channelId: cid
+            )
+        }
+
+        // The message is created after the member already exists, so its member info snapshot
+        // starts out empty until the next relevant member update.
+        try database.createMessage(id: messageId, authorId: memberId, cid: cid)
+
+        // Update the member again, changing only its role - the extra data stays the same.
+        try database.writeSynchronously { session in
+            try session.saveMember(
+                payload: .dummy(
+                    user: .dummy(userId: memberId),
+                    role: .moderator,
+                    extraData: ["is_premium": .bool(true)]
+                ),
+                channelId: cid
+            )
+        }
+
+        // The message member snapshot should remain untouched since the extra data did not change.
+        try database.readSynchronously { session in
+            let messageDTO = try XCTUnwrap(session.message(id: messageId))
+            XCTAssertNil(messageDTO.channelRole)
+            XCTAssertNil(messageDTO.memberExtraData)
+        }
+    }
+
+    func test_asModel_whenModelTransformerProvided_transformsValues() throws {
+        class CustomMemberTransformer: StreamModelsTransformer, @unchecked Sendable {
+            var mockTransformedMember: ChatChannelMember = .mock(
+                id: .unique,
+                name: "transformed member"
+            )
+
+            func transform(member: ChatChannelMember) -> ChatChannelMember {
+                mockTransformedMember
+            }
+        }
+
+        // GIVEN
+        let userId = UserId.unique
+        let channelId = ChannelId(type: .messaging, id: .unique)
+        let payload: MemberPayload = MemberPayload.dummy(user: .dummy(userId: userId))
+
+        let transformer = CustomMemberTransformer()
+        var config = ChatClientConfig(apiKeyString: .unique)
+        config.modelsTransformer = transformer
+        database = DatabaseContainer_Spy(
+            kind: .inMemory,
+            chatClientConfig: config
+        )
+        
+        try database.writeSynchronously { session in
+            try session.saveMember(payload: payload, channelId: channelId)
+        }
+        
+        // WHEN
+        let member = try XCTUnwrap(database.viewContext.member(userId: userId, cid: channelId)?.asModel())
+        
+        // THEN
+        XCTAssertEqual(member.name, "transformed member")
+    }
+
+    private func saveDummyMembers(
+        _ members: [MemberPayload] = [.dummy(), .dummy(), .dummy(), .dummy()],
+        toQuery query: ChannelMemberListQuery,
+        cid: ChannelId
+    ) throws -> [ChatChannelMember] {
+        let members: MembersResponse = .init(members: [.dummy(), .dummy(), .dummy(), .dummy()])
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: self.dummyPayload(with: cid))
+            session.saveMembers(response: members, channelId: cid, query: query)
+        }
+        let loadedQuery = try XCTUnwrap(database.viewContext.channelMemberListQuery(queryHash: query.queryHash))
+        return try loadedQuery.members.map { try $0.asModel() }
     }
 }

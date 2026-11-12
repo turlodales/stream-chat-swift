@@ -1,8 +1,9 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
+import StreamChatTestTools
 import XCTest
 
 final class AsyncOperation_Tests: XCTestCase {
@@ -16,7 +17,7 @@ final class AsyncOperation_Tests: XCTestCase {
 
         operation.start()
 
-        waitForExpectations(timeout: 0.5) { error in
+        waitForExpectations(timeout: defaultTimeout) { error in
             if error != nil {
                 XCTFail(error.debugDescription)
             }
@@ -169,12 +170,81 @@ final class AsyncOperation_Tests: XCTestCase {
             }
         }
     }
+
+    func test_simulateEarlyCancellation_shouldBehaveAsExpected() {
+        var operationBlockCalls = 0
+        let operation = retryLoopedOperation {
+            operationBlockCalls = $0
+        }
+
+        operation.start()
+        let operationCompletion = expectation(description: "operation concludes")
+        let token = operation.observe(\.isExecuting) { _, change in
+            guard !change.isPrior else { return }
+            if operation.isExecuting == false {
+                operationCompletion.fulfill()
+            }
+        }
+
+        operation.cancel()
+        wait(for: [operationCompletion], timeout: defaultTimeout)
+
+        // We want to make sure that upon an early cancellation, it does not continue executing
+        XCTAssertEqual(operationBlockCalls, 1)
+        token.invalidate()
+    }
+
+    func test_simulateTokenRefreshLoop_shouldBehaveAsExpected() {
+        var operationBlockCalls = 0
+        let operation = retryLoopedOperation {
+            operationBlockCalls = $0
+        }
+
+        operation.start()
+        let operationCompletion = expectation(description: "operation concludes")
+        let token = operation.observe(\.isExecuting) { _, change in
+            guard !change.isPrior else { return }
+            if operation.isExecuting == false {
+                operationCompletion.fulfill()
+            }
+        }
+
+        operation.isFinished = true
+        wait(for: [operationCompletion], timeout: defaultTimeout)
+
+        // We want to make sure that upon an early set of isFinished to true, it does not continue executing
+        XCTAssertEqual(operationBlockCalls, 1)
+        token.invalidate()
+    }
 }
 
 // MARK: Test Helpers
 
 extension AsyncOperation_Tests {
+    private func retryLoopedOperation(onCallsUpdate: @escaping (Int) -> Void) -> AsyncOperation {
+        var operationBlockCalls = 0
+        let testLimit = 20
+        return AsyncOperation(maxRetries: 10) { selfOperation, completion in
+            if operationBlockCalls >= testLimit {
+                XCTFail("Should not reach its limit")
+                completion(.continue)
+                return
+            }
+
+            DispatchQueue.main.async {
+                operationBlockCalls += 1
+                onCallsUpdate(operationBlockCalls)
+                selfOperation.resetRetries()
+                completion(.retry)
+            }
+        }
+    }
+
     private func waitForOperationToFinish(_ operation: AsyncOperation) {
+        _waitForOperationToFinish(operation)
+    }
+
+    private func _waitForOperationToFinish(_ operation: AsyncOperation) {
         let expectation = expectation(description: "operation concludes")
         let token = operation.observe(\.isFinished) { _, change in
             guard !change.isPrior else { return }
@@ -183,12 +253,7 @@ extension AsyncOperation_Tests {
 
         operation.start()
 
-        waitForExpectations(timeout: 10) { error in
-            if let error = error {
-                print(error)
-                XCTFail(error.localizedDescription)
-            }
-        }
+        waitForExpectations(timeout: 10)
         token.invalidate()
     }
 }

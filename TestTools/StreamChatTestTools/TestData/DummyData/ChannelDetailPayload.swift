@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -18,33 +18,51 @@ extension ChannelDetailPayload {
         deletedAt: Date? = nil,
         updatedAt: Date = .init(),
         truncatedAt: Date? = nil,
+        truncatedBy: UserPayload? = nil,
         createdBy: UserPayload = .dummy(userId: .unique),
         config: ChannelConfig = .mock(),
+        filterTags: [String]? = nil,
+        ownCapabilities: [String] = [],
         isFrozen: Bool = false,
+        isBlocked: Bool? = false,
+        isDisabled: Bool = false,
         isHidden: Bool? = nil,
-        members: [MemberPayload] = [],
+        members: [MemberPayload]? = [],
+        memberCount: Int? = nil,
+        activeMemberCount: Int? = nil,
+        messageCount: Int? = nil,
         team: String? = nil,
-        cooldownDuration: Int = 0
+        cooldownDuration: Int = 0,
+        autoTranslationEnabled: Bool? = nil,
+        autoTranslationLanguage: String? = nil
     ) -> Self {
         .init(
             cid: cid,
             name: name,
             imageURL: imageURL,
             extraData: extraData,
-            typeRawValue: cid.type.rawValue,
             lastMessageAt: lastMessageAt,
             createdAt: createdAt,
             deletedAt: deletedAt,
             updatedAt: updatedAt,
             truncatedAt: truncatedAt,
+            truncatedBy: truncatedBy,
             createdBy: createdBy,
             config: config,
+            filterTags: filterTags,
+            ownCapabilities: ownCapabilities,
+            isDisabled: isDisabled,
             isFrozen: isFrozen,
+            isBlocked: isBlocked,
             isHidden: isHidden,
             members: members,
-            memberCount: members.count,
+            memberCount: memberCount ?? members?.count ?? 0,
+            activeMemberCount: activeMemberCount,
+            messageCount: messageCount,
             team: team,
-            cooldownDuration: cooldownDuration
+            cooldownDuration: cooldownDuration,
+            autoTranslationEnabled: autoTranslationEnabled,
+            autoTranslationLanguage: autoTranslationLanguage
         )
     }
 }

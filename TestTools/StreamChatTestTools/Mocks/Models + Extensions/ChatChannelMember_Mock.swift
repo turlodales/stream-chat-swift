@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -15,20 +15,31 @@ public extension ChatChannelMember {
         isBanned: Bool = false,
         isFlaggedByCurrentUser: Bool = false,
         userRole: UserRole = .user,
+        teamsRole: [String: UserRole]? = nil,
         userCreatedAt: Date = .distantPast,
         userUpdatedAt: Date = .distantPast,
+        userDeactivatedAt: Date? = nil,
         lastActiveAt: Date? = nil,
         teams: Set<TeamId> = ["RED", "GREEN"],
+        language: TranslationLanguage? = nil,
+        blockedUserIds: [UserId] = [],
         extraData: [String: RawJSON] = [:],
         memberRole: MemberRole = .member,
+        memberStatus: MemberStatus? = nil,
         memberCreatedAt: Date = .distantPast,
         memberUpdatedAt: Date = .distantPast,
+        memberDeletedAt: Date? = nil,
         isInvited: Bool = false,
         inviteAcceptedAt: Date? = nil,
         inviteRejectedAt: Date? = nil,
+        archivedAt: Date? = nil,
+        pinnedAt: Date? = nil,
         isBannedFromChannel: Bool = false,
         banExpiresAt: Date? = nil,
-        isShadowBannedFromChannel: Bool = false
+        isShadowBannedFromChannel: Bool = false,
+        notificationsMuted: Bool = false,
+        memberExtraData: [String: RawJSON] = [:],
+        avgResponseTime: Int? = nil
     ) -> ChatChannelMember {
         .init(
             id: id,
@@ -38,20 +49,30 @@ public extension ChatChannelMember {
             isBanned: isBanned,
             isFlaggedByCurrentUser: isFlaggedByCurrentUser,
             userRole: userRole,
+            teamsRole: teamsRole,
             userCreatedAt: userCreatedAt,
             userUpdatedAt: userUpdatedAt,
+            deactivatedAt: userDeactivatedAt,
             lastActiveAt: lastActiveAt,
             teams: teams,
+            language: language,
             extraData: extraData,
             memberRole: memberRole,
+            memberStatus: memberStatus,
             memberCreatedAt: memberCreatedAt,
             memberUpdatedAt: memberUpdatedAt,
+            memberDeletedAt: memberDeletedAt,
             isInvited: isInvited,
             inviteAcceptedAt: inviteAcceptedAt,
             inviteRejectedAt: inviteRejectedAt,
+            archivedAt: archivedAt,
+            pinnedAt: pinnedAt,
             isBannedFromChannel: isBannedFromChannel,
             banExpiresAt: banExpiresAt,
-            isShadowBannedFromChannel: isShadowBannedFromChannel
+            isShadowBannedFromChannel: isShadowBannedFromChannel,
+            notificationsMuted: notificationsMuted,
+            avgResponseTime: avgResponseTime,
+            memberExtraData: memberExtraData
         )
     }
 }

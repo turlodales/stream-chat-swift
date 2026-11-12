@@ -1,12 +1,12 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
 
-struct VirtualTimeTimer: StreamChat.Timer {
-    static var time: VirtualTime!
+struct VirtualTimeTimer: TimerScheduling {
+    nonisolated(unsafe) static var time: VirtualTime!
 
     static func invalidate() {
         time.invalidate()
@@ -20,7 +20,7 @@ struct VirtualTimeTimer: StreamChat.Timer {
             callback: { _ in onFire() }
         )
     }
-    
+
     static func scheduleRepeating(
         timeInterval: TimeInterval,
         queue: DispatchQueue,
@@ -32,7 +32,7 @@ struct VirtualTimeTimer: StreamChat.Timer {
             callback: { _ in onFire() }
         )
     }
-    
+
     static func currentTime() -> Date {
         Date(timeIntervalSinceReferenceDate: time.currentTime)
     }

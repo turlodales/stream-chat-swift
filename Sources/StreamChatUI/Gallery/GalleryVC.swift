@@ -1,9 +1,10 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 import StreamChat
+import StreamChatCommonUI
 import UIKit
 
 /// A viewcontroller to showcase and slide through multiple attachments
@@ -21,7 +22,7 @@ open class GalleryVC: _ViewController,
         public var message: ChatMessage
         /// The index of currently visible gallery item.
         public var currentPage: Int
-        
+
         public init(
             message: ChatMessage,
             currentPage: Int = 0
@@ -30,37 +31,43 @@ open class GalleryVC: _ViewController,
             self.currentPage = currentPage
         }
     }
-    
+
     /// Content to display.
     open var content: Content! {
         didSet {
             updateContentIfNeeded()
         }
     }
-    
+
     /// Items to display.
     open var items: [AnyChatMessageAttachment] {
         let videos = content.message.videoAttachments.map(\.asAnyAttachment)
         let images = content.message.imageAttachments.map(\.asAnyAttachment)
         return videos + images
     }
-    
+
     /// Returns the date formatter function used to represent when the user was last seen online.
     open var lastSeenDateFormatter: (Date) -> String? { appearance.formatters.userLastActivity.format }
 
+    /// A formatter that converts the message timestamp to textual representation for the gallery header view.
+    open var messageTimestampFormatter: (Date) -> String? { appearance.formatters.galleryHeaderViewDateFormatter.format }
+
+    /// A boolean value indicating if the subtitle of the header should show the message timestamp.
+    public var showMessageTimestamp: Bool = true
+
     /// Controller for handling the transition for dismissal
     open var transitionController: ZoomTransitionController!
-    
+
     /// `UICollectionViewFlowLayout` instance for `attachmentsCollectionView`.
     open private(set) lazy var attachmentsFlowLayout: UICollectionViewFlowLayout = .init()
-    
+
     /// `UICollectionView` instance to display attachments.
     open private(set) lazy var attachmentsCollectionView: UICollectionView = UICollectionView(
         frame: .zero,
         collectionViewLayout: attachmentsFlowLayout
     )
     .withoutAutoresizingMaskConstraints
-    
+
     /// Bar view displayed at the top.
     open private(set) lazy var topBarView = UIView()
         .withoutAutoresizingMaskConstraints
@@ -81,14 +88,14 @@ open class GalleryVC: _ViewController,
         .withBidirectionalLanguagesSupport
         .withAdjustingFontForContentSizeCategory
         .withAccessibilityIdentifier(identifier: "userLabel")
-    
+
     /// Label to show information about the date the message was sent at.
     open private(set) lazy var dateLabel = UILabel()
         .withoutAutoresizingMaskConstraints
         .withBidirectionalLanguagesSupport
         .withAdjustingFontForContentSizeCategory
         .withAccessibilityIdentifier(identifier: "dateLabel")
-    
+
     /// Bar view displayed at the bottom.
     open private(set) lazy var bottomBarView = UIView()
         .withoutAutoresizingMaskConstraints
@@ -98,73 +105,89 @@ open class GalleryVC: _ViewController,
     open private(set) lazy var bottomBarContainerStackView = ContainerStackView()
         .withoutAutoresizingMaskConstraints
         .withAccessibilityIdentifier(identifier: "bottomBarContainerStackView")
-    
+
     /// Label to show which photo is currently being displayed.
     open private(set) lazy var currentPhotoLabel = UILabel()
         .withoutAutoresizingMaskConstraints
         .withBidirectionalLanguagesSupport
         .withAdjustingFontForContentSizeCategory
         .withAccessibilityIdentifier(identifier: "currentPhotoLabel")
-    
+
     /// Button for closing this view controller.
     open private(set) lazy var closeButton = components
         .closeButton.init()
         .withoutAutoresizingMaskConstraints
         .withAccessibilityIdentifier(identifier: "closeButton")
-    
+
     /// View that controls the video player of currently visible cell.
     open private(set) lazy var videoPlaybackBar: VideoPlaybackControlView = components
         .videoPlaybackControlView.init()
         .withoutAutoresizingMaskConstraints
         .withAccessibilityIdentifier(identifier: "videoPlaybackBar")
-    
+
     /// Button for sharing content.
     open private(set) lazy var shareButton = components
         .shareButton.init()
         .withoutAutoresizingMaskConstraints
         .withAccessibilityIdentifier(identifier: "shareButton")
-    
+
+    /// Shown in place of the share icon while a video is copied or downloaded for sharing.
+    open private(set) lazy var shareActivityIndicator = UIActivityIndicatorView(style: .medium)
+        .withoutAutoresizingMaskConstraints
+        .withAccessibilityIdentifier(identifier: "shareActivityIndicator")
+
+    /// Whether a share item is currently being prepared off the main thread.
+    open private(set) var isPreparingShareItem = false
+
     /// A constaint between `topBarView.topAnchor` and `view.topAnchor`.
     open private(set) var topBarTopConstraint: NSLayoutConstraint?
-    
+
     /// A constaint between `bottomBarView.bottomAnchor` and `view.bottomAnchor`.
     open private(set) var bottomBarBottomConstraint: NSLayoutConstraint?
 
+    private var attachmentsBottomToBottomBarConstraint: NSLayoutConstraint?
+    private var attachmentsBottomToVideoPlaybackBarConstraint: NSLayoutConstraint?
+
     override open func setUpAppearance() {
         super.setUpAppearance()
-        
-        view.backgroundColor = appearance.colorPalette.background
-        
+
+        view.backgroundColor = appearance.colorPalette.backgroundCoreApp
+
         attachmentsCollectionView.backgroundColor = .clear
         attachmentsCollectionView.showsHorizontalScrollIndicator = false
         attachmentsCollectionView.showsVerticalScrollIndicator = false
-        
-        topBarView.backgroundColor = appearance.colorPalette.popoverBackground
-        bottomBarView.backgroundColor = appearance.colorPalette.popoverBackground
-        videoPlaybackBar.backgroundColor = appearance.colorPalette.popoverBackground
-        
+
+        topBarView.backgroundColor = appearance.colorPalette.backgroundCoreElevation1
+        bottomBarView.backgroundColor = appearance.colorPalette.backgroundCoreElevation1
+        videoPlaybackBar.backgroundColor = appearance.colorPalette.backgroundCoreElevation1
+
         userLabel.font = appearance.fonts.bodyBold
-        userLabel.textColor = appearance.colorPalette.text
+        userLabel.textColor = appearance.colorPalette.textPrimary
         userLabel.adjustsFontForContentSizeCategory = true
         userLabel.textAlignment = .center
-        
+
         dateLabel.font = appearance.fonts.footnote
-        dateLabel.textColor = appearance.colorPalette.subtitleText
+        dateLabel.textColor = appearance.colorPalette.textSecondary
         dateLabel.adjustsFontForContentSizeCategory = true
         dateLabel.textAlignment = .center
-        
+
         currentPhotoLabel.font = appearance.fonts.bodyBold
-        currentPhotoLabel.textColor = appearance.colorPalette.text
+        currentPhotoLabel.textColor = appearance.colorPalette.textPrimary
         currentPhotoLabel.adjustsFontForContentSizeCategory = true
         currentPhotoLabel.textAlignment = .center
+
+        shareActivityIndicator.color = appearance.colorPalette.textPrimary
+        shareActivityIndicator.hidesWhenStopped = true
+        shareActivityIndicator.isAccessibilityElement = false
+        shareActivityIndicator.stopAnimating()
     }
-    
+
     override open func setUp() {
         super.setUp()
         attachmentsFlowLayout.scrollDirection = .horizontal
         attachmentsFlowLayout.minimumInteritemSpacing = 0
         attachmentsFlowLayout.minimumLineSpacing = 0
-                
+
         attachmentsCollectionView.register(
             components.imageAttachmentGalleryCell.self,
             forCellWithReuseIdentifier: components.imageAttachmentGalleryCell.reuseId
@@ -179,29 +202,41 @@ open class GalleryVC: _ViewController,
         attachmentsCollectionView.alwaysBounceHorizontal = true
         attachmentsCollectionView.dataSource = self
         attachmentsCollectionView.delegate = self
-        
+
         closeButton.addTarget(self, action: #selector(closeButtonTapped), for: .touchUpInside)
         shareButton.addTarget(self, action: #selector(shareButtonTapped), for: .touchUpInside)
-        
+
         let panGestureRecognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePan))
         panGestureRecognizer.delegate = self
         view.addGestureRecognizer(panGestureRecognizer)
     }
-    
+
     override open func setUpLayout() {
         super.setUpLayout()
-        
-        view.embed(attachmentsCollectionView)
-        
+
         view.addSubview(topBarView)
         topBarView.pin(anchors: [.leading, .trailing], to: view)
-        topBarTopConstraint = topBarView.topAnchor.constraint(equalTo: view.topAnchor)
+        topBarTopConstraint = topBarView.topAnchor.pin(equalTo: view.topAnchor)
         topBarTopConstraint?.isActive = true
 
-        topBarView.embed(topBarContainerStackView)
-        topBarContainerStackView.preservesSuperviewLayoutMargins = true
+        // The bar's background stays edge to edge while its content is laid out inside the safe
+        // area. Keeping the safe area out of the container's own margins matters: UIKit adds the
+        // two together, and where that sum also drives the bar's height it has two answers to
+        // choose from, which it resolves by looping until it throws a degenerate layout.
+        topBarView.addSubview(topBarContainerStackView)
+        topBarContainerStackView.pin(to: topBarView.safeAreaLayoutGuide)
+        topBarContainerStackView.insetsLayoutMarginsFromSafeArea = false
+        topBarContainerStackView.directionalLayoutMargins = .streamDefaultLayoutMargins
         topBarContainerStackView.isLayoutMarginsRelativeArrangement = true
-        
+
+        closeButton.setContentHuggingPriority(.streamRequire, for: .horizontal)
+        closeButton.contentEdgeInsets = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
+        NSLayoutConstraint.activate([
+            closeButton.widthAnchor.pin(greaterThanOrEqualToConstant: 44),
+            closeButton.heightAnchor.pin(greaterThanOrEqualToConstant: 44)
+        ])
+        closeButton.accessibilityLabel = L10n.Gallery.Close.accessibility
+        closeButton.accessibilityUserInputLabels = [L10n.Gallery.Close.accessibility]
         topBarContainerStackView.addArrangedSubview(closeButton)
 
         infoContainerStackView.axis = .vertical
@@ -209,87 +244,141 @@ open class GalleryVC: _ViewController,
         infoContainerStackView.spacing = 4
         topBarContainerStackView.addArrangedSubview(infoContainerStackView)
         infoContainerStackView.pin(anchors: [.centerX], to: view)
-        
+
         userLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         infoContainerStackView.addArrangedSubview(userLabel)
-        
+
         infoContainerStackView.addArrangedSubview(dateLabel)
-        
+
         topBarContainerStackView.addArrangedSubview(UIView.spacer(axis: .horizontal))
-        
+
         view.addSubview(bottomBarView)
         bottomBarView.pin(anchors: [.leading, .trailing], to: view)
-        bottomBarBottomConstraint = bottomBarView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        bottomBarBottomConstraint = bottomBarView.bottomAnchor.pin(equalTo: view.bottomAnchor)
         bottomBarBottomConstraint?.isActive = true
 
-        bottomBarContainerStackView.preservesSuperviewLayoutMargins = true
+        bottomBarView.addSubview(bottomBarContainerStackView)
+        bottomBarContainerStackView.pin(to: bottomBarView.safeAreaLayoutGuide)
+        bottomBarContainerStackView.insetsLayoutMarginsFromSafeArea = false
+        bottomBarContainerStackView.directionalLayoutMargins = .streamDefaultLayoutMargins
         bottomBarContainerStackView.isLayoutMarginsRelativeArrangement = true
-        bottomBarView.embed(bottomBarContainerStackView)
-        
+
         shareButton.setContentHuggingPriority(.streamRequire, for: .horizontal)
         shareButton.contentEdgeInsets = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         bottomBarContainerStackView.addArrangedSubview(shareButton)
+        shareButton.addSubview(shareActivityIndicator)
+        shareActivityIndicator.pin(anchors: [.centerX, .centerY], to: shareButton)
 
         currentPhotoLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         bottomBarContainerStackView.addArrangedSubview(currentPhotoLabel)
         currentPhotoLabel.pin(anchors: [.centerX], to: view)
-        
+
         bottomBarContainerStackView.addArrangedSubview(.spacer(axis: .horizontal))
-        
+
         view.addSubview(videoPlaybackBar)
         videoPlaybackBar.pin(anchors: [.leading, .trailing], to: view)
-        videoPlaybackBar.bottomAnchor.constraint(equalTo: bottomBarView.topAnchor).isActive = true
+        videoPlaybackBar.bottomAnchor.pin(equalTo: bottomBarView.topAnchor).isActive = true
+
+        // The attachments are laid out in the area between the bars, and inside the safe area
+        // horizontally, so that they are never covered by a bar or by whatever the system draws
+        // along an edge. They keep the default margin from both horizontal edges on top of that,
+        // so they never sit flush against the screen. The guides stay where the bars rest, which
+        // keeps the content in place while the bars slide out of the view and back in.
+        let topBarLayoutGuide = UILayoutGuide()
+        let bottomBarLayoutGuide = UILayoutGuide()
+        view.addLayoutGuide(topBarLayoutGuide)
+        view.addLayoutGuide(bottomBarLayoutGuide)
+        view.insertSubview(attachmentsCollectionView, at: 0)
+        attachmentsBottomToBottomBarConstraint = attachmentsCollectionView.bottomAnchor
+            .pin(equalTo: bottomBarLayoutGuide.topAnchor)
+        attachmentsBottomToVideoPlaybackBarConstraint = attachmentsCollectionView.bottomAnchor
+            .pin(equalTo: videoPlaybackBar.topAnchor)
+        NSLayoutConstraint.activate([
+            topBarLayoutGuide.topAnchor.pin(equalTo: view.topAnchor),
+            topBarLayoutGuide.heightAnchor.pin(equalTo: topBarView.heightAnchor),
+            bottomBarLayoutGuide.bottomAnchor.pin(equalTo: view.bottomAnchor),
+            bottomBarLayoutGuide.heightAnchor.pin(equalTo: bottomBarView.heightAnchor),
+            attachmentsCollectionView.leadingAnchor.pin(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor,
+                constant: NSDirectionalEdgeInsets.streamDefaultLayoutMargins.leading
+            ),
+            attachmentsCollectionView.trailingAnchor.pin(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -NSDirectionalEdgeInsets.streamDefaultLayoutMargins.trailing
+            ),
+            attachmentsCollectionView.topAnchor.pin(equalTo: topBarLayoutGuide.bottomAnchor)
+        ])
+        updateAttachmentsBottomConstraint()
     }
-    
+
     override open func viewDidLoad() {
         super.viewDidLoad()
-                
+
+        // The zoom lands on the area the attachments are laid out in rather than on the whole view,
+        // which the bars overlap.
+        transitionController?.zoomAnimator.toContentView = attachmentsCollectionView
+
         attachmentsCollectionView.reloadData()
-        DispatchQueue.main.async {
-            self.attachmentsCollectionView.performBatchUpdates(nil) { _ in
-                self.updateContent()
-                self.attachmentsCollectionView.scrollToItem(
-                    at: .init(item: self.content.currentPage, section: 0),
-                    at: .centeredHorizontally,
-                    animated: false
-                )
-            }
-        }
     }
     
+    override open func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+
+        updateContent()
+        attachmentsCollectionView.scrollToItem(
+            at: .init(item: content.currentPage, section: 0),
+            at: .centeredHorizontally,
+            animated: false
+        )
+    }
+
     override open func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        
+
         videoPlaybackBar.player?.pause()
+        videoPlaybackBar.deactivatePlaybackAudioSession()
     }
-    
+
     override open func updateContent() {
         super.updateContent()
 
-        if content.message.author.isOnline {
-            dateLabel.text = L10n.Message.Title.online
+        if showMessageTimestamp {
+            dateLabel.text = messageTimestampFormatter(content.message.createdAt)
         } else {
-            if
-                let lastActive = content.message.author.lastActiveAt,
-                let timeAgo = lastSeenDateFormatter(lastActive) {
-                dateLabel.text = timeAgo
+            if content.message.author.isOnline {
+                dateLabel.text = L10n.Message.Title.online
             } else {
-                dateLabel.text = L10n.Message.Title.offline
+                if let lastActive = content.message.author.lastActiveAt,
+                   let timeAgo = lastSeenDateFormatter(lastActive) {
+                    dateLabel.text = timeAgo
+                } else {
+                    dateLabel.text = L10n.Message.Title.offline
+                }
             }
         }
-        
+
         userLabel.text = content.message.author.name
 
         currentPhotoLabel.text = L10n.currentSelection(content.currentPage + 1, items.count)
-        
+
         let videoCell = attachmentsCollectionView.cellForItem(
             at: currentItemIndexPath
         ) as? VideoAttachmentGalleryCell
-        
+
         videoPlaybackBar.player = videoCell?.player
         videoPlaybackBar.isHidden = videoPlaybackBar.player == nil
+        updateAttachmentsBottomConstraint()
     }
-    
+
+    /// Lets the video timeline and other controls keep their own gestures.
+    open func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard let touchedView = touch.view else { return true }
+        if touchedView is UIControl || touchedView.isDescendant(of: videoPlaybackBar) {
+            return false
+        }
+        return true
+    }
+
     /// Called whenever user pans with a given `gestureRecognizer`.
     @objc open func handlePan(with gestureRecognizer: UIPanGestureRecognizer) {
         switch gestureRecognizer.state {
@@ -305,19 +394,54 @@ open class GalleryVC: _ViewController,
             transitionController.handlePan(with: gestureRecognizer)
         }
     }
-    
+
     /// Called when `closeButton` is tapped.
     @objc open func closeButtonTapped() {
         dismiss(animated: true, completion: nil)
     }
-    
+
     /// Called when `shareButton` is tapped.
     @objc open func shareButtonTapped() {
-        guard let shareItem = shareItem(at: currentItemIndexPath) else {
-            log.assertionFailure("Share item is missing for item at \(currentItemIndexPath).")
+        guard !isPreparingShareItem else { return }
+        Task { [weak self] in
+            await self?.shareCurrentItem()
+        }
+    }
+
+    /// Prepares the current gallery item and presents the share sheet.
+    open func shareCurrentItem() async {
+        let indexPath = currentItemIndexPath
+        setSharePreparationInProgress(true)
+        let shareItem = await prepareShareItem(at: indexPath)
+        setSharePreparationInProgress(false)
+        guard let shareItem else {
+            log.error("Share item is missing for item at \(indexPath).")
             return
         }
-        
+        presentShareSheet(with: shareItem)
+    }
+
+    /// Shows or hides the spinner that replaces the share icon.
+    open func setSharePreparationInProgress(_ inProgress: Bool) {
+        isPreparingShareItem = inProgress
+        shareButton.isUserInteractionEnabled = !inProgress
+        shareButton.setImage(inProgress ? nil : appearance.images.share, for: .normal)
+        shareButton.accessibilityLabel = inProgress
+            ? L10n.Gallery.Share.Accessibility.preparing
+            : L10n.Gallery.Share.accessibility
+        if inProgress {
+            shareActivityIndicator.startAnimating()
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: L10n.Gallery.Share.Accessibility.preparing
+            )
+        } else {
+            shareActivityIndicator.stopAnimating()
+        }
+    }
+
+    /// Presents the system share sheet for the given item.
+    open func presentShareSheet(with shareItem: Any) {
         let activityViewController = UIActivityViewController(
             activityItems: [shareItem],
             applicationActivities: nil
@@ -325,36 +449,44 @@ open class GalleryVC: _ViewController,
         activityViewController.popoverPresentationController?.sourceView = shareButton
         present(activityViewController, animated: true)
     }
-    
+
     /// Updates `currentPage`.
     open func updateCurrentPage() {
-        content.currentPage = Int(attachmentsCollectionView.contentOffset.x + attachmentsCollectionView.bounds.width / 2) /
+        let page = Int(attachmentsCollectionView.contentOffset.x + attachmentsCollectionView.bounds.width / 2) /
             Int(attachmentsCollectionView.bounds.width)
+        switch attachmentsCollectionView.effectiveUserInterfaceLayoutDirection {
+        case .leftToRight:
+            content.currentPage = page
+        case .rightToLeft:
+            content.currentPage = items.count - 1 - page
+        @unknown default:
+            break
+        }
     }
-    
+
     open func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
         items.count
     }
-    
+
     open func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         guard let reuseIdentifier = cellReuseIdentifierForItem(at: indexPath) else {
             log.assertionFailure("Reuse identifier is missing for item at \(indexPath)")
             return UICollectionViewCell()
         }
-        
+
         let cell = collectionView.dequeueReusableCell(with: GalleryCollectionViewCell.self, for: indexPath, reuseIdentifier: reuseIdentifier)
 
         guard let item = getItem(at: indexPath) else { return cell }
 
         cell.content = item
-        
+
         cell.didTapOnce = { [weak self] in
             self?.handleSingleTapOnCell(at: indexPath)
         }
-        
+
         return cell
     }
-    
+
     open func collectionView(
         _ collectionView: UICollectionView,
         layout collectionViewLayout: UICollectionViewLayout,
@@ -362,7 +494,7 @@ open class GalleryVC: _ViewController,
     ) -> CGSize {
         collectionView.bounds.size
     }
-    
+
     open func collectionView(
         _ collectionView: UICollectionView,
         targetContentOffsetForProposedContentOffset proposedContentOffset: CGPoint
@@ -372,32 +504,43 @@ open class GalleryVC: _ViewController,
             y: proposedContentOffset.y
         )
     }
-    
+
     open func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         updateCurrentPage()
     }
-    
+
     open func scrollViewDidScroll(_ scrollView: UIScrollView) {
         videoPlaybackBar.player?.pause()
     }
-    
+
     override open func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         attachmentsFlowLayout.invalidateLayout()
         super.viewWillTransition(to: size, with: coordinator)
     }
-    
+
+    override open func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+
+        // The area the attachments are laid out in is derived from the safe area, and an item
+        // fills that area, so it is measured again whenever the safe area changes.
+        attachmentsFlowLayout.invalidateLayout()
+    }
+
     /// An index path for the currently visible cell.
     open var currentItemIndexPath: IndexPath {
         .init(item: content.currentPage, section: 0)
     }
-    
+
     /// A currently visible gallery item.
     open var currentItem: AnyChatMessageAttachment {
         items.assertIndexIsPresent(currentItemIndexPath.item)
         return items[currentItemIndexPath.item]
     }
-    
+
     /// Returns a share item for the gallery item at given index path.
+    ///
+    /// Images are returned immediately. Videos should be prepared with
+    /// `prepareShareItem(at:)` so the file is copied off the main thread.
     /// - Parameter indexPath: An index path.
     /// - Returns: An item to share.
     open func shareItem(at indexPath: IndexPath) -> Any? {
@@ -408,26 +551,133 @@ open class GalleryVC: _ViewController,
             let cell = attachmentsCollectionView
                 .cellForItem(at: indexPath) as? ImageAttachmentGalleryCell
             return cell?.imageView.image
-        case .video:
-            guard let itemAttachment = item.attachment(payloadType: VideoAttachmentPayload.self),
-                  let urlData = try? Data(contentsOf: itemAttachment.videoURL) else {
-                return nil
-            }
-
-            let fileName = itemAttachment.payload.title ?? itemAttachment.id.messageId.lowercased() + ".mp4"
-            let filePath = NSTemporaryDirectory().appending("\(fileName)")
-            let url = URL(fileURLWithPath: filePath)
-            do {
-                try urlData.write(to: url)
-                return url
-            } catch {
-                return nil
-            }
         default:
             return nil
         }
     }
-    
+
+    /// Returns a share item, copying or downloading videos off the main thread.
+    /// - Parameter indexPath: An index path.
+    /// - Returns: An item to share.
+    open func prepareShareItem(at indexPath: IndexPath) async -> Any? {
+        guard let item = getItem(at: indexPath) else { return nil }
+        if item.type == .video {
+            return await localVideoURLForSharing(item)
+        }
+        return shareItem(at: indexPath)
+    }
+
+    // Copy or download the video without loading it into memory on the main thread.
+    private func localVideoURLForSharing(_ item: AnyChatMessageAttachment) async -> URL? {
+        guard let attachment = item.attachment(payloadType: VideoAttachmentPayload.self) else {
+            return nil
+        }
+        let fileName = sanitizedShareFileName(
+            title: attachment.payload.title,
+            messageId: attachment.id.messageId
+        )
+        let sourceURL = attachment.downloadingState?.localFileURL
+            ?? attachment.uploadingState?.localFileURL
+            ?? attachment.videoURL
+
+        do {
+            if sourceURL.isFileURL, FileManager.default.fileExists(atPath: sourceURL.path) {
+                return try await copyFileForSharing(from: sourceURL, fileName: fileName)
+            }
+            let fileRequest = try await components.mediaLoader.loadFileRequest(for: attachment.videoURL)
+            return try await downloadFileForSharing(
+                request: fileRequest.urlRequest,
+                fileName: fileName
+            )
+        } catch {
+            log.error("Failed to prepare the video for sharing: \(error)")
+            return nil
+        }
+    }
+
+    private func sanitizedShareFileName(title: String?, messageId: String) -> String {
+        let fallback = messageId.lowercased() + ".mp4"
+        guard let title else { return fallback }
+        let name = URL(fileURLWithPath: title).lastPathComponent
+        if name.isEmpty || name == "." || name == ".." {
+            return fallback
+        }
+        return name
+    }
+
+    // File I/O stays off the main actor so sharing a large video does not stall the gallery.
+    private nonisolated func copyFileForSharing(from sourceURL: URL, fileName: String) async throws -> URL {
+        try moveOrCopyFileForSharing(from: sourceURL, fileName: fileName, copy: true)
+    }
+
+    private nonisolated func downloadFileForSharing(request: URLRequest, fileName: String) async throws -> URL {
+        let temporaryURL: URL
+        if #available(iOS 15.0, *) {
+            let (downloadedURL, response) = try await URLSession.shared.download(for: request)
+            try validateShareDownloadResponse(response)
+            temporaryURL = downloadedURL
+        } else {
+            temporaryURL = try await downloadFileUsingDownloadTask(request)
+        }
+        return try moveOrCopyFileForSharing(from: temporaryURL, fileName: fileName, copy: false)
+    }
+
+    private nonisolated func downloadFileUsingDownloadTask(_ request: URLRequest) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            let task = URLSession.shared.downloadTask(with: request) { url, response, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let url else {
+                    continuation.resume(throwing: URLError(.cannotOpenFile))
+                    return
+                }
+                do {
+                    try validateShareDownloadResponse(response)
+                    let preservedURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(UUID().uuidString)
+                    try FileManager.default.moveItem(at: url, to: preservedURL)
+                    continuation.resume(returning: preservedURL)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            task.resume()
+        }
+    }
+
+    private nonisolated func moveOrCopyFileForSharing(
+        from sourceURL: URL,
+        fileName: String,
+        copy: Bool
+    ) throws -> URL {
+        let temporaryDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .standardizedFileURL
+        let destination = temporaryDirectory
+            .appendingPathComponent(URL(fileURLWithPath: fileName).lastPathComponent)
+            .standardizedFileURL
+        guard isShareDestination(destination, inside: temporaryDirectory) else {
+            throw URLError(.cannotCreateFile)
+        }
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        if copy {
+            try FileManager.default.copyItem(at: sourceURL, to: destination)
+        } else {
+            try FileManager.default.moveItem(at: sourceURL, to: destination)
+        }
+        return destination
+    }
+
+    private nonisolated func isShareDestination(_ destination: URL, inside directory: URL) -> Bool {
+        let directoryPath = directory.path
+        let destinationPath = destination.path
+        let prefix = directoryPath.hasSuffix("/") ? directoryPath : directoryPath + "/"
+        return destinationPath.hasPrefix(prefix) && destinationPath != directoryPath
+    }
+
     /// Returns cell reuse identifier for a gallery item at given index path.
     /// - Parameter indexPath: An index path.
     /// - Returns: A cell reuse identifier.
@@ -443,11 +693,30 @@ open class GalleryVC: _ViewController,
             return nil
         }
     }
-    
+
+    /// The playback bar is shown for videos only, and it sits inside the area the attachments are
+    /// laid out in, so the content ends above it while it is shown.
+    private func updateAttachmentsBottomConstraint() {
+        let endsAboveVideoPlaybackBar = !videoPlaybackBar.isHidden
+        let changed = attachmentsBottomToVideoPlaybackBarConstraint?.isActive != endsAboveVideoPlaybackBar
+
+        attachmentsBottomToBottomBarConstraint?.isActive = false
+        attachmentsBottomToVideoPlaybackBarConstraint?.isActive = false
+        if endsAboveVideoPlaybackBar {
+            attachmentsBottomToVideoPlaybackBarConstraint?.isActive = true
+        } else {
+            attachmentsBottomToBottomBarConstraint?.isActive = true
+        }
+
+        if changed {
+            attachmentsFlowLayout.invalidateLayout()
+        }
+    }
+
     /// Triggered when the current image is single tapped.
     open func handleSingleTapOnCell(at indexPath: IndexPath) {
         let areBarsHidden = bottomBarBottomConstraint?.constant != 0
-        
+
         topBarTopConstraint?.constant = areBarsHidden ? 0 : -topBarView.frame.height
         bottomBarBottomConstraint?.constant = areBarsHidden ? 0 : bottomBarView.frame.height
 
@@ -458,7 +727,7 @@ open class GalleryVC: _ViewController,
             self.view.layoutIfNeeded()
         }
     }
-    
+
     /// Returns an image view to animate during interactive dismissing.
     open var imageViewToAnimateWhenDismissing: UIImageView? {
         let indexPath = currentItemIndexPath
@@ -482,5 +751,12 @@ open class GalleryVC: _ViewController,
         let index = indexPath.item
         items.assertIndexIsPresent(index)
         return items[safe: index]
+    }
+}
+
+private func validateShareDownloadResponse(_ response: URLResponse?) throws {
+    guard let httpResponse = response as? HTTPURLResponse else { return }
+    guard (200..<300).contains(httpResponse.statusCode) else {
+        throw URLError(.badServerResponse)
     }
 }

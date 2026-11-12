@@ -1,24 +1,44 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
+import Combine
 import Foundation
 
 /// The type is designed to pre-process some incoming `Event` via middlewares before being published
-class EventNotificationCenter: NotificationCenter {
+class PersistentEventNotificationCenter: NotificationCenter, EventNotificationCenter, @unchecked Sendable {
     private(set) var middlewares: [EventMiddleware] = []
-    
+
     /// The database used when evaluating middlewares.
     let database: DatabaseContainer
-    
-    // We post events on a queue different from database.writable context
-    // queue to prevent a deadlock happening when @CoreDataLazy (with `context.performAndWait` inside)
-    // model is accessed in event handlers.
+
     var eventPostingQueue = DispatchQueue(label: "io.getstream.event-notification-center")
-    
-    init(database: DatabaseContainer) {
+
+    // Contains the ids of the new messages that are going to be added during the ongoing process
+    private(set) var newMessageIds: Set<MessageId> = Set()
+
+    /// Handles manual event processing for channels that opt out of middleware processing.
+    private let manualEventHandler: ManualEventHandler
+
+    init(
+        database: DatabaseContainer,
+        manualEventHandler: ManualEventHandler? = nil
+    ) {
         self.database = database
+        self.manualEventHandler = manualEventHandler ?? ManualEventHandler(database: database)
         super.init()
+    }
+
+    /// Registers a channel for manual event handling.
+    ///
+    /// The middleware's will not process events for this channel.
+    func registerManualEventHandling(for cid: ChannelId) {
+        manualEventHandler.register(channelId: cid)
+    }
+
+    /// Unregister a channel for manual event handling.
+    func unregisterManualEventHandling(for cid: ChannelId) {
+        manualEventHandler.unregister(channelId: cid)
     }
 
     func add(middlewares: [EventMiddleware]) {
@@ -29,24 +49,52 @@ class EventNotificationCenter: NotificationCenter {
         middlewares.append(middleware)
     }
 
-    func process(_ events: [Event], postNotifications: Bool = true, completion: (() -> Void)? = nil) {
+    func process(_ events: [Event], postNotifications: Bool = true, completion: (@Sendable () -> Void)? = nil) {
+        // `WSEvent` wraps the generated event model; middlewares and observers work with the unwrapped event.
+        let events: [(event: Event, wsEvent: WSEvent?)] = events.map { event in
+            guard let wsEvent = event as? WSEvent else { return (event, nil) }
+            return (wsEvent.rawValue, wsEvent)
+        }
+
         let processingEventsDebugMessage: () -> String = {
-            let eventNames = events.map(\.name)
+            let eventNames = events.map { $0.event.name }
             return "Processing Events: \(eventNames)"
         }
         log.debug(processingEventsDebugMessage(), subsystems: .webSocket)
 
-        var eventsToPost = [Event]()
+        let messageIds: [MessageId] = events.compactMap {
+            ($0.event as? MessageNewEventDTO)?.message.id ?? ($0.event as? NotificationNewMessageEventDTO)?.message.id
+        }
+
+        nonisolated(unsafe) var eventsToPost = [Event]()
+        nonisolated(unsafe) var middlewareEvents = [(event: Event, wsEvent: WSEvent?)]()
+        nonisolated(unsafe) var manualHandlingEvents = [Event]()
+
         database.write({ session in
-            eventsToPost = events.compactMap {
-                self.middlewares.process(event: $0, session: session)
+            events.forEach { event in
+                if let manualEvent = self.manualEventHandler.handle(event.wsEvent ?? event.event) {
+                    manualHandlingEvents.append(manualEvent)
+                } else {
+                    middlewareEvents.append(event)
+                }
             }
+
+            self.newMessageIds = Set(messageIds.compactMap {
+                !session.messageExists(id: $0) ? $0 : nil
+            })
+
+            eventsToPost.append(contentsOf: manualHandlingEvents)
+            eventsToPost.append(contentsOf: middlewareEvents.compactMap {
+                self.middlewares.process(event: $0.event, wsEvent: $0.wsEvent, session: session)
+            })
+
+            self.newMessageIds = []
         }, completion: { _ in
             guard postNotifications else {
                 completion?()
                 return
             }
-            
+
             self.eventPostingQueue.async {
                 eventsToPost.forEach { self.post(Notification(newEventReceived: $0, sender: self)) }
                 completion?()
@@ -55,8 +103,15 @@ class EventNotificationCenter: NotificationCenter {
     }
 }
 
-extension EventNotificationCenter {
-    func process(_ event: Event, postNotification: Bool = true, completion: (() -> Void)? = nil) {
-        process([event], postNotifications: postNotification, completion: completion)
+extension PersistentEventNotificationCenter {
+    static func channelFilter(cid: ChannelId, event: Event) -> Bool {
+        switch event {
+        case let channelEvent as ChannelSpecificEvent:
+            return channelEvent.cid == cid
+        case let channelEvent as UnknownChannelEvent:
+            return channelEvent.cid == cid
+        default:
+            return false
+        }
     }
 }

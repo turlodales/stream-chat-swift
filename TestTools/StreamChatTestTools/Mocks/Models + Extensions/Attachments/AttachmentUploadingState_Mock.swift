@@ -1,9 +1,9 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
-@testable import StreamChat
 import Foundation
+@testable import StreamChat
 
 public extension AttachmentUploadingState {
     /// Creates a new `AttachmentUploadingState` object from the provided data.

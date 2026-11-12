@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -14,12 +14,12 @@ final class TestBuilder {
     var sessionConfiguration = URLSessionConfiguration.ephemeral
     let uniqueHeaderValue = String.unique
 
-    func make() -> StreamCDNClient {
+    func make() -> StreamCDNStorage {
         sessionConfiguration.httpAdditionalHeaders?["unique_value"] = uniqueHeaderValue
         RequestRecorderURLProtocol_Mock.startTestSession(with: &sessionConfiguration)
         URLProtocol_Mock.startTestSession(with: &sessionConfiguration)
 
-        return StreamCDNClient(
+        return StreamCDNStorage(
             encoder: encoder,
             decoder: decoder,
             sessionConfiguration: sessionConfiguration

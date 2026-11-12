@@ -1,0 +1,53 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+/// The total unread information from the current user.
+public final class CurrentUserUnreads: Sendable, Decodable {
+    /// The unread information per channel type.
+    public let channelType: [UnreadChannelByType]
+    /// The unread information per channel.
+    public let channels: [UnreadChannel]
+    /// The unread information per thread.
+    public let threads: [UnreadThread]
+    /// The total number of unread messages.
+    public let totalUnreadCount: Int
+    /// The total number of unread messages grouped by team.
+    public let totalUnreadCountByTeam: [String: Int]?
+    /// The total number of unread threads.
+    public let totalUnreadThreadsCount: Int
+
+    init(
+        channelType: [UnreadChannelByType],
+        channels: [UnreadChannel],
+        threads: [UnreadThread],
+        totalUnreadCount: Int,
+        totalUnreadCountByTeam: [String: Int]? = nil,
+        totalUnreadThreadsCount: Int
+    ) {
+        self.channelType = channelType
+        self.channels = channels
+        self.threads = threads
+        self.totalUnreadCount = totalUnreadCount
+        self.totalUnreadCountByTeam = totalUnreadCountByTeam
+        self.totalUnreadThreadsCount = totalUnreadThreadsCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        self.channelType = try container.decode([UnreadChannelByType].self, forKey: .channelType)
+        self.channels = try container.decode([UnreadChannel].self, forKey: .channels)
+        self.threads = try container.decode([UnreadThread].self, forKey: .threads)
+        self.totalUnreadCount = try container.decode(Int.self, forKey: .totalUnreadCount)
+        self.totalUnreadCountByTeam = try container.decodeIfPresent(
+            [String: Int].self,
+            forKey: .totalUnreadCountByTeam
+        )
+        self.totalUnreadThreadsCount = try container.decode(
+            Int.self,
+            forKey: .totalUnreadThreadsCount
+        )
+    }
+}

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -74,6 +74,38 @@ final class IdentifiablePayload_Tests: XCTestCase {
         XCTAssertEqual(cache["\(UserDTO.self)"]?.count, 50)
         XCTAssertEqual(cache["\(MessageReactionDTO.self)"]?.count, 1000)
     }
+    
+    func test_concurrentPerform_getPayloadToModelIdMappings() {
+        let database = DatabaseContainer_Spy()
+        let channelList = createChannelList(
+            channels: 5,
+            users: 5,
+            otherWatchers: 2,
+            messagesPerChannel: 10,
+            readCountsPerChannel: 2,
+            messageReactionsPerChannel: 2
+        )
+        savePayload(payload: channelList, database: database)
+
+        let contexts = [database.writableContext, database.backgroundReadOnlyContext]
+        let iterations = 2000
+        var caches: [PreWarmedCache] = (0..<iterations).map { _ in [:] }
+        DispatchQueue.concurrentPerform(iterations: iterations) { index in
+            autoreleasepool {
+                let context = contexts[index % contexts.count]
+                caches[index] = channelList.getPayloadToModelIdMappings(context: context)
+            }
+        }
+        
+        for cache in caches {
+            XCTAssertEqual(cache.keys.count, 5)
+            XCTAssertEqual(cache["\(ChannelDTO.self)"]?.count, 5)
+            XCTAssertEqual(cache["\(MessageDTO.self)"]?.count, 50)
+            XCTAssertEqual(cache["\(UserDTO.self)"]?.count, 7)
+            XCTAssertEqual(cache["\(MessageReactionDTO.self)"]?.count, 200)
+            XCTAssertEqual(cache["\(ChannelReadDTO.self)"]?.count, 10)
+        }
+    }
 
     // Identifiable
 
@@ -83,28 +115,16 @@ final class IdentifiablePayload_Tests: XCTestCase {
         XCTAssertNil(UserListPayload.modelClass)
     }
 
-    func test_MessageListPayload_isIdentifiablePayload() {
-        let payload = MessageListPayload(messages: [])
+    func test_Array_isIdentifiablePayload() {
+        let payload: [MessageResponse] = []
         XCTAssertNil(payload.databaseId)
-        XCTAssertNil(MessageListPayload.modelClass)
+        XCTAssertNil([MessageResponse].modelClass)
     }
 
     func test_MessageReactionsPayload_isIdentifiablePayload() {
         let payload = MessageReactionsPayload(reactions: [])
         XCTAssertNil(payload.databaseId)
         XCTAssertNil(MessageReactionsPayload.modelClass)
-    }
-
-    func test_MessagePayloadBoxed_isIdentifiablePayload() {
-        let payload = MessagePayload.Boxed(message: .dummy(messageId: "1", authorUserId: ""))
-        XCTAssertNil(payload.databaseId)
-        XCTAssertNil(MessagePayload.Boxed.modelClass)
-    }
-
-    func test_ChannelMemberListPayload_isIdentifiablePayload() {
-        let payload = ChannelMemberListPayload(members: [])
-        XCTAssertNil(payload.databaseId)
-        XCTAssertNil(ChannelMemberListPayload.modelClass)
     }
 
     func test_ChannelListPayload_isIdentifiablePayload() {
@@ -154,7 +174,14 @@ final class IdentifiablePayload_Tests: XCTestCase {
     }
 
     func test_ChannelReadPayload_isIdentifiablePayload() {
-        let payload = ChannelReadPayload(user: .dummy(userId: "u3"), lastReadAt: Date(), unreadMessagesCount: 2)
+        let payload = ChannelReadPayload(
+            user: .dummy(userId: "u3"),
+            lastReadAt: Date(),
+            lastReadMessageId: .unique,
+            unreadMessagesCount: 2,
+            lastDeliveredAt: nil,
+            lastDeliveredMessageId: nil
+        )
         XCTAssertNil(payload.databaseId)
         XCTAssertTrue(ChannelReadPayload.modelClass == ChannelReadDTO.self)
     }
@@ -185,7 +212,11 @@ final class IdentifiablePayload_Tests: XCTestCase {
             UserPayload.dummy(userId: "\($0)")
         }
         let cid = ChannelId.unique
-        let channelDetailPayload = ChannelDetailPayload.dummy(cid: cid, createdBy: watchers[0])
+        let channelDetailPayload = ChannelDetailPayload.dummy(
+            cid: cid,
+            truncatedBy: .dummy(userId: "4"),
+            createdBy: watchers[0]
+        )
         let payload = ChannelPayload.dummy(channel: channelDetailPayload, watchers: watchers)
 
         let cache = payload.recursivelyGetAllIds()
@@ -194,7 +225,7 @@ final class IdentifiablePayload_Tests: XCTestCase {
         let channelDetailIds = try XCTUnwrap(cache[ChannelDTO.className])
 
         XCTAssertEqual(cache.keys.count, 2)
-        XCTAssertEqual(userIds, ["0", "1", "2", "3"])
+        XCTAssertEqual(userIds, ["0", "1", "2", "3", "4"])
         XCTAssertEqual(channelDetailIds, [cid.rawValue])
     }
 
@@ -296,7 +327,6 @@ final class IdentifiablePayload_Tests: XCTestCase {
                 name: .unique,
                 imageURL: .unique(),
                 extraData: [:],
-                typeRawValue: cid.type.rawValue,
                 lastMessageAt: Date(),
                 createdAt: Date(),
                 deletedAt: nil,
@@ -304,10 +334,15 @@ final class IdentifiablePayload_Tests: XCTestCase {
                 truncatedAt: nil,
                 createdBy: owner,
                 config: .mock(),
+                filterTags: nil,
+                ownCapabilities: [],
+                isDisabled: false,
                 isFrozen: true,
+                isBlocked: false,
                 isHidden: false,
                 members: users.map { MemberPayload.dummy(user: $0) },
                 memberCount: users.count,
+                messageCount: messageCount,
                 team: .unique,
                 cooldownDuration: 20
             )
@@ -369,7 +404,6 @@ final class IdentifiablePayload_Tests: XCTestCase {
                     isSilent: false,
                     isShadowed: false,
                     attachments: [],
-                    channel: channelDetail,
                     pinned: false,
                     pinnedBy: nil,
                     pinnedAt: nil,
@@ -390,15 +424,22 @@ final class IdentifiablePayload_Tests: XCTestCase {
                     isMemberBanned: false
                 ),
                 messages: messages,
+                pendingMessages: nil,
                 pinnedMessages: [],
                 channelReads: (0..<channelReadCount).map { i in
                     ChannelReadPayload(
                         user: users[i],
                         lastReadAt: .unique(after: channelDetail.createdAt),
-                        unreadMessagesCount: (0..<10).randomElement()!
+                        lastReadMessageId: .unique,
+                        unreadMessagesCount: (0..<10).randomElement()!,
+                        lastDeliveredAt: nil,
+                        lastDeliveredMessageId: nil
                     )
                 },
-                isHidden: false
+                isHidden: false,
+                draft: nil,
+                activeLiveLocations: [],
+                pushPreference: nil
             )
         }
 

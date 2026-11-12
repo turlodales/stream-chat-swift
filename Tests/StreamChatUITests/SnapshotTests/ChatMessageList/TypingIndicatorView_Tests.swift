@@ -1,39 +1,40 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
-import StreamChatTestTools
+@testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import XCTest
 
-final class TypingIndicatorViewTests: XCTestCase {
+@MainActor final class TypingIndicatorViewTests: XCTestCase {
     override func setUp() {
         super.setUp()
         // Disable animations.
         UIView.setAnimationsEnabled(false)
     }
-    
+
     func test_defaultAppearance() {
         let view = TypingIndicatorView().withoutAutoresizingMaskConstraints
         view.content = "Luke Skywalker is typing"
         AssertSnapshot(view)
     }
-    
+
     func test_appearanceCustomization_usingAppearance() {
-        var appearance = Appearance()
-  
-        appearance.colorPalette.overlayBackground = .brown
+        let appearance = Appearance()
+
+        appearance.colorPalette.backgroundCoreOverlayLight = .brown
         appearance.fonts.body = .italicSystemFont(ofSize: 20)
-        appearance.colorPalette.subtitleText = .green
-      
+        appearance.colorPalette.textSecondary = .green
+
         let view = TypingIndicatorView().withoutAutoresizingMaskConstraints
         view.appearance = appearance
         view.content = "Luke Skywalker is typing"
 
         AssertSnapshot(view)
     }
-    
+
     func test_appearanceCustomization_usingSubclassing() {
         class CustomTitleView: TypingIndicatorView {
             lazy var customLabel = UILabel()

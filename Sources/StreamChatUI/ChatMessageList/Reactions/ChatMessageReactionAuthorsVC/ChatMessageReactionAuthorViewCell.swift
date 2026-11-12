@@ -1,8 +1,9 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
+import StreamChatCommonUI
 import UIKit
 
 /// `UICollectionViewCell` for the reaction's author view.
@@ -38,15 +39,20 @@ open class ChatMessageReactionAuthorViewCell: _CollectionViewCell, ThemeProvider
         .withAccessibilityIdentifier(identifier: "containerStack")
 
     /// The author's avatar view.
-    open lazy var authorAvatarView: ChatAvatarView = components
-        .avatarView.init()
-        .withoutAutoresizingMaskConstraints
+    open lazy var authorAvatarView: ChatUserAvatarView = {
+        let view = components
+            .userAvatarView.init()
+            .withoutAutoresizingMaskConstraints
+        view.shouldShowOnlineIndicator = false
+        return view
+    }()
 
     /// The author's name label.
     open lazy var authorNameLabel = UILabel()
         .withoutAutoresizingMaskConstraints
         .withBidirectionalLanguagesSupport
         .withAdjustingFontForContentSizeCategory
+        .withAccessibilityIdentifier(identifier: "reactionAuthorNameLabel")
 
     /// The bubble view around the message reaction.
     open lazy var reactionBubbleView: ChatReactionBubbleBaseView = components
@@ -105,8 +111,8 @@ open class ChatMessageReactionAuthorViewCell: _CollectionViewCell, ThemeProvider
             reactionBubbleView.bottomAnchor.pin(equalTo: authorAvatarView.bottomAnchor)
         ])
 
-        reactionTrailingConstraint = reactionBubbleView.rightAnchor.pin(equalTo: authorAvatarView.centerXAnchor)
-        reactionLeadingConstraint = reactionBubbleView.leftAnchor.pin(equalTo: authorAvatarView.centerXAnchor)
+        reactionTrailingConstraint = reactionBubbleView.trailingAnchor.pin(equalTo: authorAvatarView.centerXAnchor)
+        reactionLeadingConstraint = reactionBubbleView.leadingAnchor.pin(equalTo: authorAvatarView.centerXAnchor)
 
         reactionTrailingConstraint?.isActive = false
         reactionLeadingConstraint?.isActive = false
@@ -118,24 +124,17 @@ open class ChatMessageReactionAuthorViewCell: _CollectionViewCell, ThemeProvider
         guard let content = self.content else {
             reactionItemView.content = nil
             authorNameLabel.text = nil
-            authorAvatarView.imageView.image = nil
+            authorAvatarView.content = nil
             return
         }
 
-        let placeholder = appearance.images.userAvatarPlaceholder1
-        components.imageLoader.loadImage(
-            into: authorAvatarView.imageView,
-            url: content.reaction.author.imageURL,
-            imageCDN: components.imageCDN,
-            placeholder: placeholder,
-            preferredSize: authorAvatarSize
-        )
+        authorAvatarView.content = content.reaction.author
 
         let reactionAuthor = content.reaction.author
         let isCurrentUser = content.currentUserId == reactionAuthor.id
 
         authorNameLabel.text = isCurrentUser ? L10n.you : reactionAuthor.name
-        
+
         reactionBubbleView.tailDirection = isCurrentUser ? .toTrailing : .toLeading
         reactionItemView.content = .init(
             useBigIcon: false,

@@ -1,22 +1,23 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
 @testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import UIKit
 import XCTest
 
 final class ChatFileAttachmentListView_Tests: XCTestCase {
     private var fileAttachmentListView: ChatMessageFileAttachmentListView!
     private var vc: UIViewController!
-    
+
     override func setUp() {
         super.setUp()
         fileAttachmentListView = ChatMessageFileAttachmentListView().withoutAutoresizingMaskConstraints
     }
-    
+
     override func tearDown() {
         fileAttachmentListView = nil
 
@@ -25,6 +26,14 @@ final class ChatFileAttachmentListView_Tests: XCTestCase {
 
     func test_appearance_one_attachment() {
         fileAttachmentListView.content = [.mock(id: .unique)]
+        AssertSnapshot(fileAttachmentListView, variants: [.defaultLight])
+    }
+
+    func test_appearance_audio_attachment() {
+        fileAttachmentListView.content = [
+            ChatMessageAudioAttachment.mock(id: .unique)
+                .asAttachment(payloadType: FileAttachmentPayload.self)
+        ].compactMap { $0 }
         AssertSnapshot(fileAttachmentListView, variants: [.defaultLight])
     }
 
@@ -42,7 +51,7 @@ final class ChatFileAttachmentListView_Tests: XCTestCase {
         ]
         AssertSnapshot(fileAttachmentListView, variants: [.defaultLight])
     }
-    
+
     func test_appearance_five_attachments() {
         fileAttachmentListView.content = [
             .mock(
@@ -75,7 +84,7 @@ final class ChatFileAttachmentListView_Tests: XCTestCase {
         ]
         AssertSnapshot(fileAttachmentListView, variants: [.defaultLight])
     }
-    
+
     func test_appearanceCustomization_usingSubclassing() {
         class TestView: ChatMessageFileAttachmentListView {
             override func setUpLayout() {
@@ -87,7 +96,7 @@ final class ChatFileAttachmentListView_Tests: XCTestCase {
         }
 
         let fileAttachmentListView = TestView().withoutAutoresizingMaskConstraints
-        
+
         fileAttachmentListView.content = [
             .mock(
                 id: .unique

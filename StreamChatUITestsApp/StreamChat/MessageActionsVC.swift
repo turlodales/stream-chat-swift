@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -13,7 +13,8 @@ final class MessageActionsVC: ChatMessageActionsVC {
         if message?.isSentByCurrentUser == true {
             actions.append(hardDeleteActionItem())
         }
-        
+        actions.append(copyMessageIdActionItem())
+
         return actions
     }
 
@@ -33,6 +34,31 @@ final class MessageActionsVC: ChatMessageActionsVC {
         )
     }
 
+    func copyMessageIdActionItem() -> ChatMessageActionItem {
+        CopyMessageIdActionItem(
+            action: { [weak self] _ in
+                guard let self else { return }
+                UIPasteboard.general.string = self.message?.id
+                self.delegate?.chatMessageActionsVCDidFinish(self)
+            },
+            appearance: appearance
+        )
+    }
+
+    struct CopyMessageIdActionItem: ChatMessageActionItem {
+        var title: String { "Copy Message ID" }
+        let icon: UIImage
+        let action: (ChatMessageActionItem) -> Void
+
+        init(
+            action: @escaping (ChatMessageActionItem) -> Void,
+            appearance: Appearance
+        ) {
+            self.action = action
+            icon = appearance.images.messageActionCopy
+        }
+    }
+
     struct HardDeleteActionItem: ChatMessageActionItem {
         var title: String { "Hard Delete Message" }
         var isDestructive: Bool { true }
@@ -41,7 +67,7 @@ final class MessageActionsVC: ChatMessageActionsVC {
 
         init(
             action: @escaping (ChatMessageActionItem) -> Void,
-            appearance: Appearance = .default
+            appearance: Appearance
         ) {
             self.action = action
             icon = appearance.images.messageActionDelete

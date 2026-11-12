@@ -3,21 +3,9 @@ description: 'Run bootstrap.sh'
 runs:
   using: "composite"
   steps:
-    - run: echo "IMAGE=${ImageOS}-${ImageVersion}" >> $GITHUB_ENV
+    - run: echo "IMAGE=${ImageOS}" >> $GITHUB_ENV
       shell: bash
-    - name: Cache RubyGems
-      uses: actions/cache@v2
-      id: rubygem-cache
-      with:
-        path: vendor/bundle
-        key: ${{ env.IMAGE }}-gem-${{ hashFiles('**/Gemfile.lock') }}
-        restore-keys: ${{ env.IMAGE }}-gem-
-    - name: Cache Mint
-      uses: actions/cache@v2
-      id: mint-cache
-      with:
-        path: ~/.mint
-        key: ${{ env.IMAGE }}-mint-${{ hashFiles('**/Mintfile') }}
-        restore-keys: ${{ env.IMAGE }}-mint-
+    - uses: ./.github/actions/ruby-cache
+    - uses: ./.github/actions/xcode-cache
     - run: ./Scripts/bootstrap.sh
       shell: bash

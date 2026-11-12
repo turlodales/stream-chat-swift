@@ -1,0 +1,36 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import StreamChat
+import StreamChatCommonUI
+import UIKit
+
+/// A Button subclass that should be used for sharing content.
+open class ShareButton: _Button, AppearanceProvider {
+    override open var isHighlighted: Bool {
+        didSet {
+            updateContentIfNeeded()
+        }
+    }
+
+    override open func setUpAppearance() {
+        super.setUpAppearance()
+
+        setImage(appearance.images.share, for: .normal)
+        accessibilityLabel = L10n.Gallery.Share.accessibility
+        accessibilityUserInputLabels = [L10n.Gallery.Share.accessibility]
+    }
+
+    override open func updateContent() {
+        super.updateContent()
+
+        if isHighlighted {
+            tintColor = appearance.colorPalette.highlightedColorForColor(
+                appearance.colorPalette.textPrimary
+            )
+        } else {
+            tintColor = appearance.colorPalette.textPrimary
+        }
+    }
+}

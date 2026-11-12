@@ -1,0 +1,182 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+@testable import StreamChat
+@testable import StreamChatTestTools
+import XCTest
+
+final class UserSearch_Tests: XCTestCase {
+    private var env: TestEnvironment!
+    private var testError: TestError!
+    private var userSearch: UserSearch!
+    
+    @MainActor override func setUpWithError() throws {
+        env = TestEnvironment()
+        testError = TestError()
+        userSearch = UserSearch(
+            client: env.client,
+            environment: env.userListEnvironment,
+            // Keep search synchronous in unit tests unless a test opts into debouncing.
+            debouncePolicy: .constant(0)
+        )
+        // Explicitly load the state
+        _ = userSearch.state
+    }
+
+    override func tearDownWithError() throws {
+        env.cleanUp()
+        env = nil
+        testError = nil
+        userSearch = nil
+    }
+
+    // MARK: - Searching Users
+    
+    func test_searchText_whenTextMatches_thenResultsAreReturnedAndStateUpdates() async throws {
+        let fetchResult = makeUsers(name: "name", count: 5, offset: 0)
+        env.userListUpdaterMock.fetch_completion_result = .success(fetchResult)
+        let result = try await userSearch.search(term: "name")
+        XCTAssertEqual(fetchResult.users.map(\.id), result.map(\.id))
+        await XCTAssertEqual(fetchResult.users.map(\.id), userSearch.state.users.map(\.id))
+        
+        XCTAssertEqual(1, env.userListUpdaterMock.fetch_queries.count)
+        try await MainActor.run {
+            let query = try XCTUnwrap(userSearch.state.query)
+            XCTAssertEqual(env.userListUpdaterMock.fetch_queries.first, userSearch.state.query)
+            
+            XCTAssertEqual(Filter<UserListFilterScope>.or([
+                .autocomplete(.name, text: "name"),
+                .autocomplete(.id, text: "name")
+            ]), query.filter)
+            XCTAssertEqual(Pagination(pageSize: .usersPageSize), query.pagination)
+            XCTAssertEqual([Sorting(key: .name, isAscending: true)], query.sort)
+            XCTAssertEqual([QueryOptions.presence], query.options)
+            XCTAssertEqual(true, query.shouldBeUpdatedInBackground)
+        }
+    }
+    
+    func test_searchText_whenRequestFails_thenResultsAndStateAreEmpty() async throws {
+        env.userListUpdaterMock.fetch_completion_result = .failure(testError)
+        await XCTAssertAsyncFailure(try await userSearch.search(term: "name"), testError)
+    }
+    
+    func test_searchOrder_whenSendingMultipleRequests_thenIrrelevantResultsAreIgnored() async throws {
+        // Search for "nam"
+        let expectation1 = XCTestExpectation()
+        env.userListUpdaterMock.fetch_query_called = { _ in
+            expectation1.fulfill()
+        }
+        async let result1 = userSearch.search(term: "nam")
+
+        await fulfillment(of: [expectation1], timeout: defaultTimeout)
+
+        // Search for "name" — cancels the in-flight "nam" search
+        let expectation2 = XCTestExpectation()
+        env.userListUpdaterMock.fetch_query_called = { _ in
+            expectation2.fulfill()
+        }
+        async let result2 = userSearch.search(term: "name")
+
+        await fulfillment(of: [expectation2], timeout: defaultTimeout)
+
+        XCTAssertEqual(2, env.userListUpdaterMock.fetch_completions.count)
+
+        let secondResult = makeUsers(name: "name", count: 5, offset: 0)
+        env.userListUpdaterMock.fetch_completions[1](.success(secondResult))
+
+        // Completing the cancelled request must not overwrite state.
+        let firstResult = makeUsers(name: "nam", count: 10, offset: 0)
+        env.userListUpdaterMock.fetch_completions[0](.success(firstResult))
+
+        // The superseded search resolves without an error, so typing does not surface one
+        // per keystroke. Its own results are dropped in favour of the newer search.
+        let supersededResult = try await result1
+        XCTAssertEqual(secondResult.users.map(\.id), supersededResult.map(\.id))
+
+        XCTAssertEqual(5, try await result2.count)
+        await XCTAssertEqual(secondResult.users.map(\.id), userSearch.state.users.map(\.id))
+    }
+    
+    // MARK: - Clearing Results
+
+    func test_clearResults_clearsState() async throws {
+        let fetchResult = makeUsers(name: "name", count: 5, offset: 0)
+        env.userListUpdaterMock.fetch_completion_result = .success(fetchResult)
+        try await userSearch.search(term: "name")
+        await XCTAssertEqual(5, userSearch.state.users.count)
+
+        await userSearch.clearResults()
+
+        await XCTAssertEqual([], userSearch.state.users.map(\.id))
+        await MainActor.run {
+            XCTAssertNil(userSearch.state.query)
+        }
+    }
+
+    // MARK: - Results Pagination
+    
+    func test_loadMoreUsers_whenMoreResultsAreAvailable_thenResultsAndStateAreUpdated() async throws {
+        let fetchResult1 = makeUsers(name: "name", count: Int.usersPageSize, offset: 0)
+        env.userListUpdaterMock.fetch_completion_result = .success(fetchResult1)
+        try await userSearch.search(term: "name")
+        
+        let fetchResult2 = makeUsers(name: "name", count: 5, offset: Int.usersPageSize)
+        env.userListUpdaterMock.fetch_completion_result = .success(fetchResult2)
+        try await userSearch.loadMoreUsers(limit: 10)
+        
+        let expectedIds = (fetchResult1.users + fetchResult2.users).map(\.id)
+        await XCTAssertEqual(expectedIds, userSearch.state.users.map(\.id))
+        
+        XCTAssertEqual(2, env.userListUpdaterMock.fetch_queries.count)
+        try await MainActor.run {
+            let query = try XCTUnwrap(userSearch.state.query)
+            XCTAssertEqual(env.userListUpdaterMock.fetch_queries.last, userSearch.state.query)
+            
+            XCTAssertEqual(Filter<UserListFilterScope>.or([
+                .autocomplete(.name, text: "name"),
+                .autocomplete(.id, text: "name")
+            ]), query.filter)
+            XCTAssertEqual(Pagination(pageSize: 10, offset: .usersPageSize), query.pagination)
+            XCTAssertEqual([Sorting(key: .name, isAscending: true)], query.sort)
+            XCTAssertEqual([QueryOptions.presence], query.options)
+            XCTAssertEqual(true, query.shouldBeUpdatedInBackground)
+        }
+    }
+    
+    // MARK: - Test Data
+        
+    private func makeUsers(name: String, count: Int, offset: Int) -> UserListPayload {
+        let users = (0..<count)
+            .map { $0 + offset }
+            .map { FullUserResponse.dummy(userId: "\($0)", name: "name_\(String(format: "%03d", $0))") }
+        return UserListPayload(users: users)
+    }
+}
+
+extension UserSearch_Tests {
+    final class TestEnvironment {
+        let client: ChatClient_Mock
+        private(set) var userListUpdaterMock: UserListUpdater_Mock!
+        
+        init() {
+            client = ChatClient_Mock(
+                config: ChatClient_Mock.defaultMockedConfig
+            )
+        }
+        
+        func cleanUp() {
+            client.cleanUp()
+        }
+        
+        lazy var userListEnvironment: UserSearch.Environment = .init(
+            userListUpdaterBuilder: { [unowned self] in
+                self.userListUpdaterMock = UserListUpdater_Mock(
+                    database: $0,
+                    apiClient: $1
+                )
+                return userListUpdaterMock
+            }
+        )
+    }
+}

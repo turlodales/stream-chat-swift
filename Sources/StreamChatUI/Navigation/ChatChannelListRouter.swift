@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -9,10 +9,10 @@ import UIKit
 @available(iOSApplicationExtension, unavailable)
 open class ChatChannelListRouter: NavigationRouter<ChatChannelListVC>, ComponentsProvider {
     let modalTransitioningDelegate = StreamModalTransitioningDelegate()
-    
+
     /// Shows the view controller with the profile of the current user.
     open func showCurrentUserProfile() {
-        log.error(
+        log.info(
             """
             Showing current user profile is not handled. Subclass `ChatChannelListRouter` and provide your \
             implementation of the `\(#function)` method.
@@ -22,15 +22,34 @@ open class ChatChannelListRouter: NavigationRouter<ChatChannelListVC>, Component
 
     /// Shows the view controller with messages for the provided cid.
     ///
-    /// - Parameter cid: `ChannelId` of the channel the should be presented.
-    ///
+    /// - Parameter cid: The `ChannelId` of the channel the should be presented.
     open func showChannel(for cid: ChannelId) {
+        showChannel(for: cid, at: nil)
+    }
+
+    /// Shows the view controller with messages for the provided cid and jumps to the given message id.
+    /// - Parameters:
+    ///   - cid: The `ChannelId` of the channel the should be presented.
+    ///   - messageId: The `MessageId` to where the channel should jump to when opening the channel.
+    open func showChannel(for cid: ChannelId, at messageId: MessageId?) {
         let vc = components.channelVC.init()
-        vc.channelController = rootViewController.controller.client.channelController(
-            for: cid,
-            channelListQuery: rootViewController.controller.query
-        )
-        
+
+        if let messageId = messageId {
+            vc.channelController = rootViewController.controller.client.channelController(
+                for: ChannelQuery(
+                    cid: cid,
+                    pageSize: .messagesPageSize,
+                    paginationParameter: .around(messageId)
+                ),
+                channelListQuery: rootViewController.controller.query
+            )
+        } else {
+            vc.channelController = rootViewController.controller.client.channelController(
+                for: cid,
+                channelListQuery: rootViewController.controller.query
+            )
+        }
+
         if let splitVC = rootViewController.splitViewController {
             splitVC.showDetailViewController(UINavigationController(rootViewController: vc), sender: self)
         } else if let navigationVC = rootViewController.navigationController {
@@ -47,19 +66,19 @@ open class ChatChannelListRouter: NavigationRouter<ChatChannelListVC>, Component
     ///
     /// - Parameter cid: `ChannelId` of a channel swipe acton was used on
     open func didTapMoreButton(for cid: ChannelId) {
-        log.error(
+        log.info(
             """
             Tapping `more` swipe action for channel is not handled. Subclass `ChatChannelListRouter` and provide your \
             implementation of the `\(#function)` method.
             """
         )
     }
-    
+
     /// Called when a user tapped `Delete` swipe action on a channel
     ///
     /// - Parameter cid: `ChannelId` of a channel swipe acton was used on
     open func didTapDeleteButton(for cid: ChannelId) {
-        log.error(
+        log.info(
             """
             Tapping `delete` swipe action for channel is not handled. Subclass `ChatChannelListRouter` and provide your \
             implementation of the `\(#function)` method.

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -13,38 +13,42 @@ struct ChannelVisibilityEventMiddleware: EventMiddleware {
                 guard let channelDTO = session.channel(cid: event.cid) else {
                     throw ClientError.ChannelDoesNotExist(cid: event.cid)
                 }
-                
+
                 channelDTO.isHidden = false
-                
+
             case let event as ChannelHiddenEventDTO:
                 guard let channelDTO = session.channel(cid: event.cid) else {
                     throw ClientError.ChannelDoesNotExist(cid: event.cid)
                 }
-                
+
                 channelDTO.isHidden = true
-                
-                if event.isHistoryCleared {
+
+                if event.clearHistory ?? false {
                     channelDTO.truncatedAt = event.createdAt.bridgeDate
                 }
-                
+
             // New Message will unhide the channel
             // but we won't get `ChannelVisibleEvent` for this case
             case let event as MessageNewEventDTO:
                 guard let channelDTO = session.channel(cid: event.cid) else {
                     throw ClientError.ChannelDoesNotExist(cid: event.cid)
                 }
-                
-                channelDTO.isHidden = false
-                
+
+                if shouldUnhide(channelDTO, for: event.message, session: session) {
+                    channelDTO.isHidden = false
+                }
+
             // New Message will unhide the channel
             // but we won't get `ChannelVisibleEvent` for this case
-            case let event as NotificationMessageNewEventDTO:
+            case let event as NotificationNewMessageEventDTO:
                 guard let channelDTO = session.channel(cid: event.channel.cid) else {
                     throw ClientError.ChannelDoesNotExist(cid: event.channel.cid)
                 }
-                
-                channelDTO.isHidden = false
-                
+
+                if shouldUnhide(channelDTO, for: event.message, session: session) {
+                    channelDTO.isHidden = false
+                }
+
             default:
                 break
             }
@@ -53,5 +57,11 @@ struct ChannelVisibilityEventMiddleware: EventMiddleware {
         }
 
         return event
+    }
+
+    private func shouldUnhide(_ channelDTO: ChannelDTO, for message: MessageResponse, session: DatabaseSession) -> Bool {
+        let isUnhidingType = message.type == MessageType.regular.rawValue || message.type == MessageType.reply.rawValue
+        let isSenderBlocked = session.currentUser?.blockedUserIds.contains(message.user.id) == true
+        return isUnhidingType && !message.shadowed && message.campaignId == nil && !channelDTO.isBlocked && !isSenderBlocked
     }
 }

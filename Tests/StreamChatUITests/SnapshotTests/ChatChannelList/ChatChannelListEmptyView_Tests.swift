@@ -1,10 +1,11 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
 @testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import XCTest
 
 class ChatChannelListEmptyView_Tests: XCTestCase {
@@ -21,12 +22,12 @@ class ChatChannelListEmptyView_Tests: XCTestCase {
         AssertSnapshot(vc)
     }
 
-    func test_appearanceCustomization_usingAppearance() {
-        var appearance = Appearance()
+    @MainActor func test_appearanceCustomization_usingAppearance() {
+        let appearance = Appearance()
         appearance.fonts.bodyBold = .italicSystemFont(ofSize: 20)
-        appearance.colorPalette.subtitleText = .cyan
-        appearance.colorPalette.text = .green
-        appearance.colorPalette.background2 = .magenta
+        appearance.colorPalette.textSecondary = .cyan
+        appearance.colorPalette.textPrimary = .green
+        appearance.colorPalette.backgroundCoreSurfaceStrong = .magenta
 
         let view = ChatChannelListEmptyView().withoutAutoresizingMaskConstraints
         view.appearance = appearance

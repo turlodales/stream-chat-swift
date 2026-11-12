@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -13,11 +13,15 @@ class SlackChatChannelHeaderView: ChatChannelHeaderView {
         super.setUpAppearance()
 
         onlineIndicator.layer.masksToBounds = true
-        onlineIndicator.layer.cornerRadius = 5
         onlineIndicator.backgroundColor = Colors.green
 
         titleContainerView.titleLabel.font = appearance.fonts.bodyBold
         titleContainerView.subtitleLabel.font = appearance.fonts.footnote
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onlineIndicator.layer.cornerRadius = 5
     }
 
     override func setUpLayout() {

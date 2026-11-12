@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -9,45 +9,47 @@ extension EndpointPath: Equatable {
     public static func == (_ lhs: EndpointPath, _ rhs: EndpointPath) -> Bool {
         switch (lhs, rhs) {
         case (.connect, .connect): return true
+        case let (.custom(path1), .custom(path2)): return path1 == path2
         case (.sync, .sync): return true
-        case (.users, .users): return true
-        case (.guest, .guest): return true
-        case (.members, .members): return true
+        case (.queryUsers, .queryUsers): return true
+        case (.updateUsersPartial, .updateUsersPartial): return true
+        case (.createGuest, .createGuest): return true
+        case (.queryMembers, .queryMembers): return true
+        case let (.updateMemberPartial(type1, id1), .updateMemberPartial(type2, id2)): return type1 == type2 && id1 == id2
         case (.search, .search): return true
-        case (.devices, .devices): return true
-        case (.channels, .channels): return true
-        case let (.createChannel(string1), .createChannel(string2)): return string1 == string2
-        case let (.updateChannel(string1), .updateChannel(string2)): return string1 == string2
-        case let (.deleteChannel(string1), .deleteChannel(string2)): return string1 == string2
-        case let (.channelUpdate(string1), .channelUpdate(string2)): return string1 == string2
-        case let (.muteChannel(bool1), .muteChannel(bool2)): return bool1 == bool2
-        case let (.showChannel(string1, bool1), .showChannel(string2, bool2)): return string1 == string2 && bool1 == bool2
-        case let (.truncateChannel(string1), .truncateChannel(string2)): return string1 == string2
-        case let (.markChannelRead(string1), .markChannelRead(string2)): return string1 == string2
-        case (.markAllChannelsRead, .markAllChannelsRead): return true
-        case let (.channelEvent(string1), .channelEvent(string2)): return string1 == string2
-        case let (.stopWatchingChannel(string1), .stopWatchingChannel(string2)): return string1 == string2
-        case let (.pinnedMessages(string1), .pinnedMessages(string2)): return string1 == string2
-        case let (.uploadAttachment(channelId1, type1), .uploadAttachment(channelId2, type2)): return channelId1 == channelId2 &&
-            type1 ==
-            type2
-        case let (.sendMessage(channelId1), .sendMessage(channelId2)): return channelId1 == channelId2
-        case let (.message(messageId1), .message(messageId2)): return messageId1 == messageId2
-        case let (.editMessage(messageId1), .editMessage(messageId2)): return messageId1 == messageId2
+        case (.createDevice, .createDevice): return true
+        case (.deleteDevice, .deleteDevice): return true
+        case (.listDevices, .listDevices): return true
+        case (.queryChannels, .queryChannels): return true
+        case let (.getOrCreateChannel(type1, id1), .getOrCreateChannel(type2, id2)): return type1 == type2 && id1 == id2
+        case let (.getOrCreateDistinctChannel(type1), .getOrCreateDistinctChannel(type2)): return type1 == type2
+        case let (.deleteChannel(type1, id1), .deleteChannel(type2, id2)): return type1 == type2 && id1 == id2
+        case let (.updateChannel(type1, id1), .updateChannel(type2, id2)): return type1 == type2 && id1 == id2
+        case let (.updateChannelPartial(type1, id1), .updateChannelPartial(type2, id2)): return type1 == type2 && id1 == id2
+        case let (.truncateChannel(type1, id1), .truncateChannel(type2, id2)): return type1 == type2 && id1 == id2
+        case let (.markRead(type1, id1), .markRead(type2, id2)): return type1 == type2 && id1 == id2
+        case let (.markUnread(type1, id1), .markUnread(type2, id2)): return type1 == type2 && id1 == id2
+        case (.markChannelsRead, .markChannelsRead): return true
+        case let (.stopWatchingChannel(type1, id1), .stopWatchingChannel(type2, id2)): return type1 == type2 && id1 == id2
+        case let (.getPinnedMessages(type1, id1), .getPinnedMessages(type2, id2)): return type1 == type2 && id1 == id2
+        case let (.sendMessage(type1, id1), .sendMessage(type2, id2)): return type1 == type2 && id1 == id2
+        case let (.getMessage(messageId1), .getMessage(messageId2)): return messageId1 == messageId2
+        case let (.updateMessage(messageId1), .updateMessage(messageId2)): return messageId1 == messageId2
+        case let (.updateMessagePartial(messageId1), .updateMessagePartial(messageId2)): return messageId1 == messageId2
+        case let (.createDraft(type1, id1), .createDraft(type2, id2)): return type1 == type2 && id1 == id2
         case let (.deleteMessage(messageId1), .deleteMessage(messageId2)): return messageId1 == messageId2
-        case let (.replies(messageId1), .replies(messageId2)): return messageId1 == messageId2
-        case let (.reactions(messageId1), .reactions(messageId2)): return messageId1 == messageId2
-        case let (.addReaction(messageId1), .addReaction(messageId2)): return messageId1 == messageId2
+        case let (.getReplies(parentId1), .getReplies(parentId2)): return parentId1 == parentId2
+        case let (.getReactions(messageId1), .getReactions(messageId2)): return messageId1 == messageId2
+        case let (.queryReactions(messageId1), .queryReactions(messageId2)): return messageId1 == messageId2
+        case let (.sendReaction(messageId1), .sendReaction(messageId2)): return messageId1 == messageId2
         case let (
-            .deleteReaction(messageId1, messageReactionType1),
-            .deleteReaction(messageId2, messageReactionType2)
-        ): return messageId1 == messageId2 && messageReactionType1 ==
-            messageReactionType2
-        case let (.messageAction(messageId1), .messageAction(messageId2)): return messageId1 == messageId2
-        case (.banMember, .banMember): return true
-        case let (.flagUser(bool1), .flagUser(bool2)): return bool1 == bool2
-        case let (.flagMessage(bool1), .flagMessage(bool2)): return bool1 == bool2
-        case let (.muteUser(bool1), .muteUser(bool2)): return bool1 == bool2
+            .deleteReaction(messageId1, type1),
+            .deleteReaction(messageId2, type2)
+        ): return messageId1 == messageId2 && type1 == type2
+        case let (.runMessageAction(id1), .runMessageAction(id2)): return id1 == id2
+        case (.ban, .ban): return true
+        case (.flag, .flag): return true
+        case (.unban, .unban): return true
         default: return false
         }
     }

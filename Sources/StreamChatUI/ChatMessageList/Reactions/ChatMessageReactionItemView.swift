@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -28,13 +28,13 @@ open class ChatMessageReactionItemView: _Button, AppearanceProvider {
     }
 
     override open var intrinsicContentSize: CGSize {
-        image(for: .normal)?.size ?? super.intrinsicContentSize
+        image(for: .normal)?.size ?? .init(width: 25, height: 25)
     }
 
     open var reactionImage: UIImage? {
         guard let content = content else { return nil }
 
-        let reactions = appearance.images.availableReactions[content.reaction.type]
+        let reactions = appearance.images.defaultReactions[content.reaction.type]
 
         return content.useBigIcon ?
             reactions?.largeIcon :
@@ -46,7 +46,7 @@ open class ChatMessageReactionItemView: _Button, AppearanceProvider {
 
         return content.reaction.isChosenByCurrentUser ?
             tintColor :
-            appearance.colorPalette.inactiveTint
+            appearance.colorPalette.accentNeutral
     }
 
     // MARK: - Overrides
@@ -75,6 +75,7 @@ open class ChatMessageReactionItemView: _Button, AppearanceProvider {
     override open func tintColorDidChange() {
         super.tintColorDidChange()
 
+        guard UIApplication.shared.applicationState == .active else { return }
         updateContentIfNeeded()
     }
 

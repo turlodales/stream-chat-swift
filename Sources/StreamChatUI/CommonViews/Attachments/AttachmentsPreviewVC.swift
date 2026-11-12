@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -10,6 +10,21 @@ open class AttachmentsPreviewVC: _ViewController, ComponentsProvider {
     open var content: [AttachmentPreviewProvider] = [] {
         didSet {
             updateContentIfNeeded()
+        }
+    }
+
+    /// Picker-provided thumbnails keyed by the attachment's local file URL.
+    open var previewImagesByURL: [URL: UIImage] = [:] {
+        didSet {
+            updateContentIfNeeded()
+        }
+    }
+
+    /// Processing progress for pending composer attachments, keyed by pending item id.
+    open var processingProgressByID: [UUID: Double] = [:] {
+        didSet {
+            guard processingProgressByID != oldValue else { return }
+            applyProcessingProgress()
         }
     }
 
@@ -25,7 +40,7 @@ open class AttachmentsPreviewVC: _ViewController, ComponentsProvider {
         spacing: 8
     ).withoutAutoresizingMaskConstraints
         .withAccessibilityIdentifier(identifier: "containerStackView")
-    
+
     /// The scroll view that contains the horizontal stack.
     open private(set) lazy var horizontalScrollView: UIScrollView = UIScrollView()
         .withoutAutoresizingMaskConstraints
@@ -37,7 +52,7 @@ open class AttachmentsPreviewVC: _ViewController, ComponentsProvider {
         spacing: 8
     ).withoutAutoresizingMaskConstraints
         .withAccessibilityIdentifier(identifier: "horizontalStackView")
-    
+
     /// The scroll view that contains the vertical stack.
     open private(set) lazy var verticalScrollView: UIScrollView = UIScrollView()
         .withoutAutoresizingMaskConstraints
@@ -53,18 +68,53 @@ open class AttachmentsPreviewVC: _ViewController, ComponentsProvider {
     /// The current scroll view height used to activate the scrolling on the vertical stack.
     public var verticalScrollViewHeightConstraint: NSLayoutConstraint?
 
+    /// The audioPlayer that will be used by VoiceRecording attachments for playback.
+    public var audioPlayer: AudioPlaying?
+
+    /// The processing previews which are currently shown, keyed by the pending item's id.
+    /// Rebuilt together with the stacks, so that progress updates do not have to look them up.
+    private var processingPreviewsByID: [UUID: ProcessingAttachmentComposerPreview] = [:]
+
     /// The attachment views for each attachment preview.
     ///
     /// - Parameter axises: The desired axises of which the previews belong.
     ///   An attachment preview can be rendered vertically or horizontally.
     /// - Returns: The attachment previews.
     open func attachmentPreviews(for axises: Set<NSLayoutConstraint.Axis>) -> [UIView] {
-        content
+        let voiceRecordingAttachmentPayloads = content
+            .compactMap { $0 as? VoiceRecordingAttachmentPayload }
+
+        return content
             .enumerated()
             .filter { _, attachment in axises.contains(type(of: attachment).preferredAxis) }
             .map { index, attachment in
                 let view = attachment.previewView(components: components)
                     .withoutAutoresizingMaskConstraints
+
+                if let processingPreview = view as? ProcessingAttachmentComposerPreview,
+                   let pending = attachment as? ProcessingAttachmentPreview {
+                    processingPreview.progress = processingProgressByID[pending.id] ?? pending.progress
+                    processingPreviewsByID[pending.id] = processingPreview
+                }
+
+                if let videoPreview = view as? VideoAttachmentComposerPreview,
+                   let video = attachment as? VideoAttachmentPayload {
+                    videoPreview.previewImage = previewImagesByURL[video.videoURL]
+                }
+
+                if let imagePreview = view as? ImageAttachmentComposerPreview,
+                   let image = attachment as? ImageAttachmentPayload {
+                    imagePreview.previewImage = previewImagesByURL[image.imageURL]
+                }
+
+                if
+                    let voiceRecordingView = view as? VoiceRecordingAttachmentComposerPreview,
+                    let voiceRecordingAttachment = attachment as? VoiceRecordingAttachmentPayload {
+                    voiceRecordingView.audioPlayer = audioPlayer
+                    let voiceRecordingIndex = voiceRecordingAttachmentPayloads.firstIndex(of: voiceRecordingAttachment) ?? index
+                    voiceRecordingView.indexProvider = { voiceRecordingIndex }
+                }
+
                 let cell = components.messageComposerAttachmentCell.init()
                     .withoutAutoresizingMaskConstraints
                 cell.embed(attachmentView: view)
@@ -72,63 +122,64 @@ open class AttachmentsPreviewVC: _ViewController, ComponentsProvider {
                 return cell
             }
     }
-    
+
     override open func setUpAppearance() {
         super.setUpAppearance()
-        
+
         horizontalStackView.backgroundColor = .clear
         horizontalStackView.isLayoutMarginsRelativeArrangement = true
 
         verticalStackView.backgroundColor = .clear
         verticalStackView.isLayoutMarginsRelativeArrangement = true
-        
+
         horizontalScrollView.backgroundColor = .clear
         horizontalScrollView.showsHorizontalScrollIndicator = false
         horizontalScrollView.showsVerticalScrollIndicator = false
-        
+
         verticalScrollView.backgroundColor = .clear
         verticalScrollView.showsHorizontalScrollIndicator = false
         verticalScrollView.showsVerticalScrollIndicator = false
     }
-    
+
     override open func setUpLayout() {
         super.setUpLayout()
-        
+
         view.embed(containerStackView)
-        
+
         horizontalScrollView.embed(horizontalStackView)
         containerStackView.addArrangedSubview(horizontalScrollView)
-        
+
         verticalScrollView.embed(verticalStackView)
         containerStackView.addArrangedSubview(verticalScrollView)
-        
+
         horizontalScrollView.isHidden = true
         verticalScrollView.isHidden = true
-        
+
         horizontalScrollView.heightAnchor.pin(equalTo: horizontalStackView.heightAnchor).isActive = true
         horizontalScrollView.widthAnchor.pin(equalTo: verticalStackView.widthAnchor).isActive = true
-        
-        verticalScrollView.heightAnchor.pin(equalTo: verticalStackView.heightAnchor).isActive = true
+
+        verticalScrollView.heightAnchor.pin(equalTo: verticalStackView.heightAnchor).with(priority: .defaultLow).isActive = true
         verticalScrollView.widthAnchor.pin(equalTo: verticalStackView.widthAnchor).isActive = true
     }
-    
+
     override open func updateContent() {
         super.updateContent()
-        
+
         horizontalScrollView.isHidden = true
         verticalScrollView.isHidden = true
-        
+        processingPreviewsByID.removeAll()
+
         let axises = Set(content.map { type(of: $0).preferredAxis })
-        
+
         if axises.contains(.horizontal) {
             setupHorizontalStackView()
         }
-        
+
         if axises.contains(.vertical) {
             setupVerticalStackView()
         }
     }
-    
+
     open func setupHorizontalStackView() {
         horizontalScrollView.isHidden = false
 
@@ -138,7 +189,7 @@ open class AttachmentsPreviewVC: _ViewController, ComponentsProvider {
         // Spacer
         horizontalStackView.addArrangedSubview(UIView())
     }
-    
+
     open func setupVerticalStackView() {
         verticalScrollView.isHidden = false
 
@@ -150,15 +201,14 @@ open class AttachmentsPreviewVC: _ViewController, ComponentsProvider {
         // constraint is not yet created, append to the vertical constraint and activate it.
         if verticalAttachmentPreviews.count > maxNumberOfVerticalItems, let firstAttachmentView = verticalAttachmentPreviews.first {
             if verticalScrollViewHeightConstraint == nil {
+                verticalStackView.layoutIfNeeded()
                 let attachmentHeight = firstAttachmentView
                     .systemLayoutSizeFitting(.init(width: CGFloat.infinity, height: CGFloat.infinity))
                     .height
                 let spacingSize = CGFloat(verticalAttachmentPreviews.count + 1) * verticalStackView.spacing.rawValue
                 let maxScrollViewHeight: CGFloat = CGFloat(maxNumberOfVerticalItems) * attachmentHeight + spacingSize
 
-                verticalScrollViewHeightConstraint = verticalScrollView.heightAnchor.pin(
-                    lessThanOrEqualToConstant: maxScrollViewHeight
-                )
+                verticalScrollViewHeightConstraint = verticalScrollView.heightAnchor.pin(equalToConstant: maxScrollViewHeight)
                 verticalScrollViewHeightConstraint?.isActive = true
             }
 
@@ -169,6 +219,14 @@ open class AttachmentsPreviewVC: _ViewController, ComponentsProvider {
             // reset the scroll view height constraint.
             verticalScrollViewHeightConstraint?.isActive = false
             verticalScrollViewHeightConstraint = nil
+        }
+    }
+
+    /// Updates in-place progress on pending attachment previews without rebuilding the stack.
+    open func applyProcessingProgress() {
+        for (id, preview) in processingPreviewsByID {
+            guard let progress = processingProgressByID[id] else { continue }
+            preview.progress = progress
         }
     }
 

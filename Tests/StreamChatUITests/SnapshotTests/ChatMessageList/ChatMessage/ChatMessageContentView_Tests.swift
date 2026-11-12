@@ -1,13 +1,19 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
 @testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import XCTest
 
-final class ChatMessageContentView_Tests: XCTestCase {
+@MainActor final class ChatMessageContentView_Tests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        Appearance.default = Appearance()
+    }
+
     /// Default content view width.
     private let contentViewWidth: CGFloat = 360
     /// The current user.
@@ -15,11 +21,15 @@ final class ChatMessageContentView_Tests: XCTestCase {
     /// Another user.
     private let myFriend: ChatUser = .mock(id: .unique, imageURL: TestImages.vader.url)
     /// The `createdAt` for all test messages
-    private let createdAt = DateFormatter.Stream.rfc3339Date(from: "2019-12-12T15:33:46.488935Z")!
+    private let createdAt = "2019-12-12T15:33:46.488935Z".toDate()
+
+    override class func setUp() {
+        // no-op: the mock image loader loads images synchronously from file URLs
+    }
 
     func test_appearance() {
         let components = Components.mock
-        
+
         // Iterate over messages and layouts.
         for (message, layout) in testMessagesAndLayouts {
             // Create message content view with the provided `message` and `layout`.
@@ -63,7 +73,7 @@ final class ChatMessageContentView_Tests: XCTestCase {
             layout: failedMessage.layout(isLastInGroup: true),
             components: components
         )
-        
+
         // Add view to view heirarchy to trigger lifecycle methods.
         UIView().addSubview(view)
 
@@ -84,9 +94,9 @@ final class ChatMessageContentView_Tests: XCTestCase {
         )
 
         // Create custom Appearance.
-        var appearance = Appearance.default
+        let appearance = Appearance.default
         // Inject custom `alert` colour.
-        appearance.colorPalette.alert = .systemYellow
+        appearance.colorPalette.accentError = .systemYellow
 
         // Create message content view with the provided `message`, `layout`, and `config`
         let view = contentView(
@@ -98,7 +108,7 @@ final class ChatMessageContentView_Tests: XCTestCase {
         // Assert message content view is rendered correctly.
         AssertSnapshot(view)
     }
-    
+
     func test_appearanceForSystemMessage() {
         // Create a system message
         let systemMessage: ChatMessage = .mock(
@@ -110,7 +120,7 @@ final class ChatMessageContentView_Tests: XCTestCase {
             createdAt: createdAt,
             isSentByCurrentUser: false
         )
-        
+
         let appearance = Appearance.default
 
         let view = contentView(
@@ -122,7 +132,7 @@ final class ChatMessageContentView_Tests: XCTestCase {
         // Assert message content view is rendered correctly.
         AssertSnapshot(view)
     }
-    
+
     func test_appearanceForErrorMessage() {
         // Create a system message
         let systemMessage: ChatMessage = .mock(
@@ -134,25 +144,25 @@ final class ChatMessageContentView_Tests: XCTestCase {
             createdAt: createdAt,
             isSentByCurrentUser: false
         )
-        
+
         let appearance = Appearance.default
-        
+
         let view = contentView(
             message: systemMessage,
             layout: systemMessage.layout(isLastInGroup: true),
             appearance: appearance
         )
-        
+
         // Assert message content view is rendered correctly.
         AssertSnapshot(view)
     }
-    
+
     func test_appearance_whenMessageFromTheCurrentUserIsPendingSend() {
         let channelWithReadsEnabled: ChatChannel = .mock(
             cid: .unique,
             config: .mock(readEventsEnabled: true)
         )
-        
+
         let pendingSendMessageFromCurrentUser: ChatMessage = .mock(
             id: .unique,
             cid: channelWithReadsEnabled.cid,
@@ -162,21 +172,21 @@ final class ChatMessageContentView_Tests: XCTestCase {
             localState: .sending,
             isSentByCurrentUser: true
         )
-        
+
         let view = contentView(
             message: pendingSendMessageFromCurrentUser,
             channel: channelWithReadsEnabled
         )
-        
+
         AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
     }
-    
+
     func test_appearance_whenMessageFromTheCurrentUserIsSent() {
         let channelWithReadsEnabled: ChatChannel = .mock(
             cid: .unique,
             config: .mock(readEventsEnabled: true)
         )
-        
+
         let sentMessageFromCurrentUser: ChatMessage = .mock(
             id: .unique,
             cid: channelWithReadsEnabled.cid,
@@ -187,50 +197,28 @@ final class ChatMessageContentView_Tests: XCTestCase {
             isSentByCurrentUser: true,
             readBy: []
         )
-        
+
         let view = contentView(
             message: sentMessageFromCurrentUser,
             channel: channelWithReadsEnabled
         )
-        
+
         AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
     }
-    
+
     func test_appearance_whenMessageWithMarkdownFromTheCurrentUserIsSent() {
         let channelWithReadsEnabled: ChatChannel = .mock(
             cid: .unique,
             config: .mock(readEventsEnabled: true)
         )
-        
+
         let messageWithMarkdown = """
-          *italics* or _italics_
-          **bold** or __bold__
-          ~~Linethrough~~Strikethroughs.
+          *italics* or _italics_  
+          **bold** or __bold__  
+          ~~Linethrough~~Strikethroughs.  
           `let property: Double = 10.0`
-
-          # Header 1
-          ## Header 2
-          ### Header 3
-          #### Header 4
-          ##### Header 5 #####
-          ###### Header 6 ######
-
-          [Links](https://getstream.io/)
-
-          > Blockquotes
-
-          - Bulleted
-          - Lists
-              - Including indented lists
-                  - Up to three levels
-          - Neat!
-
-          1. Ordered
-          1. Lists
-              1. Including indented lists
-                  - Up to three levels
         """
-        
+
         let sentMessageFromCurrentUser: ChatMessage = .mock(
             id: .unique,
             cid: channelWithReadsEnabled.cid,
@@ -241,22 +229,240 @@ final class ChatMessageContentView_Tests: XCTestCase {
             isSentByCurrentUser: true,
             readBy: []
         )
-        
+
         let view = contentView(
             message: sentMessageFromCurrentUser,
             channel: channelWithReadsEnabled
         )
-        
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_updateContent_whenMarkdownAndPlainTextHaveSameRenderedString_resetsFont() throws {
+        let view = contentView(message: .mock(text: "**test**"))
+        let hostView = UIView()
+        hostView.addSubview(view)
+
+        let markdownText = try XCTUnwrap(view.textView?.attributedText)
+        let markdownFont = try XCTUnwrap(markdownText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertTrue(markdownFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+
+        view.content = .mock(text: "test")
+
+        let plainText = try XCTUnwrap(view.textView?.attributedText)
+        let plainFont = try XCTUnwrap(plainText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(plainText.string, "test")
+        XCTAssertFalse(plainFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+        withExtendedLifetime(hostView) {}
+    }
+
+    func test_updateContent_whenMixedMarkdownAndPlainTextHaveSameRenderedString_resetsFont() throws {
+        let view = contentView(message: .mock(text: "hello **world**"))
+        let hostView = UIView()
+        hostView.addSubview(view)
+
+        let markdownText = try XCTUnwrap(view.textView?.attributedText)
+        let worldRange = (markdownText.string as NSString).range(of: "world")
+        let markdownWorldFont = try XCTUnwrap(markdownText.attribute(.font, at: worldRange.location, effectiveRange: nil) as? UIFont)
+        XCTAssertTrue(markdownWorldFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+
+        view.content = .mock(text: "hello world")
+
+        let plainText = try XCTUnwrap(view.textView?.attributedText)
+        let plainWorldRange = (plainText.string as NSString).range(of: "world")
+        let plainWorldFont = try XCTUnwrap(plainText.attribute(.font, at: plainWorldRange.location, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(plainText.string, "hello world")
+        XCTAssertFalse(plainWorldFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+        withExtendedLifetime(hostView) {}
+    }
+
+    func test_updateContent_whenMarkdownIsDisabled_resetsPreviouslyBoldFont() throws {
+        let appearance = Appearance.default
+        let view = contentView(message: .mock(text: "**test**"), appearance: appearance)
+        let hostView = UIView()
+        hostView.addSubview(view)
+
+        let markdownText = try XCTUnwrap(view.textView?.attributedText)
+        let markdownFont = try XCTUnwrap(markdownText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertTrue(markdownFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+
+        appearance.formatters.isMarkdownEnabled = false
+        view.content = .mock(text: "test")
+
+        let plainText = try XCTUnwrap(view.textView?.attributedText)
+        let plainFont = try XCTUnwrap(plainText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(plainText.string, "test")
+        XCTAssertFalse(plainFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+        withExtendedLifetime(hostView) {}
+    }
+
+    func test_updateContent_whenRebuildingMarkdownText_appliesMarkdownAndLinkDetection() throws {
+        let view = contentView(message: .mock(text: "Initial text"))
+        let hostView = UIView()
+        hostView.addSubview(view)
+
+        view.content = .mock(text: "**test** https://getstream.io")
+
+        let attributedText = try XCTUnwrap(view.textView?.attributedText)
+        let boldFont = try XCTUnwrap(attributedText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        let linkRange = (attributedText.string as NSString).range(of: "https://getstream.io")
+        XCTAssertTrue(boldFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+        XCTAssertEqual(attributedText.attribute(.link, at: linkRange.location, effectiveRange: nil) as? URL, URL(string: "https://getstream.io"))
+        withExtendedLifetime(hostView) {}
+    }
+
+    func test_updateContent_whenMentionedUsersAreRemoved_resetsMentionLinks() throws {
+        let mentionedUser = ChatUser.mock(id: .unique, name: "alice")
+        let view = contentView(message: .mock(text: "hey @alice", mentionedUsers: [mentionedUser]))
+        let hostView = UIView()
+        hostView.addSubview(view)
+
+        let mentionedText = try XCTUnwrap(view.textView?.attributedText)
+        let mentionRange = (mentionedText.string as NSString).range(of: "@alice")
+        XCTAssertNotNil(mentionedText.attribute(.link, at: mentionRange.location, effectiveRange: nil))
+
+        view.content = .mock(text: "hey @alice")
+
+        let plainText = try XCTUnwrap(view.textView?.attributedText)
+        let plainMentionRange = (plainText.string as NSString).range(of: "@alice")
+        XCTAssertNil(plainText.attribute(.link, at: plainMentionRange.location, effectiveRange: nil))
+        withExtendedLifetime(hostView) {}
+    }
+
+    func test_updateContent_whenMentionedUsersAreAdded_appliesMentionLinks() throws {
+        let view = contentView(message: .mock(text: "hey @alice"))
+        let hostView = UIView()
+        hostView.addSubview(view)
+
+        let initialText = try XCTUnwrap(view.textView?.attributedText)
+        let initialRange = (initialText.string as NSString).range(of: "@alice")
+        XCTAssertNil(initialText.attribute(.link, at: initialRange.location, effectiveRange: nil))
+
+        view.content = .mock(
+            text: "hey @alice",
+            mentionedUsers: [ChatUser.mock(id: .unique, name: "alice")]
+        )
+
+        let mentionedText = try XCTUnwrap(view.textView?.attributedText)
+        let mentionRange = (mentionedText.string as NSString).range(of: "@alice")
+        XCTAssertNotNil(mentionedText.attribute(.link, at: mentionRange.location, effectiveRange: nil))
+        withExtendedLifetime(hostView) {}
+    }
+
+    func test_appearance_whenMessageWithMarkdownOrderedListFromTheCurrentUserIsSent() {
+        let channelWithReadsEnabled: ChatChannel = .mock(
+            cid: .unique,
+            config: .mock(readEventsEnabled: true)
+        )
+
+        let messageWithMarkdownOrderedList = """
+           1. Test1
+           2. Test2
+           3. Test3
+           4. Test4
+           5. Test5
+           6. Test6
+           7. Test7
+           8. Test8
+           9. Test9
+           10. Test10
+           33. Test33
+        """
+
+        let sentMessageFromCurrentUser: ChatMessage = .mock(
+            id: .unique,
+            cid: channelWithReadsEnabled.cid,
+            text: messageWithMarkdownOrderedList,
+            author: me,
+            createdAt: createdAt,
+            localState: nil,
+            isSentByCurrentUser: true,
+            readBy: []
+        )
+
+        let view = contentView(
+            message: sentMessageFromCurrentUser,
+            channel: channelWithReadsEnabled
+        )
+
         AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
     }
     
+    func test_appearance_whenMessageWithoutMarkdownOrderedListFromTheCurrentUserIsSent() {
+        let channelWithReadsEnabled: ChatChannel = .mock(
+            cid: .unique,
+            config: .mock(readEventsEnabled: true)
+        )
+
+        let messageWithMarkdownOrderedList = """
+           The UPS Store
+
+           123 S Beverly st
+
+           Beverly Hills CA 1233210.
+        """
+
+        let sentMessageFromCurrentUser: ChatMessage = .mock(
+            id: .unique,
+            cid: channelWithReadsEnabled.cid,
+            text: messageWithMarkdownOrderedList,
+            author: me,
+            createdAt: createdAt,
+            localState: nil,
+            isSentByCurrentUser: true,
+            readBy: []
+        )
+
+        let view = contentView(
+            message: sentMessageFromCurrentUser,
+            channel: channelWithReadsEnabled
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+    
+    func test_appearance_whenMessageWithMarkdownItalicStyleFromTheCurrentUserIsSent() {
+        let channelWithReadsEnabled: ChatChannel = .mock(
+            cid: .unique,
+            config: .mock(readEventsEnabled: true)
+        )
+
+        let messageWithMarkdown = """
+           https://getstream.io/test_endpoint_in__snake__style    
+           Test_text_in__snake__style and plain text  
+           Test plain text and the_text_in__snake__style  
+           _Test text in italic style_ and plain text  
+           Test plain text and _text in italic style_  
+           Test plain text, _text in italic style_ and plain text  
+           Test plain text, __text in bold style__ and plain text
+        """
+
+        let sentMessageFromCurrentUser: ChatMessage = .mock(
+            id: .unique,
+            cid: channelWithReadsEnabled.cid,
+            text: messageWithMarkdown,
+            author: me,
+            createdAt: createdAt,
+            localState: nil,
+            isSentByCurrentUser: true,
+            readBy: []
+        )
+
+        let view = contentView(
+            message: sentMessageFromCurrentUser,
+            channel: channelWithReadsEnabled
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
     func test_appearance_whenMessageFromTheCurrentUserIsRead_inDirectMesssagesChannel() {
         let dmChannelWithReadsEnabled: ChatChannel = .mock(
             cid: .unique,
             config: .mock(readEventsEnabled: true),
             memberCount: 2
         )
-        
+
         let sentMessageFromCurrentUser: ChatMessage = .mock(
             id: .unique,
             cid: dmChannelWithReadsEnabled.cid,
@@ -267,22 +473,22 @@ final class ChatMessageContentView_Tests: XCTestCase {
             isSentByCurrentUser: true,
             readBy: [.mock(id: .unique)]
         )
-        
+
         let view = contentView(
             message: sentMessageFromCurrentUser,
             channel: dmChannelWithReadsEnabled
         )
-        
+
         AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
     }
-    
+
     func test_appearance_whenMessageFromTheCurrentUserIsRead_inGroupChannel() {
         let groupChannelWithReadsEnabled: ChatChannel = .mock(
             cid: .unique,
             config: .mock(readEventsEnabled: true),
             memberCount: 5
         )
-        
+
         let sentMessageFromCurrentUser: ChatMessage = .mock(
             id: .unique,
             cid: groupChannelWithReadsEnabled.cid,
@@ -293,16 +499,559 @@ final class ChatMessageContentView_Tests: XCTestCase {
             isSentByCurrentUser: true,
             readBy: [.mock(id: .unique)]
         )
-        
+
         let view = contentView(
             message: sentMessageFromCurrentUser,
             channel: groupChannelWithReadsEnabled
         )
-        
+
         AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
     }
 
-    func test_ChatReactionsBubbleViewInjectable() {
+    func test_appearance_whenMessageHasLink() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "https://getstream.io/chat/docs/",
+            author: me,
+            createdAt: createdAt,
+            attachments: [
+                .dummy(
+                    id: .unique,
+                    type: .linkPreview,
+                    payload: try JSONEncoder.stream.encode(LinkAttachmentPayload(
+                        originalURL: URL(string: "https://getstream.io/chat/docs/")!,
+                        title: "Chat API Documentation",
+                        text: "Stream, scalable news feeds and activity streams as a service.",
+                        author: "Stream",
+                        previewURL: TestImages.r2.url
+                    )),
+                    uploadingState: nil
+                )
+            ],
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique),
+            attachmentInjector: LinkAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenMessageHasLinkAndMention() throws {
+        let mentionedUser = myFriend
+        mentionedUser.name = "MyFriend"
+        let messageWithMentionAndLink = "Hello @\(mentionedUser.name ?? "")!, check this link: getstream.io/chat/docs"
+
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: messageWithMentionAndLink,
+            author: me,
+            createdAt: createdAt,
+            mentionedUsers: [mentionedUser],
+            attachments: [
+                .dummy(
+                    id: .unique,
+                    type: .linkPreview,
+                    payload: try JSONEncoder.stream.encode(LinkAttachmentPayload(
+                        originalURL: URL(string: "https://getstream.io/chat/docs/")!,
+                        title: "Chat API Documentation",
+                        text: "Stream, scalable news feeds and activity streams as a service.",
+                        author: "Stream",
+                        previewURL: TestImages.r2.url
+                    )),
+                    uploadingState: nil
+                )
+            ],
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique),
+            attachmentInjector: LinkAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_appearance_whenMessageHasLinkAndMarkdown() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "## Hey!, check this link: getstream.io/chat/docs",
+            author: me,
+            createdAt: createdAt,
+            attachments: [
+                .dummy(
+                    id: .unique,
+                    type: .linkPreview,
+                    payload: try JSONEncoder.stream.encode(LinkAttachmentPayload(
+                        originalURL: URL(string: "https://getstream.io/chat/docs/")!,
+                        title: "Chat API Documentation",
+                        text: "Stream, scalable news feeds and activity streams as a service.",
+                        author: "Stream",
+                        previewURL: TestImages.r2.url
+                    )),
+                    uploadingState: nil
+                )
+            ],
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique),
+            attachmentInjector: LinkAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_appearance_whenMessageHasLinkWithoutImage() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "https://getstream.io/chat/docs/",
+            author: me,
+            createdAt: createdAt,
+            attachments: [
+                .dummy(
+                    id: .unique,
+                    type: .linkPreview,
+                    payload: try JSONEncoder.stream.encode(LinkAttachmentPayload(
+                        originalURL: URL(string: "https://getstream.io/chat/docs/")!,
+                        title: "Chat API Documentation",
+                        text: "Stream, scalable news feeds and activity streams as a service.",
+                        author: "Stream",
+                        previewURL: nil
+                    )),
+                    uploadingState: nil
+                )
+            ],
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique),
+            attachmentInjector: LinkAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenMessageHasLinkWithoutAuthor() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "https://getstream.io/chat/docs/",
+            author: me,
+            createdAt: createdAt,
+            attachments: [
+                .dummy(
+                    id: .unique,
+                    type: .linkPreview,
+                    payload: try JSONEncoder.stream.encode(LinkAttachmentPayload(
+                        originalURL: URL(string: "https://getstream.io/chat/docs/")!,
+                        title: "Chat API Documentation",
+                        text: "Stream, scalable news feeds and activity streams as a service.",
+                        author: nil,
+                        previewURL: TestImages.r2.url
+                    )),
+                    uploadingState: nil
+                )
+            ],
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique),
+            attachmentInjector: LinkAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenMessageHasLinkWithoutImageAndAuthor() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "https://getstream.io/chat/docs/",
+            author: me,
+            createdAt: createdAt,
+            attachments: [
+                .dummy(
+                    id: .unique,
+                    type: .linkPreview,
+                    payload: try JSONEncoder.stream.encode(LinkAttachmentPayload(
+                        originalURL: URL(string: "https://getstream.io/chat/docs/")!,
+                        title: "Chat API Documentation",
+                        text: "Stream, scalable news feeds and activity streams as a service.",
+                        author: nil,
+                        previewURL: nil
+                    )),
+                    uploadingState: nil
+                )
+            ],
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique),
+            attachmentInjector: LinkAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_linkDetection_whenMarkdownLinkDisplayTextLooksLikeAURL_usesTheHrefFromMarkdown() throws {
+        let realURL = URL(string: "https://real-link.com")!
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "[https://text-link.com](https://real-link.com)",
+            author: me,
+            createdAt: createdAt,
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(message: message, channel: .mock(cid: .unique))
+        // Adding to a hierarchy triggers the initial `updateContent()` call.
+        UIView().addSubview(view)
+
+        let attributedText = try XCTUnwrap(view.textView?.attributedText)
+        var foundLink: URL?
+        attributedText.enumerateAttribute(.link, in: NSRange(location: 0, length: attributedText.length)) { value, _, _ in
+            if let url = value as? URL {
+                foundLink = url
+            }
+        }
+
+        XCTAssertEqual(foundLink, realURL)
+    }
+
+    func test_linkDetection_whenPlainTextURLHasNoMarkdownLink_stillDetectsIt() throws {
+        let detectedURL = URL(string: "https://getstream.io")!
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "visit https://getstream.io now",
+            author: me,
+            createdAt: createdAt,
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(message: message, channel: .mock(cid: .unique))
+        // Adding to a hierarchy triggers the initial `updateContent()` call.
+        UIView().addSubview(view)
+
+        let attributedText = try XCTUnwrap(view.textView?.attributedText)
+        var foundLink: URL?
+        attributedText.enumerateAttribute(.link, in: NSRange(location: 0, length: attributedText.length)) { value, _, _ in
+            if let url = value as? URL {
+                foundLink = url
+            }
+        }
+
+        XCTAssertEqual(foundLink, detectedURL)
+    }
+
+    func test_appearance_whenMessageHasOnlyOneImage_masksAllTopCorners() throws {
+        class CustomBubbleView: ChatMessageBubbleView {
+            override func updateContent() {
+                super.updateContent()
+                backgroundColor = .red
+            }
+        }
+
+        var components = Components.mock
+        components.messageBubbleView = CustomBubbleView.self
+
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello",
+            author: .unique,
+            createdAt: createdAt,
+            attachments: [.dummy(
+                id: .unique,
+                type: .image,
+                payload: try JSONEncoder.stream.encode(ImageAttachmentPayload(
+                    title: nil,
+                    imageRemoteURL: TestImages.r2.url,
+                    file: try .init(url: TestImages.r2.url)
+                )),
+                uploadingState: nil
+            )],
+            localState: nil,
+            isSentByCurrentUser: false
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique, membership: .mock(id: .unique)),
+            components: components,
+            attachmentInjector: GalleryAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_appearance_whenMessageHasImageBelowAnotherAttachment_doesNotMaskTopCorners() throws {
+        class CustomBubbleView: ChatMessageBubbleView {
+            override func updateContent() {
+                super.updateContent()
+                backgroundColor = .red
+            }
+        }
+
+        var components = Components.mock
+        components.messageBubbleView = CustomBubbleView.self
+
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "",
+            author: .unique,
+            createdAt: createdAt,
+            attachments: [
+                .dummy(
+                    id: .unique,
+                    type: .voiceRecording,
+                    payload: try JSONEncoder.stream.encode(VoiceRecordingAttachmentPayload(
+                        title: "Recording",
+                        voiceRecordingRemoteURL: .unique(),
+                        file: .init(type: .aac, size: 120, mimeType: nil),
+                        duration: 10,
+                        waveformData: [0, 0.2, 0.4, 0.6, 0.8, 1],
+                        extraData: nil
+                    )),
+                    uploadingState: nil
+                ),
+                .dummy(
+                    id: .unique,
+                    type: .image,
+                    payload: try JSONEncoder.stream.encode(ImageAttachmentPayload(
+                        title: nil,
+                        imageRemoteURL: TestImages.r2.url,
+                        file: try .init(url: TestImages.r2.url)
+                    )),
+                    uploadingState: nil
+                )
+            ],
+            localState: nil,
+            isSentByCurrentUser: false
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique, membership: .mock(id: .unique)),
+            components: components,
+            attachmentInjector: MixedAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_appearance_whenMessageHasTranslation_whenIsSentByCurrentUser() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello",
+            author: me,
+            createdAt: createdAt,
+            translations: [.portuguese: "Olá"],
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique, membership: .mock(id: .unique, language: .portuguese))
+        )
+        view.layoutOptions?.insert(.translation)
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenMessageHasTranslation_whenNotSentByCurrentUser() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello",
+            author: .unique,
+            createdAt: createdAt,
+            translations: [.portuguese: "Olá"],
+            localState: nil,
+            isSentByCurrentUser: false
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique, membership: .mock(id: .unique, language: .portuguese))
+        )
+        view.layoutOptions?.insert(.translation)
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenMessageHasTranslation_whenHasAttachment() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello",
+            author: .unique,
+            createdAt: createdAt,
+            translations: [.portuguese: "Olá"],
+            attachments: [.dummy(
+                id: .unique,
+                type: .image,
+                payload: try JSONEncoder.stream.encode(ImageAttachmentPayload(
+                    title: nil,
+                    imageRemoteURL: TestImages.r2.url,
+                    file: try .init(url: TestImages.r2.url)
+                )),
+                uploadingState: nil
+            )],
+            localState: nil,
+            isSentByCurrentUser: false
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique, membership: .mock(id: .unique, language: .portuguese)),
+            attachmentInjector: GalleryAttachmentViewInjector.self
+        )
+        view.layoutOptions?.insert(.translation)
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_appearance_whenMessageHasTranslation_whenNotLastInGroup() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello",
+            author: .unique,
+            createdAt: createdAt,
+            translations: [.portuguese: "Olá"],
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique, membership: .mock(id: .unique, language: .portuguese)),
+            layout: message.layout(isLastInGroup: false)
+        )
+        view.layoutOptions?.insert(.translation)
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenQuoteMessageHasTranslation() throws {
+        let quotedMessage: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello",
+            author: .unique,
+            createdAt: createdAt,
+            translations: [.portuguese: "Olá"],
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let message: ChatMessage = .mock(id: .unique, text: "Reply Text", quotedMessage: quotedMessage)
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique, membership: .mock(id: .unique, language: .portuguese))
+        )
+        view.layoutOptions?.insert(.translation)
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_appearance_whenMessageIsBounced() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello",
+            type: .error,
+            author: .unique,
+            createdAt: createdAt,
+            isBounced: true,
+            localState: nil,
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique)
+        )
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_appearance_whenMessageIsEdited() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello World",
+            author: .unique,
+            createdAt: createdAt,
+            localState: nil,
+            isSentByCurrentUser: true,
+            textUpdatedAt: .unique
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique)
+        )
+        view.components.isMessageEditedLabelEnabled = true
+
+        AssertSnapshot(view, variants: .all)
+    }
+
+    func test_appearance_whenMessageIsEdited_andDeleted_shouldNotShowEditedLabel() throws {
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello World",
+            author: .unique,
+            createdAt: createdAt,
+            deletedAt: .unique,
+            localState: nil,
+            isSentByCurrentUser: true,
+            textUpdatedAt: .unique
+        )
+
+        let view = contentView(
+            message: message,
+            channel: .mock(cid: .unique)
+        )
+        view.components.isMessageEditedLabelEnabled = true
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_chatReactionsBubbleViewInjectable() {
         let testMessage: ChatMessage = .mock(
             id: .unique,
             cid: .unique,
@@ -333,7 +1082,7 @@ final class ChatMessageContentView_Tests: XCTestCase {
             layout: testMessage.layout(isLastInGroup: true),
             components: components
         )
-        
+
         // Add view to view heirarchy to trigger lifecycle methods.
         UIView().addSubview(view)
 
@@ -341,6 +1090,343 @@ final class ChatMessageContentView_Tests: XCTestCase {
         let reactionBubbleView = view.reactionsBubbleView
         XCTAssertNotNil(reactionBubbleView)
         XCTAssert(reactionBubbleView is CustomChatReactionsBubbleView)
+    }
+
+    func test_appearance_whenMessageWithAMentionedUserIsSent() {
+        let channelWithReadsEnabled: ChatChannel = .mock(
+            cid: .unique,
+            config: .mock(readEventsEnabled: true)
+        )
+
+        let mentionedUser = myFriend
+        mentionedUser.name = "MyFriend"
+        let messageWithMention = "Hello @\(mentionedUser.name ?? "")!, how are you?"
+
+        let sentMessageFromCurrentUser: ChatMessage = .mock(
+            id: .unique,
+            cid: channelWithReadsEnabled.cid,
+            text: messageWithMention,
+            author: me,
+            createdAt: createdAt,
+            mentionedUsers: [mentionedUser],
+            localState: nil,
+            isSentByCurrentUser: true,
+            readBy: []
+        )
+
+        let view = contentView(
+            message: sentMessageFromCurrentUser,
+            channel: channelWithReadsEnabled
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenMessageWithAMentionedUserIsSent_whenNoName() {
+        let channelWithReadsEnabled: ChatChannel = .mock(
+            cid: .unique,
+            config: .mock(readEventsEnabled: true)
+        )
+
+        let mentionedUser = ChatUser.mock(id: "user-id")
+        mentionedUser.name = nil
+        let messageWithMention = "Hello @\(mentionedUser.id)!, how are you?"
+
+        let sentMessageFromCurrentUser: ChatMessage = .mock(
+            id: .unique,
+            cid: channelWithReadsEnabled.cid,
+            text: messageWithMention,
+            author: me,
+            createdAt: createdAt,
+            mentionedUsers: [mentionedUser],
+            localState: nil,
+            isSentByCurrentUser: true,
+            readBy: []
+        )
+
+        let view = contentView(
+            message: sentMessageFromCurrentUser,
+            channel: channelWithReadsEnabled
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenMessageWithAMentionedUserIsSent_whenDuplicatedMentions() {
+        let channelWithReadsEnabled: ChatChannel = .mock(
+            cid: .unique,
+            config: .mock(readEventsEnabled: true)
+        )
+
+        let mentionedUser = ChatUser.mock(id: .unique, name: "Leia")
+        let messageWithMention = "Hello @\(mentionedUser.name ?? "")!, how are you @\(mentionedUser.name ?? "")?"
+
+        let sentMessageFromCurrentUser: ChatMessage = .mock(
+            id: .unique,
+            cid: channelWithReadsEnabled.cid,
+            text: messageWithMention,
+            author: me,
+            createdAt: createdAt,
+            mentionedUsers: [mentionedUser, mentionedUser],
+            localState: nil,
+            isSentByCurrentUser: true,
+            readBy: []
+        )
+
+        let view = contentView(
+            message: sentMessageFromCurrentUser,
+            channel: channelWithReadsEnabled
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_textViewShouldInteractWithUrl_whenMentionedUserTapped_callsDelegate_returnsFalse() {
+        let mentionedUser = myFriend
+        mentionedUser.name = "MyFriend"
+
+        let messageWithMentions: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: .unique,
+            author: me,
+            createdAt: createdAt,
+            mentionedUsers: [mentionedUser],
+            localState: nil,
+            isSentByCurrentUser: true,
+            readBy: []
+        )
+
+        let textViewUserMentionsHandler = TextViewUserMentionsHandler_Mock()
+        textViewUserMentionsHandler.mockMentionedUser = mentionedUser
+
+        let chatMessageViewContentDelegate = ChatMessageContentViewDelegate_Mock()
+
+        let view = contentView(
+            message: messageWithMentions
+        )
+        view.textViewUserMentionsHandler = textViewUserMentionsHandler
+        view.delegate = chatMessageViewContentDelegate
+
+        let shouldInteract = view.textView(
+            UITextView(),
+            shouldInteractWith: URL(string: "url")!,
+            in: .init(location: 4, length: 7),
+            interaction: .invokeDefaultAction
+        )
+
+        XCTAssertEqual(shouldInteract, false)
+        XCTAssertEqual(chatMessageViewContentDelegate.tappedMentionedUser, mentionedUser)
+        XCTAssertEqual(chatMessageViewContentDelegate.messageContentViewDidTapOnMentionedUserCallCount, 1)
+    }
+
+    func test_textViewShouldInteractWithUrl_whenMentionedUserNotTapped_doesNotCallDelegate_returnsTrue() {
+        let mentionedUser = myFriend
+        mentionedUser.name = "MyFriend"
+
+        let messageWithMentions: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: .unique,
+            author: me,
+            createdAt: createdAt,
+            mentionedUsers: [mentionedUser],
+            localState: nil,
+            isSentByCurrentUser: true,
+            readBy: []
+        )
+
+        let textViewUserMentionsHandler = TextViewUserMentionsHandler_Mock()
+        textViewUserMentionsHandler.mockMentionedUser = nil
+
+        let chatMessageViewContentDelegate = ChatMessageContentViewDelegate_Mock()
+
+        let view = contentView(
+            message: messageWithMentions
+        )
+        view.textViewUserMentionsHandler = textViewUserMentionsHandler
+        view.delegate = chatMessageViewContentDelegate
+
+        let shouldInteract = view.textView(
+            UITextView(),
+            shouldInteractWith: URL(string: "url")!,
+            in: .init(location: 4, length: 7),
+            interaction: .invokeDefaultAction
+        )
+
+        XCTAssertEqual(shouldInteract, true)
+        XCTAssertEqual(chatMessageViewContentDelegate.messageContentViewDidTapOnMentionedUserCallCount, 0)
+    }
+
+    func test_handleTapOnQuotedMessage() {
+        let quotedMessage = ChatMessage.mock()
+        let messageWithQuotedMessage: ChatMessage = .mock(quotedMessage: quotedMessage)
+
+        let chatMessageViewContentDelegate = ChatMessageContentViewDelegate_Mock()
+        let view = contentView(
+            message: messageWithQuotedMessage
+        )
+        view.delegate = chatMessageViewContentDelegate
+
+        view.handleTapOnQuotedMessage()
+
+        XCTAssertEqual(chatMessageViewContentDelegate.tappedQuotedMessage, quotedMessage)
+        XCTAssertEqual(chatMessageViewContentDelegate.messageContentViewDidTapOnQuotedMessageCallCount, 1)
+    }
+}
+
+// MARK: - Video Attachment
+
+extension ChatMessageContentView_Tests {
+    func test_appearance_whenMessageWithVideoAttachment_incoming() {
+        let videoAttachment: ChatMessageVideoAttachment = .mock(
+            id: .unique,
+            thumbnailURL: TestImages.yoda.url,
+            localState: nil
+        )
+
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "",
+            author: myFriend,
+            createdAt: createdAt,
+            attachments: [videoAttachment.asAnyAttachment],
+            isSentByCurrentUser: false
+        )
+
+        let view = contentView(
+            message: message,
+            layout: message.layout(isLastInGroup: true),
+            components: .mock,
+            attachmentInjector: GalleryAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenMessageWithVideoAttachment_outgoing() {
+        let videoAttachment: ChatMessageVideoAttachment = .mock(
+            id: .unique,
+            thumbnailURL: TestImages.yoda.url,
+            localState: nil
+        )
+
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "",
+            author: me,
+            createdAt: createdAt,
+            attachments: [videoAttachment.asAnyAttachment],
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            layout: message.layout(isLastInGroup: true),
+            components: .mock,
+            attachmentInjector: GalleryAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+}
+
+// MARK: - Audio Attachment
+
+extension ChatMessageContentView_Tests {
+    func test_appearance_whenMessageWithAudioAttachment_incoming() {
+        let audioAttachment: ChatMessageAudioAttachment = .mock(id: .unique)
+
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "",
+            author: myFriend,
+            createdAt: createdAt,
+            attachments: [audioAttachment.asAnyAttachment],
+            isSentByCurrentUser: false
+        )
+
+        let view = contentView(
+            message: message,
+            layout: message.layout(isLastInGroup: true),
+            components: .mock,
+            attachmentInjector: FilesAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+
+    func test_appearance_whenMessageWithAudioAttachment_outgoing() {
+        let audioAttachment: ChatMessageAudioAttachment = .mock(id: .unique)
+
+        let message: ChatMessage = .mock(
+            id: .unique,
+            cid: .unique,
+            text: "",
+            author: me,
+            createdAt: createdAt,
+            attachments: [audioAttachment.asAnyAttachment],
+            isSentByCurrentUser: true
+        )
+
+        let view = contentView(
+            message: message,
+            layout: message.layout(isLastInGroup: true),
+            components: .mock,
+            attachmentInjector: FilesAttachmentViewInjector.self
+        )
+
+        AssertSnapshot(view, variants: .onlyUserInterfaceStyles)
+    }
+}
+
+// MARK: - Jump Highlight
+
+extension ChatMessageContentView_Tests {
+    func test_isJumpHighlighted_whenEnabled_appliesHighlightColor() {
+        let view = ChatMessageContentView()
+        view.appearance = Appearance.default
+
+        view.isJumpHighlighted = true
+
+        XCTAssertEqual(view.backgroundColor, view.appearance.colorPalette.backgroundCoreHighlight)
+    }
+
+    func test_isJumpHighlighted_whenDisabled_restoresCustomBackgroundColor() {
+        let view = ChatMessageContentView()
+        view.appearance = Appearance.default
+        view.backgroundColor = .green
+
+        view.isJumpHighlighted = true
+        view.isJumpHighlighted = false
+
+        XCTAssertEqual(view.backgroundColor, .green)
+    }
+
+    func test_prepareForReuse_whenJumpHighlighted_clearsHighlight() {
+        let view = ChatMessageContentView()
+        view.appearance = Appearance.default
+        view.isJumpHighlighted = true
+
+        view.prepareForReuse()
+
+        XCTAssertFalse(view.isJumpHighlighted)
+        XCTAssertNil(view.backgroundColor)
+    }
+
+    func test_prepareForReuse_whenJumpHighlightedWithCustomBackgroundColor_restoresCustomBackgroundColor() {
+        let view = ChatMessageContentView()
+        view.appearance = Appearance.default
+        view.backgroundColor = .green
+        view.isJumpHighlighted = true
+
+        view.prepareForReuse()
+
+        XCTAssertFalse(view.isJumpHighlighted)
+        XCTAssertEqual(view.backgroundColor, .green)
     }
 }
 
@@ -394,6 +1480,10 @@ private extension ChatMessageContentView_Tests {
                     "like": 5,
                     "love": 2
                 ],
+                reactionGroups: [
+                    "like": .init(type: "like", sumScores: 5, count: 5, firstReactionAt: .unique, lastReactionAt: .unique),
+                    "love": .init(type: "love", sumScores: 2, count: 2, firstReactionAt: .unique, lastReactionAt: .unique)
+                ],
                 isSentByCurrentUser: true
             ),
             // [.text, .quotedMessage]
@@ -418,6 +1508,10 @@ private extension ChatMessageContentView_Tests {
                     "like": 5,
                     "love": 2
                 ],
+                reactionGroups: [
+                    "like": .init(type: "like", sumScores: 5, count: 5, firstReactionAt: .unique, lastReactionAt: .unique),
+                    "love": .init(type: "love", sumScores: 2, count: 2, firstReactionAt: .unique, lastReactionAt: .unique)
+                ],
                 isSentByCurrentUser: true
             ),
             // [.text, .reactions, .quotedMessage, .replies]
@@ -432,6 +1526,10 @@ private extension ChatMessageContentView_Tests {
                 reactionScores: [
                     "like": 5,
                     "love": 2
+                ],
+                reactionGroups: [
+                    "like": .init(type: "like", sumScores: 5, count: 5, firstReactionAt: .unique, lastReactionAt: .unique),
+                    "love": .init(type: "love", sumScores: 2, count: 2, firstReactionAt: .unique, lastReactionAt: .unique)
                 ],
                 threadParticipants: [myFriend],
                 latestReplies: [
@@ -451,6 +1549,10 @@ private extension ChatMessageContentView_Tests {
                 reactionScores: [
                     "like": 5,
                     "love": 2
+                ],
+                reactionGroups: [
+                    "like": .init(type: "like", sumScores: 5, count: 5, firstReactionAt: .unique, lastReactionAt: .unique),
+                    "love": .init(type: "love", sumScores: 2, count: 2, firstReactionAt: .unique, lastReactionAt: .unique)
                 ],
                 threadParticipants: [myFriend],
                 latestReplies: [
@@ -480,6 +1582,10 @@ private extension ChatMessageContentView_Tests {
                 reactionScores: [
                     "like": 5,
                     "love": 2
+                ],
+                reactionGroups: [
+                    "like": .init(type: "like", sumScores: 5, count: 5, firstReactionAt: .unique, lastReactionAt: .unique),
+                    "love": .init(type: "love", sumScores: 2, count: 2, firstReactionAt: .unique, lastReactionAt: .unique)
                 ]
             ),
             // [.text, .quotedMessage]
@@ -502,6 +1608,10 @@ private extension ChatMessageContentView_Tests {
                 reactionScores: [
                     "like": 5,
                     "love": 2
+                ],
+                reactionGroups: [
+                    "like": .init(type: "like", sumScores: 5, count: 5, firstReactionAt: .unique, lastReactionAt: .unique),
+                    "love": .init(type: "love", sumScores: 2, count: 2, firstReactionAt: .unique, lastReactionAt: .unique)
                 ]
             ),
             // [.text, .reactions, .quotedMessage, .replies]
@@ -517,6 +1627,10 @@ private extension ChatMessageContentView_Tests {
                     "like": 5,
                     "love": 2
                 ],
+                reactionGroups: [
+                    "like": .init(type: "like", sumScores: 5, count: 5, firstReactionAt: .unique, lastReactionAt: .unique),
+                    "love": .init(type: "love", sumScores: 2, count: 2, firstReactionAt: .unique, lastReactionAt: .unique)
+                ],
                 threadParticipants: [myFriend],
                 latestReplies: [
                     reply
@@ -531,21 +1645,24 @@ private extension ChatMessageContentView_Tests {
         message: ChatMessage,
         channel: ChatChannel = .mock(cid: .unique),
         layout: ChatMessageLayoutOptions? = nil,
-        appearance: Appearance = .default,
-        components: Components = .default
+        appearance: Appearance? = nil,
+        components: Components? = nil,
+        attachmentInjector: AttachmentViewInjector.Type? = nil
     ) -> ChatMessageContentView {
+        let appearance = appearance ?? .default
+        let components = components ?? .mock
         let layoutOptions = layout ?? components.messageLayoutOptionsResolver.optionsForMessage(
             at: .init(item: 0, section: 0),
             in: channel,
             with: .init([message]),
             appearance: appearance
         )
-        
+
         let view = ChatMessageContentView().withoutAutoresizingMaskConstraints
         view.widthAnchor.constraint(equalToConstant: contentViewWidth).isActive = true
         view.appearance = appearance
         view.components = components
-        view.setUpLayoutIfNeeded(options: layoutOptions, attachmentViewInjectorType: nil)
+        view.setUpLayoutIfNeeded(options: layoutOptions, attachmentViewInjectorType: attachmentInjector)
         view.content = message
         view.channel = channel
         return view
@@ -557,7 +1674,7 @@ extension ChatMessage {
         guard type != .system && type != .error else {
             return [.centered, .text]
         }
-        
+
         var options: ChatMessageLayoutOptions = [
             .bubble
         ]

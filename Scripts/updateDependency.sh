@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Usage: ./updateDependency.sh 10.3.3 Dependencies/Nuke Sources/StreamNuke Sources
+# Usage: ./updateDependency.sh 5.4.2 Dependencies/SwiftyGif Sources/StreamChatUI/StreamSwiftyGif SwiftyGif
 #
 # This script gets the source code of a dependency of a given library, and copies it to our codebase
 
@@ -20,15 +20,16 @@ sources_directory=$4
 
 dependency_url=""
 
-# Nuke
-if [[ $dependency_directory == *"Nuke"* ]]; then
-	dependency_url="git@github.com:kean/Nuke.git"
-elif [[ $dependency_directory == *"SwiftyGif"* ]]; then
+if [[ $dependency_directory == *"SwiftyGif"* ]]; then
 	dependency_url="git@github.com:kirualex/SwiftyGif.git"
-elif [[ $dependency_directory == *"Starscream"* ]]; then
-	dependency_url="git@github.com:daltoniam/Starscream.git"
-elif [[ $dependency_directory == *"SwiftyMarkdown"* ]]; then
-    dependency_url="git@github.com:SimonFairbairn/SwiftyMarkdown.git"
+elif [[ $dependency_directory == *"DifferenceKit"* ]]; then
+	dependency_url="git@github.com:ra1028/DifferenceKit.git"
+elif [[ $dependency_directory == *"Splash"* ]]; then
+	dependency_url="git@github.com:JohnSundell/Splash.git"
+elif [[ $dependency_directory == *"MarkdownUI"* ]]; then
+	dependency_url="git@github.com:gonzalezreal/swift-markdown-ui.git"
+elif [[ $dependency_directory == *"NetworkImage"* ]]; then
+	dependency_url="git@github.com:gonzalezreal/NetworkImage.git"
 else
 	echo "→ Unknown dependency at $dependency_directory"
 	exit 1
@@ -39,7 +40,9 @@ if ! [[ -d "$dependency_directory" ]]; then
     git clone $dependency_url $dependency_directory
 fi
 
-cd $dependency_directory
+current_directory=$(pwd)
+
+cd "$dependency_directory"
 
 ensure_clean_git
 
@@ -48,7 +51,7 @@ git checkout $version
 
 ensure_clean_git
 
-cd -
+cd "$current_directory"
 
 echo "→ Copying source files"
 rm -rf $output_directory
@@ -56,10 +59,30 @@ mkdir $output_directory
 cp -r "$dependency_directory/$sources_directory/." $output_directory
 
 
-for f in `find $output_directory -type f \( -iname \*.h -o -iname \*.plist \)`
+# A C library needs its headers
+if [[ $output_directory != *"CMark"* ]]; then
+	for f in `find $output_directory -type f \( -iname \*.h -o -iname \*.plist \)`
+	do
+		echo "→ Removing $f"
+		rm $f
+	done
+fi
+
+for f in `find $output_directory \( -name \*.docc -o -name Deprecations.swift \)`
 do
 	echo "→ Removing $f"
-	rm $f
+	rm -rf $f
 done
 
 rm -rf $dependency_directory
+
+if [[ $dependency_directory == *"DifferenceKit"* ]]; then
+    # We currently use customized UIKit extensions in Utils/DifferenceKit+Stream.swift
+    rm $output_directory/Extensions/UIKitExtension.swift
+fi
+
+if [[ $output_directory == *"CMark"* ]]; then
+    # Swift imports the C library through this module, named after its target
+    module_name=$(basename $output_directory)
+    printf "module $module_name {\n    umbrella header \"cmark_gfm.h\"\n    export *\n}\n" > $output_directory/include/module.modulemap
+fi

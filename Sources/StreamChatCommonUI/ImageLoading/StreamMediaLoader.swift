@@ -1,0 +1,319 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import AVKit
+import StreamChat
+import UIKit
+
+/// The default ``MediaLoader`` implementation.
+///
+/// Delegates URL transformation to its ``CDNRequester`` dependency,
+/// image downloading to an ``ImageDownloading`` backend,
+/// and video preview generation to AVFoundation.
+open class StreamMediaLoader: MediaLoader, @unchecked Sendable {
+    /// The backend that performs the actual image download and caching.
+    public let downloader: ImageDownloading
+
+    /// The CDN requester used for URL transformation (signing, headers, resizing).
+    public let cdnRequester: CDNRequester
+
+    /// The video preview thumbnails local cache used for videos that
+    /// don't have remote thumbnails available.
+    private let videoPreviewCache: NSCache<NSURL, UIImage>
+    /// The limit of the local  video preview thumbnails cache.
+    private let videoPreviewCacheCountLimit: Int = 50
+
+    /// The task of the ongoing `loadImageTask` call, which `loadImage` picks up to cancel its download.
+    ///
+    /// `loadImageTask` routes through the open `loadImage` so that subclass customizations of
+    /// `loadImage` keep working. A task-local passes the task along without changing the
+    /// overridable `loadImage` signature, which would break existing overrides.
+    @TaskLocal private static var loadingTask: ImageLoadingTask?
+
+    public init(
+        downloader: ImageDownloading,
+        cdnRequester: CDNRequester = StreamCDNRequester()
+    ) {
+        self.downloader = downloader
+        self.cdnRequester = cdnRequester
+        self.videoPreviewCache = NSCache<NSURL, UIImage>()
+        self.videoPreviewCache.countLimit = videoPreviewCacheCountLimit
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMemoryWarning(_:)),
+            name: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    // MARK: - Image Loading
+
+    open func loadImage(
+        url: URL?,
+        options: ImageLoadOptions,
+        completion: @escaping @MainActor (Result<MediaLoaderImage, Error>) -> Void
+    ) {
+        loadImage(url: url, options: options, task: StreamMediaLoader.loadingTask ?? ImageLoadingTask(), completion: completion)
+    }
+
+    @discardableResult
+    open func loadImageTask(
+        url: URL?,
+        options: ImageLoadOptions,
+        completion: @escaping @MainActor (Result<MediaLoaderImage, Error>) -> Void
+    ) -> ImageLoadingTask {
+        let task = ImageLoadingTask()
+        StreamMediaLoader.$loadingTask.withValue(task) {
+            loadImage(url: url, options: options) { result in
+                completion(task.isCancelled ? .failure(CancellationError()) : result)
+            }
+        }
+        return task
+    }
+
+    private func loadImage(
+        url: URL?,
+        options: ImageLoadOptions,
+        task: ImageLoadingTask,
+        completion: @escaping @MainActor (Result<MediaLoaderImage, Error>) -> Void
+    ) {
+        guard let url else {
+            StreamConcurrency.onMain {
+                completion(.failure(ClientError.Unknown()))
+            }
+            return
+        }
+
+        let downloader = self.downloader
+        cdnRequester.imageRequest(for: url, options: ImageRequestOptions(imageResize: options.resize)) { result in
+            switch result {
+            case let .success(cdnRequest):
+                guard !task.isCancelled else {
+                    StreamConcurrency.onMain {
+                        completion(.failure(CancellationError()))
+                    }
+                    return
+                }
+                let resizeSize: CGSize? = options.resize.map { CGSize(width: $0.width, height: $0.height) }
+                let downloadOptions = ImageDownloadingOptions(
+                    headers: cdnRequest.headers,
+                    cachingKey: cdnRequest.cachingKey,
+                    resize: resizeSize
+                )
+                let cachingKey = cdnRequest.cachingKey
+                let downloadTask = downloader.downloadImageTask(url: cdnRequest.url, options: downloadOptions) { imageResult in
+                    StreamConcurrency.onMain {
+                        guard !task.isCancelled else {
+                            completion(.failure(CancellationError()))
+                            return
+                        }
+                        completion(imageResult.map { downloadedImage in
+                            MediaLoaderImage(
+                                image: downloadedImage.image,
+                                animatedImageData: downloadedImage.animatedImageData,
+                                cachingKey: cachingKey
+                            )
+                        })
+                    }
+                }
+                task.addCancellationHandler { downloadTask.cancel() }
+            case let .failure(error):
+                StreamConcurrency.onMain {
+                    completion(.failure(task.isCancelled ? CancellationError() : error))
+                }
+            }
+        }
+    }
+
+    // MARK: - Video Loading
+
+    open func loadVideoAsset(
+        at url: URL,
+        options: VideoLoadOptions,
+        completion: @escaping @MainActor (Result<MediaLoaderVideoAsset, Error>) -> Void
+    ) {
+        cdnRequester.fileRequest(for: url, options: .init()) { [weak self] result in
+            guard let self else {
+                StreamConcurrency.onMain {
+                    completion(.failure(ClientError.Unknown("MediaLoader was deallocated")))
+                }
+                return
+            }
+            switch result {
+            case let .success(cdnRequest):
+                let asset = self.makeAVURLAsset(from: cdnRequest)
+                StreamConcurrency.onMain {
+                    completion(.success(MediaLoaderVideoAsset(asset: asset)))
+                }
+            case let .failure(error):
+                StreamConcurrency.onMain {
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    // MARK: - Video Preview Thumbnail Loading
+
+    open func loadVideoPreview(
+        with attachment: ChatMessageVideoAttachment,
+        options: VideoLoadOptions,
+        completion: @escaping @MainActor (Result<MediaLoaderVideoPreview, Error>) -> Void
+    ) {
+        let videoURL = attachment.videoURL
+        if let cached = videoPreviewCache.object(forKey: videoURL as NSURL) {
+            StreamConcurrency.onMain {
+                completion(.success(MediaLoaderVideoPreview(image: cached)))
+            }
+            return
+        }
+
+        if let thumbnailURL = attachment.payload.thumbnailURL {
+            loadImage(url: thumbnailURL) { [weak self] result in
+                guard let self else {
+                    StreamConcurrency.onMain {
+                        completion(.failure(ClientError.Unknown("MediaLoader was deallocated")))
+                    }
+                    return
+                }
+                switch result {
+                case let .success(loaded):
+                    self.videoPreviewCache.setObject(loaded.image, forKey: videoURL as NSURL)
+                    StreamConcurrency.onMain {
+                        completion(.success(MediaLoaderVideoPreview(image: loaded.image)))
+                    }
+                case .failure:
+                    self.generateVideoPreview(for: videoURL, options: options, completion: completion)
+                }
+            }
+        } else {
+            generateVideoPreview(for: videoURL, options: options, completion: completion)
+        }
+    }
+
+    // MARK: - URL-Based Video Preview
+
+    open func loadVideoPreview(
+        at url: URL,
+        options: VideoLoadOptions,
+        completion: @escaping @MainActor (Result<MediaLoaderVideoPreview, Error>) -> Void
+    ) {
+        if let cached = videoPreviewCache.object(forKey: url as NSURL) {
+            StreamConcurrency.onMain {
+                completion(.success(MediaLoaderVideoPreview(image: cached)))
+            }
+            return
+        }
+        generateVideoPreview(for: url, options: options, completion: completion)
+    }
+
+    // MARK: - Private
+
+    /// Builds the options dictionary used when constructing the `AVURLAsset`
+    /// for a video URL returned by the CDN.
+    ///
+    /// Returns `nil` when there are no headers to forward. Otherwise returns a
+    /// dictionary containing `AVURLAssetHTTPHeaderFieldsKey` so the asset's
+    /// underlying network requests carry the CDN-provided authentication headers.
+    func assetOptions(for cdnRequest: CDNRequest) -> [String: Any]? {
+        guard let headers = cdnRequest.headers, !headers.isEmpty else { return nil }
+        return ["AVURLAssetHTTPHeaderFieldsKey": headers]
+    }
+
+    /// Constructs an `AVURLAsset` from a `CDNRequest`, forwarding any CDN headers
+    /// so the asset's network requests are authenticated against signed CDNs.
+    private func makeAVURLAsset(from cdnRequest: CDNRequest) -> AVURLAsset {
+        AVURLAsset(url: cdnRequest.url, options: assetOptions(for: cdnRequest))
+    }
+
+    private func generateVideoPreview(
+        for url: URL,
+        options: VideoLoadOptions,
+        completion: @escaping @MainActor (Result<MediaLoaderVideoPreview, Error>) -> Void
+    ) {
+        cdnRequester.fileRequest(for: url, options: .init()) { [weak self] result in
+            guard let self else {
+                StreamConcurrency.onMain {
+                    completion(.failure(ClientError.Unknown("MediaLoader was deallocated")))
+                }
+                return
+            }
+
+            let asset: AVURLAsset
+            switch result {
+            case let .success(cdnRequest):
+                asset = self.makeAVURLAsset(from: cdnRequest)
+            case let .failure(error):
+                StreamConcurrency.onMain {
+                    completion(.failure(error))
+                }
+                return
+            }
+
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            let frameTime = CMTime(seconds: 0.1, preferredTimescale: 600)
+
+            imageGenerator.appliesPreferredTrackTransform = true
+            imageGenerator.generateCGImagesAsynchronously(forTimes: [.init(time: frameTime)]) { [weak self] _, image, _, _, error in
+                guard let self else {
+                    StreamConcurrency.onMain {
+                        completion(.failure(ClientError.Unknown("MediaLoader was deallocated")))
+                    }
+                    return
+                }
+
+                let result: Result<MediaLoaderVideoPreview, Error>
+                if let thumbnail = image {
+                    result = .success(MediaLoaderVideoPreview(image: UIImage(cgImage: thumbnail)))
+                } else if let error {
+                    result = .failure(error)
+                } else {
+                    result = .failure(ClientError.Unknown("Both error and image are nil"))
+                }
+
+                if let preview = try? result.get() {
+                    self.videoPreviewCache.setObject(preview.image, forKey: url as NSURL)
+                }
+                StreamConcurrency.onMain {
+                    completion(result)
+                }
+            }
+        }
+    }
+
+    // MARK: - File Request
+
+    open func loadFileRequest(
+        for url: URL,
+        options: DownloadFileRequestOptions,
+        completion: @escaping @MainActor (Result<MediaLoaderFileRequest, Error>) -> Void
+    ) {
+        cdnRequester.fileRequest(for: url, options: .init()) { result in
+            StreamConcurrency.onMain {
+                completion(result.map { cdnRequest in
+                    var request = URLRequest(url: cdnRequest.url)
+                    cdnRequest.headers?.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+                    return MediaLoaderFileRequest(urlRequest: request)
+                })
+            }
+        }
+    }
+
+    // MARK: - Cache Management
+
+    /// Evicts least-recently-used images from the downloader's in-memory image
+    /// cache until its total cost drops to the given limit in bytes.
+    open func trimImageMemoryCache(toCost limit: Int) {
+        downloader.trimMemoryCache(toCost: limit)
+    }
+
+    @objc private func handleMemoryWarning(_ notification: NSNotification) {
+        videoPreviewCache.removeAllObjects()
+    }
+}

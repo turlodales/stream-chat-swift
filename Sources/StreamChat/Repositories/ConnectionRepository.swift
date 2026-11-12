@@ -1,0 +1,308 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+class ConnectionRepository: @unchecked Sendable {
+    private let connectionQueue: DispatchQueue = DispatchQueue(label: "io.getstream.connection-repository", attributes: .concurrent)
+    private var _connectionIdWaiters: [String: @Sendable (Result<ConnectionId, Error>) -> Void] = [:]
+    private var _connectionId: ConnectionId?
+    private var _connectionStatus: ConnectionStatus = .initialized
+
+    /// The current connection status of the client
+    private(set) var connectionStatus: ConnectionStatus {
+        get { connectionQueue.sync { _connectionStatus } }
+        set { connectionQueue.async(flags: .barrier) { self._connectionStatus = newValue }}
+    }
+
+    /// The current connection id
+    private(set) var connectionId: ConnectionId? {
+        get { connectionQueue.sync { _connectionId } }
+        set { connectionQueue.async(flags: .barrier) { self._connectionId = newValue }}
+    }
+
+    let webSocketConnectEndpoint = AllocatedUnfairLock<Endpoint<EmptyResponse>?>(nil)
+    let connectUserInfo = AllocatedUnfairLock<UserInfo?>(nil)
+    let isClientInActiveMode: Bool
+    let webSocketEventProtocol: WebSocketEventProtocol
+    private let syncRepository: SyncRepository
+    private let webSocketEncoder: RequestEncoder?
+    private let webSocketClient: WebSocketClient?
+    private let apiClient: APIClient
+    private let timerType: TimerScheduling.Type
+
+    init(
+        isClientInActiveMode: Bool,
+        webSocketEventProtocol: WebSocketEventProtocol = .v2,
+        syncRepository: SyncRepository,
+        webSocketEncoder: RequestEncoder?,
+        webSocketClient: WebSocketClient?,
+        apiClient: APIClient,
+        timerType: TimerScheduling.Type
+    ) {
+        self.isClientInActiveMode = isClientInActiveMode
+        self.webSocketEventProtocol = webSocketEventProtocol
+        self.syncRepository = syncRepository
+        self.webSocketEncoder = webSocketEncoder
+        self.webSocketClient = webSocketClient
+        self.apiClient = apiClient
+        self.timerType = timerType
+
+        // The v2 connect protocol authenticates with the first frame sent over the opened socket. Set up in init
+        // so that reconnects triggered directly on the web socket client (connection recovery handler) are covered.
+        webSocketClient?.onWSConnectionEstablished = { [weak self] in
+            self?.sendWebSocketAuthFrame()
+        }
+    }
+
+    func initialize() {
+        webSocketClient?.initialize()
+    }
+
+    /// Connects the chat client the controller represents to the chat servers.
+    ///
+    /// When the connection is established, `ChatClient` starts receiving chat updates, and `currentUser` variable is available.
+    ///
+    /// - Parameters:
+    ///   - completion: Called when the connection is established. If the connection fails, the completion is called with an error.
+    ///
+    func connect(completion: (@Sendable (Error?) -> Void)? = nil) {
+        // Connecting is not possible in connectionless mode (duh)
+        guard isClientInActiveMode else {
+            completion?(ClientError.ClientIsNotInActiveMode())
+            return
+        }
+
+        guard connectionId == nil else {
+            log.warning("The client is already connected. Skipping the `connect` call.")
+            completion?(nil)
+            return
+        }
+
+        // Set up a waiter for the new connection id to know when the connection process is finished
+        provideConnectionId { [weak webSocketClient] result in
+            switch result {
+            case .success:
+                completion?(nil)
+            case .failure:
+                // Try to get a concrete error
+                if case let .disconnected(source) = webSocketClient?.connectionState {
+                    completion?(ClientError.ConnectionNotSuccessful(with: source.serverError))
+                } else {
+                    completion?(ClientError.ConnectionNotSuccessful())
+                }
+            }
+        }
+        updateWebSocketConnectURLRequest()
+        webSocketClient?.connect()
+    }
+
+    /// Disconnects the chat client the controller represents from the chat servers. No further updates from the servers
+    /// are received.
+    func disconnect(
+        source: WebSocketConnectionState.DisconnectionSource,
+        completion: @escaping @Sendable () -> Void
+    ) {
+        apiClient.flushRequestsQueue()
+        syncRepository.cancelRecoveryFlow()
+
+        // Disconnecting is not possible in connectionless mode (duh)
+        guard isClientInActiveMode else {
+            log.error(ClientError.ClientIsNotInActiveMode().localizedDescription)
+            completion()
+            return
+        }
+
+        // Disconnect the web socket
+        webSocketClient?.disconnect(source: source) { [weak self] in
+            // Reset `connectionId`. This would happen asynchronously by the callback from WebSocketClient anyway, but it's
+            // safer to do it here synchronously to immediately stop all API calls.
+            self?.connectionId = nil
+
+            // Remove all waiters for connectionId
+            self?.completeConnectionIdWaiters(connectionId: nil)
+
+            completion()
+        }
+    }
+
+    /// Updates the WebSocket endpoint to use the passed token and user information for the connection
+    func updateWebSocketEndpoint(with token: Token, userInfo: UserInfo?) {
+        connectUserInfo.value = userInfo ?? .init(id: token.userId)
+        webSocketConnectEndpoint.value = .connect()
+    }
+    
+    /// Updates the WebSocket endpoint to use the passed user id
+    func updateWebSocketEndpoint(with currentUserId: UserId) {
+        connectUserInfo.value = UserInfo(id: currentUserId)
+        webSocketConnectEndpoint.value = .connect()
+    }
+
+    private func sendWebSocketAuthFrame() {
+        guard let webSocketClient, let delegate = webSocketEncoder?.connectionDetailsProviderDelegate else {
+            log.error("Skipping the WebSocket auth frame because the connection details provider is not set", subsystems: .webSocket)
+            return
+        }
+        let userInfo = connectUserInfo.value
+        let eventProtocol = webSocketEventProtocol == .v2 ? nil : webSocketEventProtocol.rawValue
+        // The server closes the socket when the auth frame does not arrive within 10 seconds.
+        delegate.provideToken(timeout: 10) { [weak webSocketClient] result in
+            switch result {
+            case let .success(token):
+                let user = userInfo ?? UserInfo(id: token.userId)
+                let payload = WSAuthMessageRequest(
+                    eventProtocol: eventProtocol,
+                    products: ["chat"],
+                    token: token.rawValue,
+                    userDetails: ConnectUserDetailsRequest(
+                        custom: user.extraData.isEmpty ? nil : user.extraData,
+                        id: user.id,
+                        image: user.imageURL?.absoluteString,
+                        invisible: user.isInvisible,
+                        language: user.language?.languageCode,
+                        name: user.name,
+                        privacySettings: user.privacySettings
+                    )
+                )
+                webSocketClient?.engine?.send(jsonMessage: payload)
+            case let .failure(error):
+                log.error("Failed to send the WebSocket auth frame because of a missing token", subsystems: .webSocket, error: error)
+            }
+        }
+    }
+    
+    private func updateWebSocketConnectURLRequest() {
+        guard let webSocketClient, let webSocketEncoder, let webSocketConnectEndpoint = webSocketConnectEndpoint.value else { return }
+        let request: URLRequest? = {
+            do {
+                var encodedRequest = try webSocketEncoder.encodeRequest(for: webSocketConnectEndpoint)
+                // The server prefers this header over the auth frame token, and the header goes stale after token refreshes.
+                encodedRequest.setValue(nil, forHTTPHeaderField: HTTPHeader.Key.authorization.rawValue)
+                return encodedRequest
+            } catch {
+                log.error(error.localizedDescription, error: error)
+                return nil
+            }
+        }()
+        guard let request else { return }
+        webSocketClient.connectRequest = request
+    }
+
+    func handleConnectionUpdate(
+        state: WebSocketConnectionState,
+        onExpiredToken: () -> Void
+    ) {
+        let event = ConnectionStatusUpdated(webSocketConnectionState: state)
+        if event.connectionStatus != connectionStatus {
+            // Publish Connection event with the new state
+            webSocketClient?.publishEvent(event)
+        }
+        
+        connectionStatus = .init(webSocketConnectionState: state)
+
+        // We should notify waiters if connectionId was obtained (i.e. state is .connected)
+        // or for .disconnected state except for disconnect caused by an expired token
+        let shouldNotifyConnectionIdWaiters: Bool
+        let connectionId: String?
+        switch state {
+        case let .connected(healthCheckInfo: healthCheckInfo):
+            shouldNotifyConnectionIdWaiters = true
+            connectionId = healthCheckInfo.connectionId
+            syncRepository.syncLocalState {
+                log.info("Local state sync completed", subsystems: .offlineSupport)
+            }
+        case let .disconnected(source) where source.serverError?.isTokenExpiredError == true:
+            onExpiredToken()
+            shouldNotifyConnectionIdWaiters = false
+            connectionId = nil
+        case .disconnected:
+            shouldNotifyConnectionIdWaiters = true
+            connectionId = nil
+        case .initialized,
+             .connecting,
+             .disconnecting,
+             .authenticating:
+            shouldNotifyConnectionIdWaiters = false
+            connectionId = nil
+        @unknown default:
+            shouldNotifyConnectionIdWaiters = false
+            connectionId = nil
+        }
+
+        updateConnectionId(
+            connectionId: connectionId,
+            shouldNotifyWaiters: shouldNotifyConnectionIdWaiters
+        )
+    }
+
+    func provideConnectionId(timeout: TimeInterval = 10, completion: @escaping @Sendable (Result<ConnectionId, Error>) -> Void) {
+        if let connectionId = connectionId {
+            completion(.success(connectionId))
+            return
+        } else if !isClientInActiveMode {
+            // We're in passive mode
+            // We will never have connectionId
+            completion(.failure(ClientError.ClientIsNotInActiveMode()))
+            return
+        }
+
+        let waiterToken = String.newUniqueId
+        connectionQueue.async(flags: .barrier) {
+            self._connectionIdWaiters[waiterToken] = completion
+        }
+
+        let globalQueue = DispatchQueue.global()
+        timerType.schedule(timeInterval: timeout, queue: globalQueue) { [weak self] in
+            guard let self = self else { return }
+
+            // Not the nicest, but we need to ensure the read and write below are treated as an atomic operation,
+            // in a queue that is concurrent, whilst the completion needs to be called outside of the barrier'ed operation.
+            // If we call the block as part of the barrier'ed operation, and by any chance this ends up synchronously
+            // calling any queue protected property in this class before the operation is completed, we can potentially crash the app.
+            self.connectionQueue.async(flags: .barrier) {
+                guard let completion = self._connectionIdWaiters[waiterToken] else { return }
+
+                globalQueue.async {
+                    completion(.failure(ClientError.WaiterTimeout()))
+                }
+
+                self._connectionIdWaiters[waiterToken] = nil
+            }
+        }
+    }
+
+    func completeConnectionIdWaiters(connectionId: String?) {
+        updateConnectionId(connectionId: connectionId, shouldNotifyWaiters: true)
+    }
+
+    func forceConnectionStatusForInactiveModeIfNeeded() {
+        guard !isClientInActiveMode else { return }
+        connectionStatus = .disconnected(error: nil)
+    }
+
+    /// Update connectionId and notify waiters if needed
+    /// - Parameters:
+    ///   - connectionId: new connectionId (if present)
+    ///   - shouldFailWaiters: Whether it's necessary to notify waiters or not
+    private func updateConnectionId(
+        connectionId: String?,
+        shouldNotifyWaiters: Bool
+    ) {
+        let waiters: [String: @Sendable (Result<ConnectionId, Error>) -> Void] = connectionQueue.sync(flags: .barrier) {
+            _connectionId = connectionId
+            guard shouldNotifyWaiters else { return [:] }
+            let waiters = _connectionIdWaiters
+            _connectionIdWaiters = [:]
+            return waiters
+        }
+
+        waiters.forEach { waiter in
+            if let connectionId = connectionId {
+                waiter.value(.success(connectionId))
+            } else {
+                waiter.value(.failure(ClientError.MissingConnectionId()))
+            }
+        }
+    }
+}

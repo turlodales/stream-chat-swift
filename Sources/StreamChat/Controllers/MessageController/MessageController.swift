@@ -1,7 +1,8 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
+import Combine
 import CoreData
 import Foundation
 
@@ -11,22 +12,26 @@ public extension ChatClient {
     /// - Parameter messageId: The message identifier.
     /// - Returns: A new instance of `MessageController`.
     func messageController(cid: ChannelId, messageId: MessageId) -> ChatMessageController {
-        .init(client: self, cid: cid, messageId: messageId)
+        .init(client: self, cid: cid, messageId: messageId, replyPaginationHandler: makeMessagesPaginationStateHandler())
     }
 }
 
 /// `ChatMessageController` is a controller class which allows observing and mutating a chat message entity.
 ///
-public class ChatMessageController: DataController, DelegateCallable, DataStoreProvider {
+/// - Note: For an async-await alternative of the `ChatMessageController`, please check ``Chat`` and ``MessageState`` in the async-await supported [state layer](https://getstream.io/chat/docs/sdk/ios/client/state-layer/state-layer-overview/).
+public class ChatMessageController: DataController, DelegateCallable, DataStoreProvider, @unchecked Sendable {
     /// The `ChatClient` instance this controller belongs to.
     public let client: ChatClient
-    
+
     /// The identified of the channel the message belongs to.
     public let cid: ChannelId
-    
+
     /// The identified of the message this controllers represents.
     public let messageId: MessageId
-    
+
+    /// The amount of replies fetched per page.
+    public var repliesPageSize: Int = .messagesPageSize
+
     /// The message object this controller represents.
     ///
     /// To observe changes of the message, set your class as a delegate of this controller or use the provided
@@ -36,13 +41,13 @@ public class ChatMessageController: DataController, DelegateCallable, DataStoreP
         startObserversIfNeeded()
         return messageObserver.item
     }
-    
+
     /// The replies to the message the controller represents.
     ///
     /// To observe changes of the replies, set your class as a delegate of this controller or use the provided
     /// `Combine` publishers.
     ///
-    public var replies: LazyCachedMapCollection<ChatMessage> {
+    public var replies: [ChatMessage] {
         startObserversIfNeeded()
         return repliesObserver?.items ?? []
     }
@@ -65,9 +70,9 @@ public class ChatMessageController: DataController, DelegateCallable, DataStoreP
         }
     }
 
-    /// A Boolean value that returns wether the reactions have all been loaded or not.
+    /// A Boolean value that returns whether the reactions have all been loaded or not.
     public internal(set) var hasLoadedAllReactions = false
-    
+
     /// Describes the ordering the replies are presented.
     ///
     /// - Important: ⚠️ Changing this value doesn't trigger delegate methods. You should reload your UI manually after changing
@@ -77,15 +82,15 @@ public class ChatMessageController: DataController, DelegateCallable, DataStoreP
     public var listOrdering: MessageOrdering = .topToBottom {
         didSet {
             if state != .initialized {
-                _repliesObserver.reset()
-                
+                setRepliesObserver()
+
                 do {
                     try repliesObserver?.startObserving()
                 } catch {
                     log.error("Failed to perform fetch request with error: \(error). This is an internal error.")
                     state = .localDataFetchFailed(ClientError(with: error))
                 }
-                
+
                 log.warning(
                     "Changing `listOrdering` will update data inside controller, but you have to update your UI manually "
                         + "to see changes."
@@ -93,20 +98,55 @@ public class ChatMessageController: DataController, DelegateCallable, DataStoreP
             }
         }
     }
-    
-    /// Shows whether the controller has received first batch of replies from remote
-    private var loadedRepliesHead = false
-    
-    /// A Boolean value that returns wether pagination is finished
-    public private(set) var hasLoadedAllPreviousReplies: Bool = false
+
+    /// A Boolean value that returns whether the oldest replies have all been loaded or not.
+    public var hasLoadedAllPreviousReplies: Bool {
+        replyPaginationState.hasLoadedAllPreviousMessages
+    }
+
+    /// A Boolean value that returns whether the newest replies have all been loaded or not.
+    public var hasLoadedAllNextReplies: Bool {
+        replyPaginationState.hasLoadedAllNextMessages || replies.isEmpty
+    }
+
+    /// A Boolean value that returns whether the thread is currently loading previous (old) replies.
+    public var isLoadingPreviousReplies: Bool {
+        replyPaginationState.isLoadingPreviousMessages
+    }
+
+    /// A Boolean value that returns whether the thread is currently loading next (new) replies.
+    public var isLoadingNextReplies: Bool {
+        replyPaginationState.isLoadingNextMessages
+    }
+
+    /// A Boolean value that returns whether the thread is currently loading a page around a reply.
+    public var isLoadingMiddleReplies: Bool {
+        replyPaginationState.isLoadingMiddleMessages
+    }
+
+    /// A Boolean value that returns whether the thread is currently in a mid-page.
+    /// The value is false if the thread has the first page loaded.
+    /// The value is true if the thread is in a mid fragment and didn't load the first page yet.
+    public var isJumpingToMessage: Bool {
+        replyPaginationState.isJumpingToMessage
+    }
+
+    /// The pagination cursor for loading previous (old) replies.
+    internal var lastOldestReplyId: MessageId? {
+        replyPaginationState.oldestFetchedMessage?.id
+    }
+
+    /// The pagination cursor for loading next (new) replies.
+    internal var lastNewestReplyId: MessageId? {
+        replyPaginationState.newestFetchedMessage?.id
+    }
 
     private let environment: Environment
-    
+
     var _basePublishers: Any?
     /// An internal backing object for all publicly available Combine publishers. We use it to simplify the way we expose
     /// publishers. Instead of creating custom `Publisher` types, we use `CurrentValueSubject` and `PassthroughSubject` internally,
     /// and expose the published values by mapping them to a read-only `AnyPublisher` type.
-    @available(iOS 13, *)
     var basePublishers: BasePublishers {
         if let value = _basePublishers as? BasePublishers {
             return value
@@ -114,17 +154,17 @@ public class ChatMessageController: DataController, DelegateCallable, DataStoreP
         _basePublishers = BasePublishers(controller: self)
         return _basePublishers as? BasePublishers ?? .init(controller: self)
     }
-    
+
     /// A type-erased multicast delegate.
     var multicastDelegate: MulticastDelegate<ChatMessageControllerDelegate> = .init() {
         didSet {
             stateMulticastDelegate.set(mainDelegate: multicastDelegate.mainDelegate)
             stateMulticastDelegate.set(additionalDelegates: multicastDelegate.additionalDelegates)
-            
+
             startObserversIfNeeded()
         }
     }
-    
+
     /// The observer used to listen to message updates
     private lazy var messageObserver = createMessageObserver()
         .onChange { [weak self] change in
@@ -137,18 +177,28 @@ public class ChatMessageController: DataController, DelegateCallable, DataStoreP
                 $0.messageController(self, didChangeMessage: change)
             }
         }
-    
+
     /// The observer used to listen replies updates.
     /// It will be reset on `listOrdering` changes.
-    @Cached private var repliesObserver: ListDatabaseObserver<ChatMessage, MessageDTO>?
-    
+    private var repliesObserver: BackgroundListDatabaseObserver<ChatMessage, MessageDTO>?
+
     /// The worker used to fetch the remote data and communicate with servers.
-    private lazy var messageUpdater: MessageUpdater = environment.messageUpdaterBuilder(
-        client.config.isLocalStorageEnabled,
-        client.messageRepository,
-        client.databaseContainer,
-        client.apiClient
-    )
+    private let messageUpdater: MessageUpdater
+
+    /// The polls repository to fetch polls data.
+    private let pollsRepository: PollsRepository
+
+    /// The replies pagination handler.
+    private let replyPaginationHandler: MessagesPaginationStateHandling
+
+    /// The current state of the pagination state.
+    private var replyPaginationState: MessagesPaginationState { replyPaginationHandler.state }
+
+    /// The drafts repository.
+    private let draftsRepository: DraftMessagesRepository
+
+    /// The reminders repository.
+    private let remindersRepository: RemindersRepository
 
     /// Creates a new `MessageControllerGeneric`.
     /// - Parameters:
@@ -156,26 +206,42 @@ public class ChatMessageController: DataController, DelegateCallable, DataStoreP
     ///   - cid: The channel identifier the message belongs to.
     ///   - messageId: The message identifier.
     ///   - environment: The source of internal dependencies.
-    init(client: ChatClient, cid: ChannelId, messageId: MessageId, environment: Environment = .init()) {
+    init(
+        client: ChatClient,
+        cid: ChannelId,
+        messageId: MessageId,
+        replyPaginationHandler: MessagesPaginationStateHandling,
+        environment: Environment = .init()
+    ) {
         self.client = client
         self.cid = cid
         self.messageId = messageId
+        self.replyPaginationHandler = replyPaginationHandler
+        pollsRepository = client.pollsRepository
         self.environment = environment
+        messageUpdater = environment.messageUpdaterBuilder(
+            client.config.isLocalStorageEnabled,
+            client.messageRepository,
+            client.databaseContainer,
+            client.apiClient
+        )
+        draftsRepository = client.draftMessagesRepository
+        remindersRepository = client.remindersRepository
         super.init()
 
         setRepliesObserver()
     }
 
-    override public func synchronize(_ completion: ((Error?) -> Void)? = nil) {
+    override public func synchronize(_ completion: (@MainActor (Error?) -> Void)? = nil) {
         startObserversIfNeeded()
-        
+
         messageUpdater.getMessage(cid: cid, messageId: messageId) { result in
             let error = result.error
             self.state = error == nil ? .remoteDataFetched : .remoteDataFetchFailed(ClientError(with: error))
             self.callback { completion?(error) }
         }
     }
-    
+
     /// If the `state` of the controller is `initialized`, this method calls `startObserving` on
     /// `messageObserver`, `repliesObserver` and `reactionsObserver` to fetch the local data and start observing the changes.
     /// It also changes `state` based on the result.
@@ -195,27 +261,98 @@ public class ChatMessageController: DataController, DelegateCallable, DataStoreP
             state = .localDataFetchFailed(ClientError(with: error))
         }
     }
-}
 
-// MARK: - Actions
+    // MARK: - Actions
 
-public extension ChatMessageController {
-    /// Edits the message this controller manages with the provided values.
+    /// Edits the message locally, changes the message state to pending and
+    /// schedules it to eventually be published to the server.
     ///
     /// - Parameters:
     ///   - text: The updated message text.
+    ///   - skipEnrichUrl: If true, the url preview won't be attached to the message.
+    ///   - skipPush: If true, skips sending push notification when message is edited.
+    ///   - attachments: An array of the attachments for the message.
+    ///   - mentionedUserIds: The list of user ids mentioned in the message. When `nil`, existing mentions are preserved.
+    ///   - mentionedHere: If true, the message mentions users currently online in the channel. When `nil`, the existing value is preserved.
+    ///   - mentionedChannel: If true, the message mentions all users in the channel. When `nil`, the existing value is preserved.
+    ///   - mentionedGroupIds: The list of user group ids mentioned in the message. When `nil`, existing group mentions are preserved.
+    ///   - mentionedRoles: The list of roles mentioned in the message. When `nil`, existing role mentions are preserved.
+    ///   - restrictedVisibility: The list of user ids that can see the message.
     ///   - extraData: Custom extra data. When `nil` is passed the message custom fields stay the same. Equals `nil` by default.
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func editMessage(text: String, extraData: [String: RawJSON]? = nil, completion: ((Error?) -> Void)? = nil) {
-        messageUpdater.editMessage(messageId: messageId, text: text, extraData: extraData) { error in
+    ///   - completion: Called when the message is edited locally.
+    public func editMessage(
+        text: String,
+        skipEnrichUrl: Bool = false,
+        skipPush: Bool = false,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId]? = nil,
+        mentionedHere: Bool? = nil,
+        mentionedChannel: Bool? = nil,
+        mentionedGroupIds: [String]? = nil,
+        mentionedRoles: [String]? = nil,
+        restrictedVisibility: [UserId] = [],
+        extraData: [String: RawJSON]? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        var transformableInfo = NewMessageTransformableInfo(
+            text: text,
+            attachments: attachments,
+            extraData: extraData ?? message?.extraData ?? [:]
+        )
+        if let transformer = client.config.modelsTransformer {
+            transformableInfo = transformer.transform(newMessageInfo: transformableInfo)
+        }
+
+        messageUpdater.editMessage(
+            messageId: messageId,
+            text: transformableInfo.text,
+            skipEnrichUrl: skipEnrichUrl,
+            skipPush: skipPush,
+            attachments: transformableInfo.attachments,
+            mentionedUserIds: mentionedUserIds,
+            mentionedHere: mentionedHere,
+            mentionedChannel: mentionedChannel,
+            mentionedGroupIds: mentionedGroupIds,
+            mentionedRoles: mentionedRoles,
+            restrictedVisibility: restrictedVisibility,
+            extraData: transformableInfo.extraData
+        ) { result in
             self.callback {
-                completion?(error)
+                completion?(result.error)
             }
         }
     }
-    
+
+    /// Updates the message partially and submits the changes directly to the server.
+    ///
+    /// **Note:** The `message.localState` is not changed in this method call.
+    ///
+    /// - Parameters:
+    ///   - text: The text in case the message
+    ///   - attachments: The attachments to be updated.
+    ///   - extraData: The additional data to be updated.
+    ///   - unsetProperties: Properties from the message to be cleared/unset.
+    ///   - completion: Called when the server updates the message.
+    public func partialUpdateMessage(
+        text: String? = nil,
+        attachments: [AnyAttachmentPayload]? = nil,
+        extraData: [String: RawJSON]? = nil,
+        unsetProperties: [String]? = nil,
+        completion: (@MainActor (Result<ChatMessage, Error>) -> Void)? = nil
+    ) {
+        messageUpdater.updatePartialMessage(
+            messageId: messageId,
+            text: text,
+            attachments: attachments,
+            extraData: extraData,
+            unset: unsetProperties
+        ) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
     /// Deletes the message this controller manages.
     ///
     /// - Parameters:
@@ -225,18 +362,41 @@ public extension ChatMessageController {
     ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
     ///                 If request fails, the completion will be called with an error.
     ///
-    func deleteMessage(hard: Bool = false, completion: ((Error?) -> Void)? = nil) {
+    public func deleteMessage(hard: Bool = false, completion: (@MainActor (Error?) -> Void)? = nil) {
         messageUpdater.deleteMessage(messageId: messageId, hard: hard) { error in
             self.callback {
                 completion?(error)
             }
         }
     }
-    
+
+    /// Deletes the message this controller manages only for the current user.
+    ///
+    /// This method deletes the message only for the current user, making it invisible to them while keeping it visible to other users.
+    /// This is different from the regular delete which affects all users in the channel.
+    ///
+    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                         If request fails, the completion will be called with an error.
+    ///
+    public func deleteMessageForMe(completion: (@MainActor (Error?) -> Void)? = nil) {
+        messageUpdater.deleteMessage(
+            messageId: messageId,
+            hard: false,
+            deleteForMe: true
+        ) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
     /// Creates a new reply message locally and schedules it for send.
     ///
     /// - Parameters:
+    ///   - messageId: The id for the sent message. By default, it is automatically generated by Stream..
     ///   - text: Text of the message.
+    ///   - isSilent: A flag indicating whether the message is a silent message.
+    ///   Silent messages are special messages that don't increase the unread messages count nor mark a channel as unread.
     ///   - pinning: Pins the new message. `nil` if should not be pinned.
     ///   - attachments: An array of the attachments for the message.
     ///    `Note`: can be built-in types, custom attachment types conforming to `AttachmentEnvelope` protocol
@@ -244,77 +404,177 @@ public extension ChatMessageController {
     ///   - showReplyInChannel: Set this flag to `true` if you want the message to be also visible in the channel, not only
     ///   in the response thread.
     ///   - quotedMessageId: An id of the message new message quotes. (inline reply)
+    ///   - skipPush: If true, skips sending push notification to channel members.
+    ///   - skipEnrichUrl: If true, the url preview won't be attached to the message.
     ///   - extraData: Additional extra data of the message object.
     ///   - completion: Called when saving the message to the local DB finishes.
     ///
-    func createNewReply(
+    public func createNewReply(
+        messageId: MessageId? = nil,
         text: String,
         pinning: MessagePinning? = nil,
         attachments: [AnyAttachmentPayload] = [],
         mentionedUserIds: [UserId] = [],
+        mentionedHere: Bool = false,
+        mentionedChannel: Bool = false,
+        mentionedGroupIds: [String] = [],
+        mentionedRoles: [String] = [],
         showReplyInChannel: Bool = false,
         isSilent: Bool = false,
         quotedMessageId: MessageId? = nil,
+        skipPush: Bool = false,
+        skipEnrichUrl: Bool = false,
         extraData: [String: RawJSON] = [:],
-        completion: ((Result<MessageId, Error>) -> Void)? = nil
+        completion: (@MainActor (Result<MessageId, Error>) -> Void)? = nil
     ) {
+        let parentMessageId = self.messageId
+
+        var transformableInfo = NewMessageTransformableInfo(
+            text: text,
+            attachments: attachments,
+            extraData: extraData
+        )
+        if let transformer = client.config.modelsTransformer {
+            transformableInfo = transformer.transform(newMessageInfo: transformableInfo)
+        }
+
         messageUpdater.createNewReply(
             in: cid,
-            text: text,
+            messageId: messageId,
+            text: transformableInfo.text,
             pinning: pinning,
             command: nil,
             arguments: nil,
-            parentMessageId: messageId,
-            attachments: attachments,
+            parentMessageId: parentMessageId,
+            attachments: transformableInfo.attachments,
             mentionedUserIds: mentionedUserIds,
+            mentionedHere: mentionedHere,
+            mentionedChannel: mentionedChannel,
+            mentionedGroupIds: mentionedGroupIds,
+            mentionedRoles: mentionedRoles,
             showReplyInChannel: showReplyInChannel,
             isSilent: isSilent,
             quotedMessageId: quotedMessageId,
-            extraData: extraData
+            skipPush: skipPush,
+            skipEnrichUrl: skipEnrichUrl,
+            extraData: transformableInfo.extraData
         ) { result in
+            if let newMessage = try? result.get() {
+                self.client.eventNotificationCenter.process(
+                    NewMessagePendingEvent(
+                        message: newMessage,
+                        cid: self.cid
+                    )
+                )
+            }
             self.callback {
-                completion?(result)
+                completion?(result.map(\.id))
             }
         }
     }
-    
+
     /// Loads previous messages from the backend.
     ///
     /// - Parameters:
     ///   - messageId: ID of the last fetched message. You will get messages `older` than the provided ID.
     ///     In case no replies are fetched you will get the first `limit` number of replies.
-    ///   - limit: Limit for page size.
+    ///   - limit: Limit for page size. By default it is 25.
     ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
     ///                 If request fails, the completion will be called with an error.
     ///
-    func loadPreviousReplies(
-        before messageId: MessageId? = nil,
-        limit: Int = 25,
-        completion: ((Error?) -> Void)? = nil
+    public func loadPreviousReplies(
+        before replyId: MessageId? = nil,
+        limit: Int? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
     ) {
-        if hasLoadedAllPreviousReplies {
-            completion?(nil)
+        if hasLoadedAllPreviousReplies || isLoadingPreviousReplies {
+            callback {
+                completion?(nil)
+            }
             return
         }
-        
-        let lastMessageId = messageId ?? (loadedRepliesHead ? replies.last?.id : nil)
-        
+
+        let pageSize = limit ?? repliesPageSize
+        let pagination: MessagesPagination
+
+        if let replyId = replyId ?? lastOldestReplyId {
+            pagination = MessagesPagination(
+                pageSize: pageSize,
+                parameter: .lessThan(replyId)
+            )
+        } else {
+            pagination = MessagesPagination(pageSize: pageSize)
+        }
+
         messageUpdater.loadReplies(
             cid: cid,
-            messageId: self.messageId,
-            pagination: MessagesPagination(pageSize: limit, parameter: lastMessageId.map { PaginationParameter.lessThan($0) })
+            messageId: messageId,
+            pagination: pagination,
+            paginationStateHandler: replyPaginationHandler
         ) { result in
             switch result {
             case let .success(payload):
-                self.loadedRepliesHead = true
-                self.hasLoadedAllPreviousReplies = payload.messages.count < limit
+                self.callback {
+                    // If the first page was loaded with 25 messages, it means we need to load
+                    // a page with 0 messages. This won't trigger a didChangeReplies, but we need
+                    // to fake it so that we can insert the parent message to the list again.
+                    // When we have the oldestReplyId and newestReplyId from the backend, this won't be
+                    // needed since when loading the first page, we can check if the first message is the
+                    // oldestReplyId, if it is, it means we already loaded all messages, and we don't need
+                    // to perform any more requests.
+                    if payload.messages.isEmpty {
+                        self.delegate?.messageController(self, didChangeReplies: [])
+                    }
+
+                    completion?(nil)
+                }
+            case let .failure(error):
+                self.callback { completion?(error) }
+            }
+        }
+    }
+
+    /// Load replies around the given reply id. Useful to jump to a reply which hasn't been loaded yet.
+    ///
+    /// Clears the current replies of the parent message and loads the replies with the given id,
+    /// and the replies around it depending on the limit provided.
+    ///
+    /// Ex: If the limit is 25, it will load the reply and 12 on top and 12 below it. (25 total)
+    ///
+    /// - Parameters:
+    ///   - replyId: The reply id of the message to jump to.
+    ///   - limit: The number of replies to load in total, including the message to jump to.
+    ///   - completion: Callback when the API call is completed.
+    public func loadPageAroundReplyId(
+        _ replyId: MessageId,
+        limit: Int? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        if isLoadingMiddleReplies {
+            callback {
+                completion?(nil)
+            }
+            return
+        }
+
+        let pageSize = limit ?? repliesPageSize
+        let pagination = MessagesPagination(pageSize: pageSize, parameter: .around(replyId))
+
+        messageUpdater.loadReplies(
+            cid: cid,
+            messageId: messageId,
+            pagination: pagination,
+            paginationStateHandler: replyPaginationHandler
+        ) { result in
+            switch result {
+            case .success:
                 self.callback { completion?(nil) }
             case let .failure(error):
                 self.callback { completion?(error) }
             }
         }
     }
-    
+
     /// Loads new messages from the backend.
     ///
     /// - Parameters:
@@ -323,21 +583,51 @@ public extension ChatMessageController {
     ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
     ///                 If request fails, the completion will be called with an error.
     ///
-    func loadNextReplies(
-        after messageId: MessageId? = nil,
-        limit: Int = 25,
-        completion: ((Error?) -> Void)? = nil
+    public func loadNextReplies(
+        after replyId: MessageId? = nil,
+        limit: Int? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
     ) {
-        guard let messageId = messageId ?? replies.first?.id else {
+        if isLoadingNextReplies || hasLoadedAllNextReplies {
+            callback {
+                completion?(nil)
+            }
+            return
+        }
+
+        guard let replyId = replyId ?? lastNewestReplyId else {
             log.error(ClientError.MessageEmptyReplies().localizedDescription)
             callback { completion?(ClientError.MessageEmptyReplies()) }
             return
         }
-    
+
+        let pageSize = limit ?? repliesPageSize
+
         messageUpdater.loadReplies(
             cid: cid,
-            messageId: self.messageId,
-            pagination: MessagesPagination(pageSize: limit, parameter: .greaterThan(messageId))
+            messageId: messageId,
+            pagination: MessagesPagination(pageSize: pageSize, parameter: .greaterThan(replyId)),
+            paginationStateHandler: replyPaginationHandler
+        ) { result in
+            switch result {
+            case .success:
+                self.callback { completion?(nil) }
+            case let .failure(error):
+                self.callback { completion?(error) }
+            }
+        }
+    }
+
+    /// Cleans the current state and loads the first page again.
+    /// - Parameter limit: Limit for page size
+    /// - Parameter completion: Callback when the API call is completed.
+    public func loadFirstPage(limit: Int? = nil, _ completion: (@MainActor (_ error: Error?) -> Void)? = nil) {
+        let pageSize = limit ?? repliesPageSize
+        messageUpdater.loadReplies(
+            cid: cid,
+            messageId: messageId,
+            pagination: MessagesPagination(pageSize: pageSize),
+            paginationStateHandler: replyPaginationHandler
         ) { result in
             self.callback { completion?(result.error) }
         }
@@ -350,9 +640,9 @@ public extension ChatMessageController {
     ///   - completion: The completion is called when the network request is finished.
     ///   If the request fails, the completion will be called with an error, if it succeeds it is
     ///   called without an error and the delegate is notified of reactions changes.
-    func loadNextReactions(
+    public func loadNextReactions(
         limit: Int = 25,
-        completion: ((Error?) -> Void)? = nil
+        completion: (@MainActor (Error?) -> Void)? = nil
     ) {
         if hasLoadedAllReactions {
             callback { completion?(nil) }
@@ -397,10 +687,10 @@ public extension ChatMessageController {
     ///   - offset: The starting position from the desired range to be fetched.
     ///   - completion: The completion is called when the network request is finished.
     ///   It is called with the reactions if the request succeeds or error if the request fails.
-    func loadReactions(
+    public func loadReactions(
         limit: Int,
         offset: Int = 0,
-        completion: @escaping (Result<[ChatMessageReaction], Error>) -> Void
+        completion: @escaping @MainActor (Result<[ChatMessageReaction], Error>) -> Void
     ) {
         messageUpdater.loadReactions(
             cid: cid,
@@ -415,49 +705,63 @@ public extension ChatMessageController {
             }
         }
     }
-    
+
     /// Flags the message this controller manages.
     ///
-    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    /// - Parameters:
+    ///   - reason: The flag reason.
+    ///   - extraData: Additional data associated with the flag request.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
     ///
-    func flag(completion: ((Error?) -> Void)? = nil) {
-        messageUpdater.flagMessage(true, with: messageId, in: cid) { error in
+    public func flag(
+        reason: String? = nil,
+        extraData: [String: RawJSON]? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        messageUpdater.flagMessage(true, with: messageId, in: cid, reason: reason, extraData: extraData) { error in
             self.callback {
                 completion?(error)
             }
         }
     }
-    
+
     /// Unflags the message this controller manages.
     ///
     /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
     ///
-    func unflag(completion: ((Error?) -> Void)? = nil) {
-        messageUpdater.flagMessage(false, with: messageId, in: cid) { error in
+    @available(*, deprecated, message: "Unflagging a message is not supported")
+    public func unflag(completion: (@MainActor (Error?) -> Void)? = nil) {
+        messageUpdater.flagMessage(false, with: messageId, in: cid, reason: nil, extraData: nil) { error in
             self.callback {
                 completion?(error)
             }
         }
     }
-    
+
     /// Adds new reaction to the message this controller manages.
     /// - Parameters:
     ///   - type: The reaction type.
     ///   - score: The reaction score.
     ///   - enforceUnique: If set to `true`, new reaction will replace all reactions the user has (if any) on this message.
+    ///   - skipPush: If set to `true`, skips sending push notification when reacting a message.
+    ///   - pushEmojiCode: The emoji code when receiving a reaction push notification.
     ///   - extraData: The reaction extra data.
     ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    func addReaction(
+    public func addReaction(
         _ type: MessageReactionType,
         score: Int = 1,
         enforceUnique: Bool = false,
+        skipPush: Bool = false,
+        pushEmojiCode: String? = nil,
         extraData: [String: RawJSON] = [:],
-        completion: ((Error?) -> Void)? = nil
+        completion: (@MainActor (Error?) -> Void)? = nil
     ) {
         messageUpdater.addReaction(
             type,
             score: score,
             enforceUnique: enforceUnique,
+            skipPush: skipPush,
+            pushEmojiCode: pushEmojiCode,
             extraData: extraData,
             messageId: messageId
         ) { error in
@@ -466,14 +770,14 @@ public extension ChatMessageController {
             }
         }
     }
-    
+
     /// Deletes the reaction from the message this controller manages.
     /// - Parameters:
     ///   - type: The reaction type.
     ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    func deleteReaction(
+    public func deleteReaction(
         _ type: MessageReactionType,
-        completion: ((Error?) -> Void)? = nil
+        completion: (@MainActor (Error?) -> Void)? = nil
     ) {
         messageUpdater.deleteReaction(type, messageId: messageId) { error in
             self.callback {
@@ -486,10 +790,10 @@ public extension ChatMessageController {
     ///  - Parameters:
     ///   - pinning: The pinning expiration information. It supports setting an infinite expiration, setting a date, or the amount of time a message is pinned.
     ///   - completion: A completion block with an error if the request was failed.
-    func pin(_ pinning: MessagePinning, completion: ((Error?) -> Void)? = nil) {
+    public func pin(_ pinning: MessagePinning, completion: (@MainActor (Error?) -> Void)? = nil) {
         messageUpdater.pinMessage(messageId: messageId, pinning: pinning) { result in
             self.callback {
-                completion?(result)
+                completion?(result.error)
             }
         }
     }
@@ -497,10 +801,46 @@ public extension ChatMessageController {
     /// Unpins the message this controller manages.
     ///  - Parameters:
     ///   - completion: A completion block with an error if the request was failed.
-    func unpin(completion: ((Error?) -> Void)? = nil) {
+    public func unpin(completion: (@MainActor (Error?) -> Void)? = nil) {
         messageUpdater.unpinMessage(messageId: messageId) { result in
             self.callback {
-                completion?(result)
+                completion?(result.error)
+            }
+        }
+    }
+    
+    /// Downloads the specified attachment and stores it locally on the device.
+    ///
+    /// - Parameters:
+    ///   - attachment: The attachment to download.
+    ///   - request: An optional pre-resolved `URLRequest` (e.g. from ``MediaLoader/loadFileRequest(for:options:completion:)``).
+    ///     If `nil`, a default request using the attachment's `remoteURL` is used.
+    ///   - completion: A completion block with the attachment containing the downloading state.
+    ///
+    /// - Note: The local storage URL (`attachment.downloadingState?.localFileURL`) can change between app launches.
+    public func downloadAttachment<Payload>(
+        _ attachment: ChatMessageAttachment<Payload>,
+        request: URLRequest? = nil,
+        completion: @escaping @MainActor (Result<ChatMessageAttachment<Payload>, Error>) -> Void
+    ) where Payload: DownloadableAttachmentPayload {
+        messageUpdater.downloadAttachment(attachment, request: request) { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+    
+    /// Deletes the locally downloaded file.
+    ///
+    /// - SeeAlso: Deleting all the local downloads: ``CurrentChatUserController/deleteAllLocalAttachmentDownloads(completion:)``
+    ///
+    /// - Parameters:
+    ///   - attachmentId: The id of the attachment.
+    ///   - completion: A completion block with an error if the deletion failed.
+    public func deleteLocalAttachmentDownload(for attachmentId: AttachmentId, completion: (@MainActor (Error?) -> Void)? = nil) {
+        messageUpdater.deleteLocalAttachmentDownload(for: attachmentId) { error in
+            self.callback {
+                completion?(error)
             }
         }
     }
@@ -510,9 +850,9 @@ public extension ChatMessageController {
     ///   - id: The attachment identifier.
     ///   - completion: The completion. Will be called on a **callbackQueue** when the database operation is finished.
     ///                 If operation fails, the completion will be called with an error.
-    func restartFailedAttachmentUploading(
+    public func restartFailedAttachmentUploading(
         with id: AttachmentId,
-        completion: ((Error?) -> Void)? = nil
+        completion: (@MainActor (Error?) -> Void)? = nil
     ) {
         messageUpdater.restartFailedAttachmentUploading(with: id) { error in
             self.callback {
@@ -520,31 +860,31 @@ public extension ChatMessageController {
             }
         }
     }
-    
+
     /// Changes local message from `.sendingFailed` to `.pendingSend` so it is enqueued by message sender worker.
     /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the database operation is finished.
     ///                         If operation fails, the completion will be called with an error.
-    func resendMessage(completion: ((Error?) -> Void)? = nil) {
+    public func resendMessage(completion: (@MainActor (Error?) -> Void)? = nil) {
         messageUpdater.resendMessage(with: messageId) { error in
             self.callback {
                 completion?(error)
             }
         }
     }
-    
+
     /// Executes the provided action on the message this controller manages.
     /// - Parameters:
     ///   - action: The action to take.
     ///   - completion: The completion. Will be called on a **callbackQueue** when the operation is finished.
     ///                 If operation fails, the completion is called with the error.
-    func dispatchEphemeralMessageAction(_ action: AttachmentAction, completion: ((Error?) -> Void)? = nil) {
-        messageUpdater.dispatchEphemeralMessageAction(cid: cid, messageId: messageId, action: action) { error in
+    public func dispatchEphemeralMessageAction(_ action: AttachmentAction, completion: (@MainActor (Error?) -> Void)? = nil) {
+        messageUpdater.dispatchEphemeralMessageAction(messageId: messageId, action: action) { error in
             self.callback {
                 completion?(error)
             }
         }
     }
-    
+
     /// Translates the message to the given language.
     /// The translated message will be returned via `didChangeMessage` delegate callback.
     /// Translation will be in `message.translations[language]`
@@ -552,11 +892,332 @@ public extension ChatMessageController {
     ///   - language: The language message text should be translated to.
     ///   - completion: The completion. Will be called on a **callbackQueue** when the operation is finished.
     ///                 If operation fails, the completion is called with the error.
-    func translate(to language: TranslationLanguage, completion: ((Error?) -> Void)? = nil) {
-        messageUpdater.translate(messageId: messageId, to: language) { error in
+    public func translate(to language: TranslationLanguage, completion: (@MainActor (Error?) -> Void)? = nil) {
+        messageUpdater.translate(messageId: messageId, to: language) { result in
+            self.callback {
+                completion?(result.error)
+            }
+        }
+    }
+
+    /// Marks the thread read if this message is the root of a thread.
+    public func markThreadRead(completion: (@MainActor (Error?) -> Void)? = nil) {
+        messageUpdater.markThreadRead(cid: cid, threadId: messageId) { error in
             self.callback {
                 completion?(error)
             }
+        }
+    }
+
+    /// Marks the thread unread if this message is the root of a thread.
+    public func markThreadUnread(completion: (@MainActor (Error?) -> Void)? = nil) {
+        messageUpdater.markThreadUnread(
+            cid: cid,
+            threadId: messageId
+        ) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Fetches the thread information of the message this controller manages.
+    /// Returns an error in case the message is not the root of a thread.
+    /// - Parameters:
+    ///   - replyLimit: The number of replies fetched.
+    ///   - participantLimit: The number of participants fetches.
+    ///   - memberLimit: The number of members fetched from the thread's channel, between 0 and 100.
+    ///   - completion: Returns the thread information if the message is the root of a thread.
+    public func loadThread(
+        replyLimit: Int? = nil,
+        participantLimit: Int? = nil,
+        memberLimit: Int? = nil,
+        completion: @escaping @MainActor (Result<ChatThread, Error>) -> Void
+    ) {
+        var query = ThreadQuery(
+            messageId: messageId,
+            watch: false
+        )
+        if let replyLimit {
+            query.replyLimit = replyLimit
+        }
+        if let participantLimit {
+            query.participantLimit = participantLimit
+        }
+        query.memberLimit = memberLimit
+        messageUpdater.loadThread(query: query) { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+
+    /// Updates the thread information of the threat root message this controller manages.
+    /// - Parameters:
+    ///   - title: The title of the thread.
+    ///   - extraData: Custom data to populate the thread.
+    ///   - unsetProperties: Properties from the thread to be cleared/unset.
+    public func updateThread(
+        title: String?,
+        extraData: [String: RawJSON]? = nil,
+        unsetProperties: [String]? = nil,
+        completion: @escaping @MainActor (Result<ChatThread, Error>) -> Void
+    ) {
+        var set = extraData ?? [:]
+        set["title"] = title.map(RawJSON.string)
+        messageUpdater.updateThread(
+            for: messageId,
+            request: .init(set: set.isEmpty ? nil : set, unset: unsetProperties)
+        ) { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+
+    /// Stops sharing the live location for this message if it has an active location sharing attachment.
+    ///
+    /// - Parameters:
+    ///   - completion: Called when the server updates the message.
+    public func stopLiveLocationSharing(completion: (@MainActor (Result<SharedLocation, Error>) -> Void)? = nil) {
+        guard let location = message?.sharedLocation else {
+            callback {
+                completion?(.failure(ClientError.MessageDoesNotHaveLiveLocationAttachment()))
+            }
+            return
+        }
+
+        guard location.isLiveSharingActive else {
+            callback {
+                completion?(.failure(ClientError.MessageLiveLocationAlreadyStopped()))
+            }
+            return
+        }
+
+        messageUpdater.stopLiveLocationSharing(messageId: messageId) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+    
+    /// Updates the draft message for this thread.
+    ///
+    /// If there is no draft message, a new draft message will be created.
+    /// - Parameters:
+    ///   - text: The text of the draft message.
+    ///   - isSilent: A flag indicating whether the message is a silent message.
+    ///   Silent messages are special messages that don't increase the unread messages count nor mark a channel as unread.
+    ///   - attachments: The attachments of the draft message.
+    ///   - mentionedUserIds: The mentioned user ids of the draft message.
+    ///   - quotedMessageId: The message that the draft message is quoting.
+    ///   - showReplyInChannel: If the draft message should be shown in the channel.
+    ///   - command: The command of the draft message.
+    ///   - extraData: The extra data of the draft message.
+    ///   - completion: Called when the draft message is saved to the server.
+    public func updateDraftReply(
+        text: String,
+        isSilent: Bool = false,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
+        quotedMessageId: MessageId? = nil,
+        showReplyInChannel: Bool = false,
+        command: Command? = nil,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<DraftMessage, Error>) -> Void)? = nil
+    ) {
+        draftsRepository.updateDraft(
+            for: cid,
+            threadId: messageId,
+            text: text,
+            isSilent: isSilent,
+            showReplyInChannel: showReplyInChannel,
+            command: command?.name,
+            arguments: command?.args,
+            attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
+            quotedMessageId: quotedMessageId,
+            extraData: extraData
+        ) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Loads the draft message for this thread.
+    ///
+    /// It is not necessary to call this method if the thread was loaded before.
+    public func loadDraftReply(
+        completion: (@MainActor (Result<DraftMessage?, Error>) -> Void)? = nil
+    ) {
+        draftsRepository.getDraft(
+            for: cid,
+            threadId: messageId
+        ) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Deletes the draft message for this thread.
+    public func deleteDraftReply(completion: (@MainActor (Error?) -> Void)? = nil) {
+        draftsRepository.deleteDraft(
+            for: cid,
+            threadId: messageId
+        ) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    // MARK: - Reminder Actions
+    
+    /// Creates a new reminder for this message.
+    /// - Parameters:
+    ///   - remindAt: The date when the user should be reminded about this message.
+    ///   If nil, this creates a "save for later" type reminder without a notification.
+    ///   - completion: Called when the API call is finished with the result of the operation.
+    public func createReminder(
+        remindAt: Date? = nil,
+        completion: (@MainActor (Result<MessageReminder, Error>) -> Void)? = nil
+    ) {
+        remindersRepository.createReminder(
+            messageId: messageId,
+            cid: cid,
+            remindAt: remindAt
+        ) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+    
+    /// Updates the reminder for this message.
+    /// - Parameters:
+    ///   - remindAt: The new date when the user should be reminded about this message.
+    ///   If nil, this updates to a "save for later" type reminder without a notification.
+    ///   - completion: Called when the API call is finished with the result of the operation.
+    public func updateReminder(
+        remindAt: Date?,
+        completion: (@MainActor (Result<MessageReminder, Error>) -> Void)? = nil
+    ) {
+        remindersRepository.updateReminder(
+            messageId: messageId,
+            cid: cid,
+            remindAt: remindAt
+        ) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+    
+    /// Deletes the reminder for this message.
+    /// - Parameter completion: Called when the API call is finished.
+    /// If request fails, the completion will be called with an error.
+    public func deleteReminder(
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        remindersRepository.deleteReminder(
+            messageId: messageId,
+            cid: cid
+        ) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    // MARK: - Scheduled Message Actions
+
+    /// Schedules a new reply to the message, to be sent at a later date.
+    ///
+    /// The reply is not added to the thread until it is sent. Local attachments are uploaded when scheduling.
+    ///
+    /// - Parameters:
+    ///   - messageId: The id of the scheduled message. Scheduling twice with the same id returns the existing scheduled message.
+    ///   - text: Text of the reply.
+    ///   - attachments: An array of the attachments for the reply.
+    ///   - mentionedUserIds: An array of the users mentioned in the reply.
+    ///   - showReplyInChannel: Set this flag to `true` if you want the reply to be shown in the channel as well.
+    ///   - quotedMessageId: An id of the message the reply quotes.
+    ///   - scheduledAt: When to send the reply, at most 120 days from now. The server rounds it up to the next whole minute,
+    ///   at least 1 minute from now. A date in the past sends the reply right away.
+    ///   - extraData: Additional extra data of the reply.
+    ///   - completion: Called when the reply is saved locally, with the scheduled message or an error saving it locally. It
+    ///   is sent to the server once its attachments are uploaded. The server answers later, on the scheduled message: a
+    ///   rejection sets `ScheduledMessage.status` to `.failed`, and `ScheduledMessage.failure` says why.
+    public func scheduleReply(
+        messageId: MessageId? = nil,
+        text: String,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
+        showReplyInChannel: Bool = false,
+        quotedMessageId: MessageId? = nil,
+        scheduledAt: Date,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<ScheduledMessage, Error>) -> Void)? = nil
+    ) {
+        let content = ScheduledMessageContent(
+            text: text,
+            attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
+            quotedMessageId: quotedMessageId,
+            parentId: self.messageId,
+            showReplyInChannel: showReplyInChannel,
+            extraData: extraData
+        )
+        client.scheduledMessagesRepository.schedule(
+            id: messageId ?? .newUniqueId,
+            cid: cid,
+            content: content,
+            scheduledAt: scheduledAt
+        ) { result in
+            self.callback { completion?(result) }
+        }
+    }
+
+    /// Updates the content of a scheduled reply to the message, and optionally when it is sent.
+    ///
+    /// A failed scheduled reply can not be changed: delete it and schedule a new one.
+    ///
+    /// - Parameters:
+    ///   - id: The id of the scheduled message.
+    ///   - text: The new text of the reply.
+    ///   - attachments: The new attachments of the reply.
+    ///   - mentionedUserIds: The new mentioned users of the reply.
+    ///   - showReplyInChannel: Set this flag to `true` if you want the reply to be shown in the channel as well.
+    ///   - quotedMessageId: The new quoted message of the reply.
+    ///   - scheduledAt: When to send the reply, not in the past. The server rounds it up to the next whole minute.
+    ///   `nil` keeps the current date.
+    ///   - extraData: The new extra data of the reply.
+    ///   - completion: Called when the reply is updated locally, with the scheduled message or an error. The changes are
+    ///   sent to the server once its attachments are uploaded, see `ScheduledMessage.status`.
+    public func updateScheduledReply(
+        id: String,
+        text: String,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
+        showReplyInChannel: Bool = false,
+        quotedMessageId: MessageId? = nil,
+        scheduledAt: Date? = nil,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<ScheduledMessage, Error>) -> Void)? = nil
+    ) {
+        let content = ScheduledMessageContent(
+            text: text,
+            attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
+            quotedMessageId: quotedMessageId,
+            parentId: messageId,
+            showReplyInChannel: showReplyInChannel,
+            extraData: extraData
+        )
+        client.scheduledMessagesRepository.update(id: id, content: content, scheduledAt: scheduledAt) { result in
+            self.callback { completion?(result) }
         }
     }
 }
@@ -566,19 +1227,35 @@ public extension ChatMessageController {
 extension ChatMessageController {
     struct Environment {
         var messageObserverBuilder: (
-            _ context: NSManagedObjectContext,
+            _ database: DatabaseContainer,
             _ fetchRequest: NSFetchRequest<MessageDTO>,
             _ itemCreator: @escaping (MessageDTO) throws -> ChatMessage,
             _ fetchedResultsControllerType: NSFetchedResultsController<MessageDTO>.Type
-        ) -> EntityDatabaseObserver<ChatMessage, MessageDTO> = EntityDatabaseObserver.init
-        
+        ) -> BackgroundEntityDatabaseObserver<ChatMessage, MessageDTO> = {
+            BackgroundEntityDatabaseObserver(
+                database: $0,
+                fetchRequest: $1,
+                itemCreator: $2,
+                itemReuseKeyPaths: (\ChatMessage.id, \MessageDTO.id),
+                fetchedResultsControllerType: $3
+            )
+        }
+
         var repliesObserverBuilder: (
-            _ context: NSManagedObjectContext,
+            _ database: DatabaseContainer,
             _ fetchRequest: NSFetchRequest<MessageDTO>,
             _ itemCreator: @escaping (MessageDTO) throws -> ChatMessage,
             _ fetchedResultsControllerType: NSFetchedResultsController<MessageDTO>.Type
-        ) -> ListDatabaseObserver<ChatMessage, MessageDTO> = ListDatabaseObserver.init
-        
+        ) -> BackgroundListDatabaseObserver<ChatMessage, MessageDTO> = {
+            .init(
+                database: $0,
+                fetchRequest: $1,
+                itemCreator: $2,
+                itemReuseKeyPaths: (\ChatMessage.id, \MessageDTO.id),
+                fetchedResultsControllerType: $3
+            )
+        }
+
         var messageUpdaterBuilder: (
             _ isLocalStorageEnabled: Bool,
             _ messageRepository: MessageRepository,
@@ -591,53 +1268,45 @@ extension ChatMessageController {
 // MARK: - Private
 
 private extension ChatMessageController {
-    func createMessageObserver() -> EntityDatabaseObserver<ChatMessage, MessageDTO> {
+    func createMessageObserver() -> BackgroundEntityDatabaseObserver<ChatMessage, MessageDTO> {
         let observer = environment.messageObserverBuilder(
-            client.databaseContainer.viewContext,
+            client.databaseContainer,
             MessageDTO.message(withID: messageId),
             { try $0.asModel() },
             NSFetchedResultsController<MessageDTO>.self
         )
-        
+
         return observer
     }
-    
+
     func setRepliesObserver() {
-        _repliesObserver.computeValue = { [weak self] in
-            guard let self = self else {
-                log.warning("Callback called while self is nil")
-                return nil
-            }
+        let sortAscending = listOrdering == .topToBottom ? false : true
+        let shouldShowShadowedMessages = client.config.shouldShowShadowedMessages
 
-            let sortAscending = self.listOrdering == .topToBottom ? false : true
-            let deletedMessageVisibility = self.client.databaseContainer.viewContext
-                .deletedMessagesVisibility ?? .visibleForCurrentUser
-            let shouldShowShadowedMessages = self.client.databaseContainer.viewContext.shouldShowShadowedMessages ?? false
-
-            let observer = self.environment.repliesObserverBuilder(
-                self.client.databaseContainer.viewContext,
-                MessageDTO.repliesFetchRequest(
-                    for: self.messageId,
-                    sortAscending: sortAscending,
-                    deletedMessagesVisibility: deletedMessageVisibility,
-                    shouldShowShadowedMessages: shouldShowShadowedMessages
-                ),
-                { try $0.asModel() as ChatMessage },
-                NSFetchedResultsController<MessageDTO>.self
-            )
-            observer.onChange = { [weak self] changes in
-                self?.delegateCallback { [weak self] in
-                    guard let self = self else {
-                        log.warning("Callback called while self is nil")
-                        return
-                    }
-                    log.debug("didChangeReplies: \(changes.map(\.debugDescription))")
-                    $0.messageController(self, didChangeReplies: changes)
+        let pageSize: Int = repliesPageSize
+        let observer = environment.repliesObserverBuilder(
+            client.databaseContainer,
+            MessageDTO.repliesFetchRequest(
+                for: messageId,
+                pageSize: pageSize,
+                sortAscending: sortAscending,
+                shouldShowShadowedMessages: shouldShowShadowedMessages
+            ),
+            { try $0.asModel() as ChatMessage },
+            NSFetchedResultsController<MessageDTO>.self
+        )
+        observer.onDidChange = { [weak self] changes in
+            self?.delegateCallback { [weak self] in
+                guard let self = self else {
+                    log.warning("Callback called while self is nil")
+                    return
                 }
+                log.debug("didChangeReplies: \(changes.map(\.debugDescription))")
+                $0.messageController(self, didChangeReplies: changes)
             }
-
-            return observer
         }
+
+        repliesObserver = observer
     }
 }
 
@@ -647,7 +1316,7 @@ private extension ChatMessageController {
 public protocol ChatMessageControllerDelegate: DataControllerStateDelegate {
     /// The controller observed a change in the `ChatMessage` its observes.
     func messageController(_ controller: ChatMessageController, didChangeMessage change: EntityChange<ChatMessage>)
-    
+
     /// The controller observed changes in the replies of the observed `ChatMessage`.
     func messageController(_ controller: ChatMessageController, didChangeReplies changes: [ListChange<ChatMessage>])
 
@@ -657,7 +1326,7 @@ public protocol ChatMessageControllerDelegate: DataControllerStateDelegate {
 
 public extension ChatMessageControllerDelegate {
     func messageController(_ controller: ChatMessageController, didChangeMessage change: EntityChange<ChatMessage>) {}
-    
+
     func messageController(_ controller: ChatMessageController, didChangeReplies changes: [ListChange<ChatMessage>]) {}
 
     func messageController(_ controller: ChatMessageController, didChangeReactions reactions: [ChatMessageReaction]) {}
@@ -670,14 +1339,14 @@ public protocol _ChatMessageControllerDelegate: DataControllerStateDelegate {
         _ controller: ChatMessageController,
         didChangeMessage change: EntityChange<ChatMessage>
     )
-    
+
     /// The controller observed changes in the replies of the observed `ChatMessage`.
     func messageController(
         _ controller: ChatMessageController,
         didChangeReplies changes: [ListChange<ChatMessage>]
     )
 }
- 
+
 public extension ChatMessageController {
     /// Set the delegate of `ChatMessageController` to observe the changes in the system.
     var delegate: ChatMessageControllerDelegate? {
@@ -686,10 +1355,22 @@ public extension ChatMessageController {
     }
 }
 
-extension ClientError {
-    class MessageEmptyReplies: ClientError {
+public extension ClientError {
+    final class MessageEmptyReplies: ClientError, @unchecked Sendable {
         override public var localizedDescription: String {
             "You can't load previous replies when there is no replies for the message."
+        }
+    }
+
+    final class MessageDoesNotHaveLiveLocationAttachment: ClientError, @unchecked Sendable {
+        override public var localizedDescription: String {
+            "The message does not have a live location attachment."
+        }
+    }
+
+    final class MessageLiveLocationAlreadyStopped: ClientError, @unchecked Sendable {
+        override public var localizedDescription: String {
+            "The live location sharing has already been stopped."
         }
     }
 }

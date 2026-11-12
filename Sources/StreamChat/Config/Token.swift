@@ -1,18 +1,14 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
 /// The type is designed to store the JWT and the user it is related to.
-public struct Token: Decodable, Equatable, ExpressibleByStringLiteral {
+public struct Token: Decodable, Equatable, ExpressibleByStringLiteral, Sendable {
     public let rawValue: String
     public let userId: UserId
     public let expiration: Date?
-    
-    public var isExpired: Bool {
-        expiration.map { $0 < Date() } ?? false
-    }
 
     /// Created a new `Token` instance.
     /// - Parameter value: The JWT string value. It must be in valid format and contain `user_id` in payload.
@@ -57,7 +53,7 @@ public extension Token {
     ///
     /// Is used by `anonymous` token provider.
     static var anonymous: Self {
-        .init(rawValue: "", userId: .anonymous, expiration: .distantFuture)
+        .init(rawValue: "anon", userId: .anonymous, expiration: nil)
     }
 
     /// The token which can be used during the development.
@@ -65,39 +61,35 @@ public extension Token {
     /// Is used by `development(userId:)` token provider.
     static func development(userId: UserId) -> Self {
         log.assert(!userId.isEmpty, "The provided `userId` must not be empty.")
-        
+
         let header = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" //  {"alg": "HS256", "typ": "JWT"}
         let payload = #"{"user_id":"\#(userId)"}"#.data(using: .utf8)!.base64EncodedString()
         let devSignature = "devtoken"
 
         let jwt = [header, payload, devSignature].joined(separator: ".")
-            
-        return .init(rawValue: jwt, userId: userId, expiration: .distantFuture)
-    }
-}
 
-extension ClientError {
-    public class InvalidToken: ClientError {}
+        return .init(rawValue: jwt, userId: userId, expiration: nil)
+    }
 }
 
 private extension String {
     var jwtPayload: [String: Any]? {
         let parts = split(separator: ".")
-        
+
         if parts.count == 3,
            let payloadData = jwtDecodeBase64(String(parts[1])),
            let json = (try? JSONSerialization.jsonObject(with: payloadData)) as? [String: Any] {
             return json
         }
-        
+
         return nil
     }
-    
+
     func jwtDecodeBase64(_ input: String) -> Data? {
         let removeEndingCount = input.count % 4
         let ending = removeEndingCount > 0 ? String(repeating: "=", count: 4 - removeEndingCount) : ""
         let base64 = input.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") + ending
-        
+
         return Data(base64Encoded: base64)
     }
 }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -9,32 +9,30 @@ import XCTest
 final class MissingEventsPayload_Tests: XCTestCase {
     func test_missingEventsPayload_isDeserialized() throws {
         let json = XCTestCase.mockData(fromJSONFile: "MissingEventsPayload")
-        let payload = try JSONDecoder.default.decode(MissingEventsPayload.self, from: json)
-        XCTAssertEqual(payload.eventPayloads.count, 1)
-        
-        let expectedUser = UserPayload(
-            id: "broken-waterfall-5",
+        let payload = try JSONDecoder.default.decode(SyncResponse.self, from: json)
+        XCTAssertEqual(payload.events.count, 1)
+
+        let expectedUser = UserPayload.dummy(
+            userId: "broken-waterfall-5",
             name: "Broken Waterfall",
-            imageURL: URL(string: "https://api.adorable.io/avatars/285/broken-waterfall-5.png"),
+            imageUrl: URL(string: "https://api.adorable.io/avatars/285/broken-waterfall-5.png"),
             role: .user,
+            teams: [],
             createdAt: "2019-12-12T15:33:46.488935Z".toDate(),
             updatedAt: "2020-09-07T12:27:43.096437Z".toDate(),
-            lastActiveAt: "2020-09-07T12:25:41.501574Z".toDate(),
-            isOnline: true,
-            isInvisible: false,
-            isBanned: false,
-            extraData: [:]
+            lastActiveAt: "2020-09-07T12:25:41.501574Z".toDate()
         )
-        
-        let event = try XCTUnwrap(payload.eventPayloads.first)
-        XCTAssertEqual(event.eventType, .messageNew)
-        XCTAssertEqual(event.cid?.rawValue, "messaging:A2F4393C-D656-46B8-9A43-6148E9E62D7F")
+
+        guard case let .typeMessageNewEvent(event) = try XCTUnwrap(payload.events.first) else {
+            return XCTFail("Expected a message.new event")
+        }
+        XCTAssertEqual(event.cid.rawValue, "messaging:A2F4393C-D656-46B8-9A43-6148E9E62D7F")
         XCTAssertEqual(event.createdAt, "2020-09-07T12:25:50.702323Z".toDate())
 
-        let message = try XCTUnwrap(event.message)
+        let message = event.message
         XCTAssertEqual(message.id, "AD6B64F8-1A12-48AF-B246-09774FD1B748")
         XCTAssertEqual(message.text, "How are you?")
-        XCTAssertEqual(message.type, .regular)
+        XCTAssertEqual(message.type, MessageType.regular.rawValue)
         XCTAssertTrue(message.latestReactions.isEmpty)
         XCTAssertTrue(message.ownReactions.isEmpty)
         XCTAssertTrue(message.reactionScores.isEmpty)
@@ -43,7 +41,7 @@ final class MissingEventsPayload_Tests: XCTestCase {
         XCTAssertEqual(message.createdAt, "2020-09-07T12:25:50.702323Z".toDate())
         XCTAssertEqual(message.updatedAt, "2020-09-07T12:25:50.702324Z".toDate())
         XCTAssertTrue(message.mentionedUsers.isEmpty)
-        XCTAssertFalse(message.isSilent)
+        XCTAssertFalse(message.silent)
 
         let messageUser = try XCTUnwrap(message.user)
         XCTAssertEqual(messageUser.id, expectedUser.id)
@@ -55,9 +53,8 @@ final class MissingEventsPayload_Tests: XCTestCase {
         XCTAssertEqual(messageUser.lastActiveAt, expectedUser.lastActiveAt)
         XCTAssertEqual(messageUser.isBanned, expectedUser.isBanned)
         XCTAssertEqual(messageUser.isOnline, expectedUser.isOnline)
-        XCTAssertEqual(messageUser.isInvisible, expectedUser.isInvisible)
         XCTAssertEqual(messageUser.extraData, expectedUser.extraData)
-        
+
         let eventUser = try XCTUnwrap(event.user)
         XCTAssertEqual(eventUser.id, expectedUser.id)
         XCTAssertEqual(eventUser.role, expectedUser.role)
@@ -66,28 +63,43 @@ final class MissingEventsPayload_Tests: XCTestCase {
         XCTAssertEqual(eventUser.lastActiveAt, expectedUser.lastActiveAt)
         XCTAssertEqual(eventUser.isBanned, expectedUser.isBanned)
         XCTAssertEqual(eventUser.isOnline, expectedUser.isOnline)
-        XCTAssertEqual(eventUser.isInvisible, expectedUser.isInvisible)
         XCTAssertEqual(eventUser.extraData, expectedUser.extraData)
     }
 
     func test_missingEventsPayload_incompleteChannels_isDeserialized() throws {
         let json = XCTestCase.mockData(fromJSONFile: "MissingEventsPayload-IncompleteChannel")
-        let payload = try JSONDecoder.default.decode(MissingEventsPayload.self, from: json)
-        XCTAssertEqual(payload.eventPayloads.count, 4)
+        let payload = try JSONDecoder.default.decode(SyncResponse.self, from: json)
+        XCTAssertTrue(payload.events.isEmpty)
+    }
 
-        let expectedTypes: [EventType] = [
-            .notificationRemovedFromChannel,
-            .notificationAddedToChannel,
-            .notificationRemovedFromChannel,
-            .notificationAddedToChannel
-        ]
+    func test_missingEventsPayload_skipsUndecodableEvents() throws {
+        let data = XCTestCase.mockData(fromJSONFile: "MissingEventsPayload")
+        var json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var events = try XCTUnwrap(json["events"] as? [[String: Any]])
+        events.append([
+            "type": "channel.frozen",
+            "cid": "messaging:123",
+            "channel_id": "123",
+            "channel_type": "messaging",
+            "created_at": "2020-09-07T12:25:51.702323Z",
+            "custom": [String: Any]()
+        ])
+        events.append([
+            "type": "custom_event_type",
+            "cid": "messaging:123",
+            "created_at": "2020-09-07T12:25:52.702323Z"
+        ])
+        json["events"] = events
 
-        // Channel is not decoded because it is incomplete, but rest is decoded.
-        for (event, type) in zip(payload.eventPayloads, expectedTypes) {
-            XCTAssertNil(event.channel)
-            XCTAssertEqual(event.user?.id, "broken-waterfall-5")
-            XCTAssertEqual(event.createdAt, "2020-09-07T12:25:50.702323Z".toDate())
-            XCTAssertEqual(event.eventType, type)
+        let payload = try JSONDecoder.default.decode(
+            SyncResponse.self,
+            from: try JSONSerialization.data(withJSONObject: json)
+        )
+
+        XCTAssertEqual(payload.events.count, 1)
+        guard case let .typeMessageNewEvent(event) = try XCTUnwrap(payload.events.first) else {
+            return XCTFail("Expected a message.new event")
         }
+        XCTAssertEqual(event.message.id, "AD6B64F8-1A12-48AF-B246-09774FD1B748")
     }
 }

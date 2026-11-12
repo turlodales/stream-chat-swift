@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -7,18 +7,17 @@ import Foundation
 #if TESTS
 @testable import StreamChat
 
-final class InternetConnectionMonitor_Mock: InternetConnectionMonitor {
+final class InternetConnectionMonitor_Mock: InternetConnectionMonitor, @unchecked Sendable {
     var delegate: InternetConnectionDelegate?
 
-    var status: InternetConnection.Status = .available(.great)
+    var status: InternetConnectionStatus = .available(.great)
 
     func start() {}
     func stop() {}
 
-    func update(with status: InternetConnection.Status) {
+    func update(with status: InternetConnectionStatus) {
         self.status = status
         delegate?.internetConnectionStatusDidChange(status: status)
     }
-
 }
 #endif

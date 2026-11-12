@@ -1,26 +1,30 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
 import XCTest
 
-final class RequestDecoder_Spy: RequestDecoder, Spy {
-    var recordedFunctions: [String] = []
+final class RequestDecoder_Spy: RequestDecoder, Spy, @unchecked Sendable {
+    let spyState = SpyState()
     var decodeRequestResponse: Result<Any, Error>?
     var decodeRequestDelay: TimeInterval?
 
     var decodeRequestResponse_data: Data?
     var decodeRequestResponse_response: HTTPURLResponse?
     var decodeRequestResponse_error: Error?
+    var onDecodeRequestResponseCall: (() -> Void)?
 
     func decodeRequestResponse<ResponseType>(
+        request: URLRequest,
+        session: URLSession,
         data: Data?,
         response: URLResponse?,
         error: Error?
     ) throws -> ResponseType where ResponseType: Decodable {
         record()
+        onDecodeRequestResponseCall?()
         decodeRequestResponse_data = data
         decodeRequestResponse_response = response as? HTTPURLResponse
         decodeRequestResponse_error = error

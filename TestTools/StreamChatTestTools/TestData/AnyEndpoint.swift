@@ -1,9 +1,10 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
+import XCTest
 
 public struct AnyEndpoint: Equatable {
     public let path: EndpointPath
@@ -30,4 +31,33 @@ public struct AnyEndpoint: Equatable {
             && lhs.body == rhs.body
             && lhs.payloadType == rhs.payloadType
     }
+
+    func queryItemsAsDictionary() throws -> [String: Any] {
+        let data = try JSONEncoder().encode(queryItems)
+        guard let requestQueryItems = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "com.getstream.io.any-endpoint", code: 2)
+        }
+        return requestQueryItems
+    }
+
+    func bodyAsDictionary() throws -> [String: Any] {
+        let data = try JSONEncoder().encode(body)
+        guard let requestBody = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "com.getstream.io.any-endpoint", code: 1)
+        }
+        return requestBody
+    }
+}
+
+func AssertEqualEndpoint<A, B>(
+    _ lhs: Endpoint<A>?,
+    _ rhs: Endpoint<B>?,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    guard let lhs = lhs, let rhs = rhs else {
+        XCTFail("Endpoints cannot be optional")
+        return
+    }
+    XCTAssertEqual(AnyEndpoint(lhs), AnyEndpoint(rhs))
 }

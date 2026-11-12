@@ -1,26 +1,101 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
+import PhotosUI
 @testable import StreamChat
 @testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import XCTest
 
-final class ComposerVC_Tests: XCTestCase {
+@MainActor final class ComposerVC_Tests: XCTestCase {
+    private var composerVC: ComposerVC!
+    var mockedChatChannelController: ChatChannelController_Mock!
+    
+    // MARK: - Lifecycle
+
+    override func setUp() {
+        super.setUp()
+        let chatClient = ChatClient_Mock.mock
+        chatClient.mockAuthenticationRepository.mockedCurrentUserId = .newUniqueId
+        mockedChatChannelController = ChatChannelController_Mock.mock(chatClient: chatClient)
+        mockedChatChannelController.channel_mock = .mock(
+            cid: .unique,
+            config: .mock(commands: []),
+            ownCapabilities: [.sendMessage]
+        )
+
+        composerVC = .init()
+        composerVC.components = .mock
+        composerVC.components.isDraftMessagesEnabled = true
+        composerVC.channelController = mockedChatChannelController
+    }
+    
+    override func tearDown() {
+        temporaryFiles.forEach { try? FileManager.default.removeItem(at: $0) }
+        temporaryFiles = []
+        composerVC = nil
+        mockedChatChannelController = nil
+        super.tearDown()
+    }
+
+    private var temporaryFiles: [URL] = []
+
+    private func makeImage(width: Int, height: Int) throws -> UIImage {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let size = CGSize(width: width, height: height)
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+    }
+
+    private func makeTemporaryImageFile(width: Int, height: Int) throws -> URL {
+        let image = try makeImage(width: width, height: height)
+        let data = try XCTUnwrap(image.jpegData(compressionQuality: 1))
+        let url = try makeTemporaryFile(named: "\(UUID().uuidString).jpg")
+        try data.write(to: url)
+        return url
+    }
+
+    private var imagePayload: ImageAttachmentPayload? {
+        composerVC.content.attachments.first?.payload as? ImageAttachmentPayload
+    }
+
+    private func makeTemporaryFile(named name: String, byteCount: Int = 1024) throws -> URL {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name)
+        try Data(count: byteCount).write(to: url)
+        temporaryFiles.append(url)
+        return url
+    }
+
+    private func makeItemProvider(for url: URL) throws -> NSItemProvider {
+        try XCTUnwrap(NSItemProvider(contentsOf: url))
+    }
+
+    private func setUploadSizeLimit(_ sizeLimitInBytes: Int64) {
+        (composerVC.channelController?.client as? ChatClient_Mock)?.mockedAppSettings = .mock(
+            fileUploadConfig: .mock(sizeLimitInBytes: sizeLimitInBytes)
+        )
+    }
+    
+    // MARK: - Search
+    
     func test_userFound_whenSearchedByIDOrName() throws {
         let user1 = ChatUser.mock(id: "searchingThis")
         let user2 = ChatUser.mock(id: "x", name: "searchingThis")
-
+        
         XCTAssertEqual(searchUsers([user1], by: "sear"), [user1])
         XCTAssertEqual(searchUsers([user2], by: "sear"), [user2])
     }
-
+    
     func test_usersFound_whenSearchedWithTieBreaker() throws {
         let tommaso = ChatUser.mock(id: "tommaso", name: "Tommaso")
         let thierry = ChatUser.mock(id: "thierry", name: "Thierry")
         let users = [tommaso, thierry]
-
+        
         XCTAssertEqual(searchUsers(users, by: ""), [thierry, tommaso])
         XCTAssertEqual(searchUsers(users, by: ""), [thierry, tommaso])
         XCTAssertEqual(searchUsers(users, by: ""), [thierry, tommaso])
@@ -29,47 +104,47 @@ final class ComposerVC_Tests: XCTestCase {
         XCTAssertEqual(searchUsers(users, by: ""), [thierry, tommaso])
         XCTAssertEqual(searchUsers(users, by: ""), [thierry, tommaso])
     }
-
+    
     func test_userFound_whenTypingTheBeginningOfIDOrName() throws {
         let tommaso = ChatUser.mock(id: "tommaso", name: "Tommaso")
         let thierry = ChatUser.mock(id: "thierry", name: "Thierry")
         let users = [tommaso, thierry]
-
+        
         XCTAssertEqual(searchUsers(users, by: "tom"), [tommaso])
         XCTAssertEqual(searchUsers(users, by: "thier"), [thierry])
     }
-
+    
     func test_userFound_whenStartOfTheNameMatchesCase() throws {
         let tommaso = ChatUser.mock(id: "tommaso", name: "Tommaso")
         let thierry = ChatUser.mock(id: "thierry", name: "Thierry")
         let users = [tommaso, thierry]
-
+        
         XCTAssertEqual(searchUsers(users, by: "Tom"), [tommaso])
         XCTAssertEqual(searchUsers(users, by: "Thier"), [thierry])
     }
-
-    func test_userFound_whenNameIsTranslitterated() throws {
+    
+    func test_userFound_whenNameIsTransliterated() throws {
         let tommaso = ChatUser.mock(id: "tommaso", name: "Tommaso")
         let thierry = ChatUser.mock(id: "thierry", name: "Thierry")
         let users = [tommaso, thierry]
-
+        
         XCTAssertEqual(searchUsers(users, by: "tóm"), [tommaso])
         XCTAssertEqual(searchUsers(users, by: "thíer"), [thierry])
     }
-
-    func test_usersFoundAndSroted_whenSearchedByBeginningOfNameOrID() throws {
+    
+    func test_usersFoundAndSorted_whenSearchedByBeginningOfNameOrID() throws {
         let tommaso = ChatUser.mock(id: "tommaso", name: "tommaso")
         let tomas = ChatUser.mock(id: "tomas", name: "tomas")
         let users = [tommaso, tomas]
-
+        
         XCTAssertEqual(searchUsers(users, by: "tom"), [tomas, tommaso])
     }
-
+    
     func test_userFound_whenHappySortedByDistancePrefix() throws {
         let tommaso = ChatUser.mock(id: "tommaso", name: "tommaso")
         let tommasi = ChatUser.mock(id: "tommasi", name: "tommasi")
         let users = [tommaso, tommasi]
-
+        
         XCTAssertEqual(searchUsers(users, by: "t"), [tommasi, tommaso])
         XCTAssertEqual(searchUsers(users, by: "to"), [tommasi, tommaso])
         XCTAssertEqual(searchUsers(users, by: "tom"), [tommasi, tommaso])
@@ -78,12 +153,12 @@ final class ComposerVC_Tests: XCTestCase {
         XCTAssertEqual(searchUsers(users, by: "tommas"), [tommasi, tommaso])
         XCTAssertEqual(searchUsers(users, by: "tommaso"), [tommaso])
     }
-
+    
     func test_userFound_whenHappySortedByDistancePrefix2() throws {
         let tommaso = ChatUser.mock(id: "tommaso", name: "tommaso")
         let tommasi = ChatUser.mock(id: "tommasi", name: "tommasi")
         let users = [tommasi, tommaso]
-
+        
         XCTAssertEqual(searchUsers(users, by: "t"), [tommasi, tommaso])
         XCTAssertEqual(searchUsers(users, by: "to"), [tommasi, tommaso])
         XCTAssertEqual(searchUsers(users, by: "tom"), [tommasi, tommaso])
@@ -92,29 +167,64 @@ final class ComposerVC_Tests: XCTestCase {
         XCTAssertEqual(searchUsers(users, by: "tommas"), [tommasi, tommaso])
         XCTAssertEqual(searchUsers(users, by: "tommaso"), [tommaso])
     }
-
+    
     func test_userFound_whenHappyCyrillic() throws {
         let petyo = ChatUser.mock(id: "42", name: "Петьо")
         let anastasia = ChatUser.mock(id: "13", name: "Анастасiя")
         let dmitriy = ChatUser.mock(id: "99", name: "Дмитрий")
         let users = [petyo, anastasia, dmitriy]
-
+        
         XCTAssertEqual(searchUsers(users, by: "petyo"), [])
         XCTAssertEqual(searchUsers(users, by: "Пе"), [petyo])
         XCTAssertEqual(searchUsers(users, by: "Ана"), [anastasia])
         XCTAssertEqual(searchUsers(users, by: "Дмитрии"), [dmitriy])
         XCTAssertEqual(searchUsers(users, by: "Дмитри"), [dmitriy])
     }
-
+    
     func test_userFound_whenHappyFrench() throws {
         let user = ChatUser.mock(id: "fra", name: "françois")
-
+        
         XCTAssertEqual(searchUsers([user], by: "françois"), [user])
         XCTAssertEqual(searchUsers([user], by: "franc"), [user])
     }
+
+    // MARK: - suggestions view
+
+    func test_showCommandSuggestionsView() {
+        let containerView = UIViewController()
+        containerView.addChildViewController(composerVC, embedIn: containerView.view)
+        let channel = ChatChannel.mock(
+            cid: .unique,
+            config: .mock(commands: [.init(name: "giphy")])
+        )
+        mockedChatChannelController.channel_mock = channel
+        composerVC.content = .initial()
+        composerVC.content.text = "/"
+        composerVC.updateContent()
+        AssertSnapshot(containerView.view, variants: [.defaultLight], size: .init(width: 400, height: 150))
+    }
+
+    func test_showMentionSuggestionsView() {
+        let containerView = UIViewController()
+        containerView.addChildViewController(composerVC, embedIn: containerView.view)
+        let channel = ChatChannel.mock(
+            cid: .unique,
+            config: .mock(commands: [.init(name: "giphy")]),
+            lastActiveMembers: [.mock(id: "leia_organa", name: "Leia Organa")]
+        )
+        mockedChatChannelController.channel_mock = channel
+        composerVC.userSearchController = .init(client: mockedChatChannelController.client)
+        composerVC.userMentionsDebouncer = .init(0, queue: .main)
+        composerVC.content = .initial()
+        composerVC.content.text = "Hello @Le"
+        composerVC.content.mentionedUsers = [.mock(id: "leia_organa", name: "Leia Organa")]
+        composerVC.updateContent()
+        AssertSnapshot(containerView.view, variants: [.defaultLight], size: .init(width: 400, height: 130))
+    }
+
+    // MARK: - attachmentsPreview
     
     func test_attachmentsPreview_withFourAttachments_addedSameTime() {
-        let composerVC = ComposerVC()
         composerVC.appearance = Appearance.default
         
         composerVC.content = .initial()
@@ -124,7 +234,6 @@ final class ComposerVC_Tests: XCTestCase {
     }
     
     func test_attachmentsPreview_withFourAttachments_addedOneAfterThree() {
-        let composerVC = ComposerVC()
         composerVC.appearance = Appearance.default
         
         composerVC.content = .initial()
@@ -136,7 +245,6 @@ final class ComposerVC_Tests: XCTestCase {
     }
     
     func test_attachmentsPreview_withFourAttachments_addedTwoAfterTwo() {
-        let composerVC = ComposerVC()
         composerVC.appearance = Appearance.default
         
         composerVC.content = .initial()
@@ -148,7 +256,6 @@ final class ComposerVC_Tests: XCTestCase {
     }
     
     func test_attachmentsPreview_withFourAttachments_addedThreeAfterOne() {
-        let composerVC = ComposerVC()
         composerVC.appearance = Appearance.default
         
         composerVC.content = .initial()
@@ -158,29 +265,26 @@ final class ComposerVC_Tests: XCTestCase {
         
         AssertSnapshot(composerVC)
     }
-
+    
     func test_attachmentsPreview_withMultipleAttachmentTypes() {
-        let composerVC = ComposerVC()
         composerVC.appearance = Appearance.default
 
         composerVC.content = .initial()
         composerVC.content.attachments = [.mockFile, .mockFile, .mockImage, .mockVideo]
-
+        
         AssertSnapshot(composerVC)
     }
-
+    
     func test_attachmentsPreview_withLongFileNames() {
-        let composerVC = ComposerVC()
         composerVC.appearance = Appearance.default
-
+        
         composerVC.content = .initial()
         composerVC.content.attachments = [.mockFileWithLongName]
-
+        
         AssertSnapshot(composerVC, variants: [.defaultLight])
     }
     
     func test_commandWithNonEmptyArgs_hasSendButtonDisabled() {
-        let composerVC = ComposerVC()
         composerVC.appearance = Appearance.default
         
         composerVC.content = .initial()
@@ -195,7 +299,6 @@ final class ComposerVC_Tests: XCTestCase {
     }
     
     func test_commandWithEmptyArgs_hasSendButtonEnabled() {
-        let composerVC = ComposerVC()
         composerVC.appearance = Appearance.default
         
         composerVC.content = .initial()
@@ -208,85 +311,1622 @@ final class ComposerVC_Tests: XCTestCase {
         
         AssertSnapshot(composerVC)
     }
-    
-    func test_whenSuggestionsLookupIsLocal_onlyChannelMembersAreShown() {
-        final class ComposerContainerVC: UIViewController {
-            var composerVC: ComposerVC!
-            var textWithMention = ""
-            
-            override func viewDidLoad() {
-                super.viewDidLoad()
-                
-                view.backgroundColor = .white
-                addChildViewController(composerVC, targetView: view)
-                composerVC.view.pin(anchors: [.leading, .trailing, .bottom], to: view)
-            }
 
-            override func viewWillAppear(_ animated: Bool) {
-                super.viewWillAppear(animated)
-                
-                composerVC.content.text = textWithMention
-            }
-        }
-        
-        let member: ChatChannelMember = .mock(
-            id: "1",
-            name: "Yoda (member)",
-            imageURL: nil
-        )
-        
-        let watcher: ChatUser = .mock(
-            id: "2",
-            name: "Yoda (watcher)",
-            imageURL: nil
-        )
-        
-        let mockUserSearchController = ChatUserSearchController_Mock.mock()
-        
-        let mockChannelController = ChatChannelController_Mock.mock()
-        mockChannelController.client.currentUserId = .unique
-        mockChannelController.channel_mock = .mock(
-            cid: .unique,
-            lastActiveMembers: [member],
-            lastActiveWatchers: [watcher]
-        )
-        
-        let composerVC = ComposerVC()
-        composerVC.userSearchController = mockUserSearchController
-        composerVC.channelController = mockChannelController
-        
-        let containerVC = ComposerContainerVC()
-        containerVC.composerVC = composerVC
-        containerVC.textWithMention = "@Yo"
-        
-        AssertSnapshot(containerVC, variants: [.defaultLight])
+    func test_makeMentionSuggestionsDataSource_whenMentionAllAppUsers_shouldSearchUsers() throws {
+        composerVC.components.mentionAllAppUsers = true
+        composerVC.channelController = mockedChatChannelController
+        let mockedSearchController = ChatUserSearchController_Mock.mock()
+        mockedSearchController.users_mock = [.mock(id: .unique, name: "1"), .mock(id: .unique, name: "2")]
+        composerVC.userSearchController = mockedSearchController
+
+        // When empty, should not search.
+        _ = composerVC.makeMentionSuggestionsDataSource(for: "")
+        XCTAssertEqual(mockedSearchController.searchCallCount, 0)
+
+        // When mention already exists, should not search.
+        composerVC.content.mentionedUsers.insert(.mock(id: .unique, name: "Han Solo"))
+        _ = try XCTUnwrap(composerVC.makeMentionSuggestionsDataSource(for: "Han Solo"))
+        XCTAssertEqual(mockedSearchController.searchCallCount, 0)
+
+        // Happy path
+        let dataSource = try XCTUnwrap(composerVC.makeMentionSuggestionsDataSource(for: "Leia"))
+        XCTAssertNil(dataSource.memberListController)
+        XCTAssertEqual(dataSource.users, mockedSearchController.users_mock ?? [])
+        XCTAssertEqual(mockedSearchController.searchCallCount, 1)
     }
-    
+
+    func test_makeMentionSuggestionsDataSource_whenMentionAllAppUsersIsFalse_whenMemberCountBiggerThanLocalMembers_shouldSearchChannelMembers() throws {
+        composerVC.components.mentionAllAppUsers = false
+        composerVC.channelController = mockedChatChannelController
+        mockedChatChannelController.channel_mock = .mock(cid: .unique, lastActiveMembers: [.dummy, .dummy], memberCount: 10)
+        let mockedSearchController = ChatUserSearchController_Mock.mock()
+        mockedSearchController.users_mock = []
+        composerVC.userSearchController = mockedSearchController
+
+        // When empty, should not create member list controller.
+        let emptyDataSource = try XCTUnwrap(composerVC.makeMentionSuggestionsDataSource(for: ""))
+        XCTAssertNil(emptyDataSource.memberListController)
+
+        // When mention already exists, should not create member list controller.
+        composerVC.content.mentionedUsers.insert(.mock(id: .unique, name: "Han Solo"))
+        let existingMentionDataSource = try XCTUnwrap(composerVC.makeMentionSuggestionsDataSource(for: "Han Solo"))
+        XCTAssertNil(existingMentionDataSource.memberListController)
+
+        // Happy path
+        let dataSource = try XCTUnwrap(composerVC.makeMentionSuggestionsDataSource(for: "Leia"))
+        XCTAssertNotNil(dataSource.memberListController)
+        XCTAssertEqual(dataSource.memberListController?.state, .localDataFetched)
+        XCTAssertEqual(mockedSearchController.searchCallCount, 0)
+    }
+
+    func test_makeMentionSuggestionsDataSource_whenMentionAllAppUsersIsFalse_whenMemberCountLowerThanLocalMembers_shoudSearchLocalMembers() throws {
+        composerVC.components.mentionAllAppUsers = false
+        composerVC.channelController = mockedChatChannelController
+        mockedChatChannelController.channel_mock = .mock(
+            cid: .unique,
+            lastActiveMembers: [.mock(id: .unique, name: "Leia Organa"), .mock(id: .unique, name: "Leia Rockstar")],
+            memberCount: 2
+        )
+        let mockedSearchController = ChatUserSearchController_Mock.mock()
+        mockedSearchController.users_mock = []
+        composerVC.userSearchController = mockedSearchController
+
+        // When empty, should still return a data source to include all local members.
+        XCTAssertNotNil(composerVC.makeMentionSuggestionsDataSource(for: ""))
+
+        let dataSource = try XCTUnwrap(composerVC.makeMentionSuggestionsDataSource(for: "Leia"))
+        XCTAssertNil(dataSource.memberListController)
+        XCTAssertEqual(dataSource.users, mockedChatChannelController.channel?.lastActiveMembers)
+        XCTAssertEqual(dataSource.users.isEmpty, false)
+        XCTAssertEqual(mockedSearchController.searchCallCount, 0)
+    }
+
     func test_channelWithSlowModeActive_messageIsSent_SlowModeIsOnWithCountdownShown() {
-        // GIVEN
-        let composerVC = ComposerVC()
-        composerVC.cooldownTracker = CooldownTracker_Mock(timer: ScheduledStreamTimer_Mock())
         composerVC.appearance = Appearance.default
         composerVC.content.text = "Test text"
-        composerVC.viewDidLoad()
+        composerVC.content.slowMode(cooldown: 120)
+        composerVC.composerView.inputMessageView.textView.placeholderLabel.isHidden = true
         
-        // WHEN
-        composerVC.cooldownTracker.start(with: 120)
+        AssertSnapshot(composerVC)
+    }
+    
+    func test_channelWithSlowModeActive_messageIsSent_SkipSlowModeIsOnWithCountdownShown() {
+        let channel = ChatChannel.mock(cid: .unique, ownCapabilities: [.skipSlowMode, .sendMessage], cooldownDuration: 10)
+        mockedChatChannelController.channel_mock = channel
+        composerVC.channelController = mockedChatChannelController
+        composerVC.appearance = Appearance.default
+        composerVC.publishMessage(sender: UIButton())
+        composerVC.content.text = "Test text"
+        composerVC.composerView.inputMessageView.textView.placeholderLabel.isHidden = true
         
-        // THEN
+        AssertSnapshot(composerVC, variants: [.defaultLight])
+    }
+    
+    func test_didUpdateMessages_startsCooldown() {
+        let mockedCooldownTracker = CooldownTracker_Mock(timer: ScheduledStreamTimer_Mock())
+        composerVC.cooldownTracker = mockedCooldownTracker
+        
+        composerVC.channelController(ChatChannelController_Mock.mock(), didUpdateMessages: [])
+        
+        XCTAssertEqual(mockedCooldownTracker.startCallCount, 1)
+    }
+
+    func test_publishMessage_whenChannelHasSlowMode_startsCooldown() {
+        let cooldownTracker = makeLoadedComposerWithCooldownTracker(cooldownDuration: 15)
+        composerVC.content.text = "Test text"
+
+        composerVC.publishMessage(sender: UIButton())
+
+        XCTAssertEqual(cooldownTracker.startedCooldowns, [15])
+        XCTAssertTrue(composerVC.content.isSlowModeOn)
+        XCTAssertEqual(composerVC.content.cooldownTime, 15)
+    }
+
+    func test_publishMessage_whenQuotingMessageInSlowMode_startsCooldown() {
+        let cooldownTracker = makeLoadedComposerWithCooldownTracker(cooldownDuration: 15)
+        composerVC.content.quoteMessage(.mock())
+        composerVC.content.text = "Test text"
+
+        composerVC.publishMessage(sender: UIButton())
+
+        XCTAssertEqual(cooldownTracker.startedCooldowns, [15])
+        XCTAssertTrue(composerVC.content.isSlowModeOn)
+    }
+
+    func test_publishMessage_whenUserCanSkipSlowMode_doesNotStartCooldown() {
+        let cooldownTracker = makeLoadedComposerWithCooldownTracker(
+            cooldownDuration: 15,
+            ownCapabilities: [.sendMessage, .skipSlowMode]
+        )
+        composerVC.content.text = "Test text"
+
+        composerVC.publishMessage(sender: UIButton())
+
+        XCTAssertEqual(cooldownTracker.startedCooldowns, [])
+        XCTAssertFalse(composerVC.content.isSlowModeOn)
+    }
+
+    func test_publishMessage_whenEditingMessageInSlowMode_doesNotStartCooldown() {
+        let cooldownTracker = makeLoadedComposerWithCooldownTracker(cooldownDuration: 15)
+        composerVC.content.editMessage(.mock(text: "Message", isSentByCurrentUser: true))
+        composerVC.content.text = "Edited message"
+
+        composerVC.publishMessage(sender: UIButton())
+
+        XCTAssertEqual(cooldownTracker.startedCooldowns, [])
+        XCTAssertFalse(composerVC.content.isSlowModeOn)
+    }
+
+    func test_cooldownChange_whenEditingMessage_doesNotTurnOnSlowMode() {
+        let cooldownTracker = makeLoadedComposerWithCooldownTracker(cooldownDuration: 15)
+        composerVC.content.editMessage(.mock(text: "Message", isSentByCurrentUser: true))
+
+        cooldownTracker.onChange?(10)
+
+        XCTAssertFalse(composerVC.content.isSlowModeOn)
+        XCTAssertEqual(composerVC.content.cooldownTime, 0)
+    }
+
+    func test_viewWillAppear_whenThreadComposerOpensDuringActiveCooldown_resumesRemainingCooldown() throws {
+        let cooldownTracker = makeLoadedComposerWithCooldownTracker(
+            cooldownDuration: 15,
+            lastMessageFromCurrentUser: .mock(createdAt: Date().addingTimeInterval(-5), isSentByCurrentUser: true)
+        )
+        composerVC.content.threadMessage = .mock()
+
+        composerVC.viewWillAppear(false)
+
+        let resumedCooldown = try XCTUnwrap(cooldownTracker.startedCooldowns.last)
+        XCTAssertTrue((9...10).contains(resumedCooldown), "Unexpected cooldown: \(resumedCooldown)")
+        XCTAssertTrue(composerVC.content.isSlowModeOn)
+    }
+
+    func test_viewWillAppear_whenCooldownIsOver_doesNotTurnOnSlowMode() {
+        let cooldownTracker = makeLoadedComposerWithCooldownTracker(
+            cooldownDuration: 15,
+            lastMessageFromCurrentUser: .mock(createdAt: Date().addingTimeInterval(-60), isSentByCurrentUser: true)
+        )
+        composerVC.content.threadMessage = .mock()
+
+        composerVC.viewWillAppear(false)
+
+        XCTAssertEqual(cooldownTracker.startedCooldowns.last, 0)
+        XCTAssertFalse(composerVC.content.isSlowModeOn)
+    }
+
+    func test_editMessage_addsAttachmentsToContent() {
+        // Given
+        var content = ComposerVC.Content.initial()
+        XCTAssertEqual(content.attachments.count, 0)
+
+        // When
+        let messageId = MessageId.unique
+
+        let encoder = JSONEncoder.default
+        let attachments: [AnyChatMessageAttachment] = [
+            MessageAttachmentPayload.dummy(type: .image),
+            MessageAttachmentPayload.dummy(type: .image)
+        ].compactMap {
+            guard let payload = try? encoder.encode($0.payload) else { return nil }
+            return AnyChatMessageAttachment.dummy(type: $0.attachmentType, payload: payload)
+        }
+        let message = ChatMessage.mock(id: messageId, attachments: attachments)
+        content.editMessage(message)
+
+        // Then
+        let contentAttachmentTypes = content.attachments.map(\.type)
+        XCTAssertEqual(content.attachments.count, 2)
+        XCTAssertEqual(contentAttachmentTypes, [.image, .image])
+    }
+
+    func test_canUploadFiles_hasAttachmentButtonShown() {
+        composerVC.appearance = Appearance.default
+        composerVC.content = .initial()
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, ownCapabilities: [.uploadFile, .sendMessage])
+        composerVC.channelController = mock
+        composerVC.updateContent()
+
+        XCTAssertEqual(composerVC.composerView.attachmentButton.isHidden, false)
+    }
+
+    func test_canUploadFiles_hasRecordButtonShown() {
+        composerVC.appearance = Appearance.default
+        composerVC.content = .initial()
+
+        var components = Components.default
+        components.isVoiceRecordingEnabled = true
+        composerVC.components = components
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, ownCapabilities: [.uploadFile, .sendMessage])
+        composerVC.channelController = mock
+        composerVC.updateContent()
+
+        XCTAssertEqual(composerVC.composerView.recordButton.isHidden, false)
+    }
+
+    func test_canNotUploadFiles_hasAttachmentButtonHidden() {
+        composerVC.appearance = Appearance.default
+        composerVC.content = .initial()
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, ownCapabilities: [.sendMessage])
+        composerVC.channelController = mock
+        composerVC.updateContent()
+
+        XCTAssertEqual(composerVC.composerView.attachmentButton.isHidden, true)
+    }
+
+    func test_canNotUploadFiles_hasRecordButtonHidden() {
+        composerVC.appearance = Appearance.default
+        composerVC.content = .initial()
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, ownCapabilities: [.sendMessage])
+        composerVC.channelController = mock
+        composerVC.updateContent()
+
+        XCTAssertEqual(composerVC.composerView.recordButton.isHidden, true)
+    }
+
+    func test_isAttachmentsEnabled_whenChannelIsEmpty_thenReturnsTrue() {
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = nil
+        composerVC.channelController = mock
+        XCTAssertEqual(composerVC.isAttachmentsEnabled, true)
+    }
+
+    func test_canNotSendMessage() {
+        composerVC.appearance = Appearance.default
+        composerVC.content = .initial()
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, ownCapabilities: [.uploadFile])
+        composerVC.channelController = mock
+
         AssertSnapshot(composerVC)
     }
 
-    func test_didUpdateMessages_startsCooldown() {
-        // GIVEN
-        let mockedCooldownTracker = CooldownTracker_Mock(timer: ScheduledStreamTimer_Mock())
-        let composerVC = ComposerVC()
-        composerVC.cooldownTracker = mockedCooldownTracker
+    func test_isSendMessageEnabled_whenChannelIsEmpty_thenReturnsTrue() {
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = nil
+        composerVC.channelController = mock
+        XCTAssertEqual(composerVC.isSendMessageEnabled, true)
+    }
 
-        // WHEN
-        composerVC.channelController(ChatChannelController_Mock.mock(), didUpdateMessages: [])
+    func test_updateContent_whenSendMessageEnabledAfterBeingDisabled_thenComposerViewIsInteractable() {
+        let mock = ChatChannelController_Mock.mock()
+        composerVC.components.isVoiceRecordingEnabled = true
 
-        // THEN
-        XCTAssertEqual(mockedCooldownTracker.startCallCount, 1)
+        // When disabled
+        mock.channel_mock = .mock(cid: .unique, ownCapabilities: [.uploadFile])
+        composerVC.channelController = mock
+        composerVC.updateContent()
+        XCTAssertEqual(composerVC.isSendMessageEnabled, false)
+        XCTAssertEqual(composerVC.composerView.inputMessageView.isUserInteractionEnabled, false)
+        XCTAssertEqual(composerVC.composerView.recordButton.isHidden, true)
+        XCTAssertEqual(composerVC.composerView.attachmentButton.isHidden, true)
+        XCTAssertEqual(composerVC.composerView.commandsButton.isHidden, true)
+
+        // After enabling it
+        mock.channel_mock = .mock(cid: .unique, ownCapabilities: [.uploadFile, .sendMessage])
+        composerVC.channelController = mock
+        composerVC.updateContent()
+        XCTAssertEqual(composerVC.isSendMessageEnabled, true)
+        XCTAssertEqual(composerVC.composerView.inputMessageView.isUserInteractionEnabled, true)
+        XCTAssertEqual(composerVC.composerView.recordButton.isHidden, false)
+        XCTAssertEqual(composerVC.composerView.attachmentButton.isHidden, false)
+        XCTAssertEqual(composerVC.composerView.commandsButton.isHidden, false)
+    }
+
+    func test_quotedTranslatedMessage() {
+        composerVC.appearance = Appearance.default
+        composerVC.content = .initial()
+        composerVC.content.text = "Reply"
+        composerVC.content.quoteMessage(.mock(id: .unique, translations: [.portuguese: "Olá"]))
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, membership: .mock(id: .unique, language: .portuguese))
+        composerVC.channelController = mock
+
+        AssertSnapshot(composerVC)
+    }
+
+    func test_canNotSendLinks() {
+        composerVC.appearance = Appearance.default
+        composerVC.content = .initial()
+        composerVC.content.text = "Some link: https://github.com/GetStream/stream-chat-swift"
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, ownCapabilities: [.uploadFile, .sendMessage])
+        composerVC.channelController = mock
+        composerVC.publishMessage(sender: composerVC.composerView.sendButton)
+
+        XCTAssertEqual(mock.createNewMessageCallCount, 0)
+
+        composerVC.content.text = "Without links"
+        composerVC.publishMessage(sender: composerVC.composerView.sendButton)
+
+        XCTAssertEqual(mock.createNewMessageCallCount, 1)
+        XCTAssertEqual(composerVC.canSendLinks, false)
+    }
+
+    func test_canSendLinks() {
+        composerVC.appearance = Appearance.default
+        composerVC.content = .initial()
+        composerVC.content.text = "Some link: https://github.com/GetStream/stream-chat-swift"
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, ownCapabilities: [.uploadFile, .sendMessage, .sendLinks])
+        composerVC.channelController = mock
+        composerVC.publishMessage(sender: composerVC.composerView.sendButton)
+
+        XCTAssertEqual(mock.createNewMessageCallCount, 1)
+        XCTAssertEqual(composerVC.canSendLinks, true)
+    }
+
+    func test_canSendLinks_whenChannelIsEmpty() {
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = nil
+        composerVC.channelController = mock
+        XCTAssertEqual(composerVC.canSendLinks, true)
+    }
+
+    // MARK: - Link preview
+
+    func test_linkPreview_whenComposerLinkPreviewEnabled_thenHighlightsLinks() {
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.components.isComposerLinkPreviewEnabled = true
+
+        AssertSnapshot(composerVC, variants: [.defaultLight])
+    }
+
+    func test_linkPreview_whenComposerLinkPreviewDisabled_thenNoHighlighting() {
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.components.isComposerLinkPreviewEnabled = false
+
+        AssertSnapshot(composerVC, variants: [.defaultLight])
+    }
+
+    func test_linkPreview_whenLinksChange_thenOnLinksChangedCalled() {
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+
+        var links: [TextLink] = []
+        let exp = expectation(description: "onLinksChanged called")
+        composerVC.composerView.inputMessageView.textView.onLinksChanged = { newLinks in
+            links = newLinks
+            exp.fulfill()
+        }
+
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.youtube.com
+        """
+        composerVC.updateContent()
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertEqual(links.map(\.originalText), [
+            "https://github.com/GetStream/stream-chat-swift",
+            "www.youtube.com"
+        ])
+    }
+
+    func test_linkPreview_whenLinksDoNotChange_thenOnLinksChangedNotCalled() {
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+
+        let exp = expectation(description: "onLinksChanged not called")
+        exp.isInverted = true
+        composerVC.composerView.inputMessageView.textView.onLinksChanged = { _ in
+            exp.fulfill()
+        }
+
+        composerVC.content.text = """
+        Same: https://github.com/GetStream/stream-chat-swift
+        Same: www.google.com
+        """
+        composerVC.updateContent()
+
+        waitForExpectations(timeout: defaultTimeout)
+    }
+
+    func test_showLinkPreview() throws {
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+        composerVC.showLinkPreview(for: .init(
+            originalURL: .init(string: "https://github.com/GetStream/stream-chat-swift")!,
+            title: "GitHub - GetStream/stream-chat-swift",
+            text: "iOS Chat SDK in Swift",
+            previewURL: .localYodaImage
+        ))
+
+        AssertSnapshot(
+            composerVC.view,
+            variants: [.smallDark, .defaultLight, .rightToLeftLayout],
+            size: .init(width: 400, height: 140)
+        )
+        XCTAssertEqual(composerVC.content.skipEnrichUrl, false)
+    }
+
+    func test_showLinkPreview_whenNoImage() {
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+        composerVC.showLinkPreview(for: .init(
+            originalURL: .init(string: "https://github.com/GetStream/stream-chat-swift")!,
+            title: "GitHub - GetStream/stream-chat-swift",
+            text: "iOS Chat SDK in Swift"
+        ))
+
+        AssertSnapshot(composerVC.view, variants: [.defaultLight], size: .init(width: 400, height: 140))
+    }
+
+    func test_showLinkPreview_whenNoDescription() {
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+        composerVC.showLinkPreview(for: .init(
+            originalURL: .init(string: "https://github.com/GetStream/stream-chat-swift")!,
+            title: "GitHub - GetStream/stream-chat-swift"
+        ))
+
+        AssertSnapshot(composerVC.view, variants: [.defaultLight], size: .init(width: 400, height: 140))
+    }
+
+    func test_showLinkPreview_whenNoTitle() {
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+        composerVC.showLinkPreview(for: .init(
+            originalURL: .init(string: "https://github.com/GetStream/stream-chat-swift")!,
+            text: "iOS Chat SDK in Swift"
+        ))
+
+        AssertSnapshot(composerVC.view, variants: [.defaultLight], size: .init(width: 400, height: 140))
+    }
+
+    func test_showLinkPreview_whenNoMetadata() {
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+        composerVC.showLinkPreview(for: .init(
+            originalURL: .init(string: "https://github.com/GetStream/stream-chat-swift")!
+        ))
+
+        AssertSnapshot(composerVC.view, variants: [.defaultLight], size: .init(width: 400, height: 140))
+    }
+
+    func test_dismissLinkPreview() {
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: true))
+        composerVC.channelController = mock
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+        composerVC.showLinkPreview(for: .init(
+            originalURL: .init(string: "https://github.com/GetStream/stream-chat-swift")!
+        ))
+        composerVC.dismissLinkPreview()
+
+        AssertSnapshot(composerVC, variants: [.defaultLight])
+        XCTAssertEqual(composerVC.content.skipEnrichUrl, true)
+    }
+
+    func test_didChangeLinks_whenEmpty_thenDismissLinkPreview() {
+        let composerVC = SpyComposerVC()
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: true))
+        composerVC.channelController = mock
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+
+        composerVC.didChangeLinks([])
+
+        XCTAssertEqual(composerVC.dismissLinkPreviewCallCount, 1)
+    }
+
+    func test_didChangeLinks_whenEnrichSuccess_thenShowPreviewForFirstLink() {
+        let composerVC = SpyComposerVC()
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: true))
+        let mockAPIClient = mock.client.mockAPIClient
+        composerVC.channelController = mock
+        composerVC.enrichUrlDebouncer = .init(0, queue: .main)
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+
+        let url = URL(string: "https://github.com/GetStream/stream-chat-swift")!
+        mockAPIClient.test_mockResponseResult(.success(GetOGResponse.dummy(
+            ogScrapeUrl: url.absoluteString
+        )))
+
+        composerVC.didChangeLinks([
+            .init(url: url, originalText: "https://github.com/GetStream/stream-chat-swift", range: .init(location: 0, length: 0)),
+            .init(url: URL(string: "http://www.google.com")!, originalText: "www.google.com", range: .init(location: 0, length: 0))
+        ])
+
+        AssertAsync {
+            Assert.willBeEqual(composerVC.showLinkPreviewCallCount, 1)
+            Assert.willBeEqual(composerVC.showLinkPreviewCalledWith?.url, url)
+        }
+    }
+
+    func test_didChangeLinks_whenEnrichSuccess_whenUrlDoesNotEqualToCurrentInput_thenDoNotCallShowPreview() {
+        let composerVC = SpyComposerVC()
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: true))
+        let mockAPIClient = mock.client.mockAPIClient
+        composerVC.channelController = mock
+        composerVC.enrichUrlDebouncer = .init(0, queue: .main)
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swiftui
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+
+        let url = URL(string: "https://github.com/GetStream/stream-chat-swift")!
+        mockAPIClient.test_mockResponseResult(.success(GetOGResponse.dummy(
+            ogScrapeUrl: url.absoluteString
+        )))
+
+        composerVC.didChangeLinks([
+            .init(url: url, originalText: "https://github.com/GetStream/stream-chat-swift", range: .init(location: 0, length: 0)),
+            .init(url: URL(string: "http://www.google.com")!, originalText: "www.google.com", range: .init(location: 0, length: 0))
+        ])
+
+        AssertAsync {
+            Assert.willBeEqual(composerVC.showLinkPreviewCallCount, 0)
+            Assert.willBeEqual(composerVC.dismissLinkPreviewCallCount, 0)
+        }
+    }
+
+    func test_didChangeLinks_whenEnrichFails_thenDismissLinkPreview() {
+        let composerVC = SpyComposerVC()
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: true))
+        let mockAPIClient = mock.client.mockAPIClient
+        composerVC.channelController = mock
+        composerVC.enrichUrlDebouncer = .init(0, queue: .main)
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+
+        let url = URL(string: "https://github.com/GetStream/stream-chat-swift")!
+        mockAPIClient.test_mockResponseResult(Result<GetOGResponse, Error>.failure(StreamChat.ClientError()))
+
+        composerVC.didChangeLinks([
+            .init(url: url, originalText: "https://github.com/GetStream/stream-chat-swift", range: .init(location: 0, length: 0)),
+            .init(url: URL(string: "http://www.google.com")!, originalText: "www.google.com", range: .init(location: 0, length: 0))
+        ])
+
+        AssertAsync {
+            Assert.willBeEqual(composerVC.dismissLinkPreviewCallCount, 1)
+        }
+    }
+
+    func test_didChangeLinks_whenEnrichFails_whenUrlDoesNotEqualToCurrentInput_thenDoNotCallDismissPreview() {
+        let composerVC = SpyComposerVC()
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: true))
+        let mockAPIClient = mock.client.mockAPIClient
+        composerVC.channelController = mock
+        composerVC.enrichUrlDebouncer = .init(0, queue: .main)
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swiftui
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+
+        let url = URL(string: "https://github.com/GetStream/stream-chat-swift")!
+        mockAPIClient.test_mockResponseResult(Result<GetOGResponse, Error>.failure(StreamChat.ClientError()))
+
+        composerVC.didChangeLinks([
+            .init(url: url, originalText: "https://github.com/GetStream/stream-chat-swift", range: .init(location: 0, length: 0)),
+            .init(url: URL(string: "http://www.google.com")!, originalText: "www.google.com", range: .init(location: 0, length: 0))
+        ])
+
+        AssertAsync {
+            Assert.willBeEqual(composerVC.showLinkPreviewCallCount, 0)
+            Assert.willBeEqual(composerVC.dismissLinkPreviewCallCount, 0)
+        }
+    }
+
+    func test_didChangeLinks_whenEnrichNotEnabled_thenDoNotShowLinkPreview() {
+        let composerVC = SpyComposerVC()
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: false))
+        let mockAPIClient = mock.client.mockAPIClient
+        composerVC.channelController = mock
+        composerVC.enrichUrlDebouncer = .init(0, queue: .main)
+        composerVC.content = .initial()
+        composerVC.content.text = """
+        Some link: https://github.com/GetStream/stream-chat-swift
+        Another one: www.google.com
+        """
+        composerVC.updateContent()
+
+        let url = URL(string: "https://github.com/GetStream/stream-chat-swift")!
+        mockAPIClient.test_mockResponseResult(Result<GetOGResponse, Error>.failure(StreamChat.ClientError()))
+
+        composerVC.didChangeLinks([
+            .init(url: url, originalText: "https://github.com/GetStream/stream-chat-swift", range: .init(location: 0, length: 0)),
+            .init(url: URL(string: "http://www.google.com")!, originalText: "www.google.com", range: .init(location: 0, length: 0))
+        ])
+
+        AssertAsync {
+            Assert.willBeEqual(composerVC.dismissLinkPreviewCallCount, 0)
+            Assert.willBeEqual(composerVC.showLinkPreviewCallCount, 0)
+            Assert.willBeEqual(mockAPIClient.request_allRecordedCalls.count, 0)
+        }
+    }
+
+    func test_didChangeLinks_whenMultipleAttachmentTypes_thenDismissLinkPreview() {
+        let composerVC = SpyComposerVC()
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: true))
+        composerVC.channelController = mock
+        composerVC.content = .initial()
+        composerVC.content.attachments = [.mockAudio, .mockFile]
+
+        composerVC.didChangeLinks([.init(url: .localYodaImage, originalText: "fake", range: .init(location: 0, length: 10))])
+
+        XCTAssertEqual(composerVC.dismissLinkPreviewCallCount, 1)
+    }
+
+    func test_updateContent_whenMultipleAttachmentTypes_whenSkipEnrichUrlIsFalse_thenDismissLinkPreview() {
+        let composerVC = SpyComposerVC()
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: true))
+        composerVC.channelController = mock
+        composerVC.content = .initial()
+        composerVC.content.attachments = [.mockAudio, .mockFile]
+        composerVC.content.skipEnrichUrl = false
+
+        composerVC.updateContent()
+
+        XCTAssertEqual(composerVC.dismissLinkPreviewCallCount, 1)
+    }
+
+    func test_updateContent_whenMultipleAttachmentTypes_whenSkipEnrichUrlIsTrue_thenDoNotCallDismissLinkPreview() {
+        let composerVC = SpyComposerVC()
+        composerVC.components.isComposerLinkPreviewEnabled = true
+        let mock = ChatChannelController_Mock.mock(client: .mock())
+        mock.channel_mock = .mockNonDMChannel(config: .mock(urlEnrichmentEnabled: true))
+        composerVC.channelController = mock
+        composerVC.content = .initial()
+        composerVC.content.attachments = [.mockAudio, .mockFile]
+        composerVC.content.skipEnrichUrl = true
+
+        composerVC.updateContent()
+
+        XCTAssertEqual(composerVC.dismissLinkPreviewCallCount, 0)
+    }
+
+    // MARK: - mediaPickerVC
+
+    @available(iOS 14.0, *)
+    func test_mediaPickerVC_whenIOS14AndAbove_thenUsesSystemPhotosPicker() {
+        XCTAssertTrue(composerVC.mediaPickerVC is PHPickerViewController)
+    }
+
+    @available(iOS 14.0, *)
+    func test_mediaPickerVC_whenIOS14AndAbove_thenSelectionIsLimitedToTheMaxAttachmentCount() throws {
+        let picker = try XCTUnwrap(composerVC.mediaPickerVC as? PHPickerViewController)
+        XCTAssertEqual(picker.configuration.selectionLimit, composerVC.maxNumberOfAttachments)
+        XCTAssertGreaterThan(composerVC.maxNumberOfAttachments, 1)
+    }
+
+    @available(iOS 14.0, *)
+    func test_mediaPickerVC_whenAttachmentsAreAlreadyAdded_thenSelectionIsLimitedToTheRemainingSlots() throws {
+        try composerVC.addAttachmentToContent(from: makeTemporaryImageFile(width: 10, height: 10), type: .image)
+
+        let picker = try XCTUnwrap(composerVC.mediaPickerVC as? PHPickerViewController)
+        XCTAssertEqual(picker.configuration.selectionLimit, composerVC.maxNumberOfAttachments - 1)
+    }
+
+    @available(iOS 14.0, *)
+    func test_mediaPickerVC_whenIOS14AndAbove_thenComposerIsSetAsDelegate() throws {
+        let picker = try XCTUnwrap(composerVC.mediaPickerVC as? PHPickerViewController)
+        XCTAssertTrue(picker.delegate === composerVC)
+    }
+
+    @available(iOS 14.0, *)
+    func test_mediaPickerVC_whenIOS14AndAbove_thenANewPickerIsCreatedForEachPresentation() {
+        XCTAssertFalse(composerVC.mediaPickerVC === composerVC.mediaPickerVC)
+    }
+
+    @available(iOS 14.0, *)
+    func test_mediaPickerVC_usesMediaPickerConfiguration() throws {
+        let picker = try XCTUnwrap(composerVC.mediaPickerVC as? PHPickerViewController)
+        XCTAssertEqual(picker.configuration.selectionLimit, composerVC.mediaPickerConfiguration.selectionLimit)
+        XCTAssertEqual(picker.configuration.preferredAssetRepresentationMode, .current)
+    }
+
+    @available(iOS 14.0, *)
+    func test_mediaPickerVC_whenLegacyPhotosPickerIsEnabled_thenUsesTheLegacyPicker() {
+        composerVC.components.isLegacyPhotosPickerEnabled = true
+
+        XCTAssertTrue(composerVC.mediaPickerVC is UIImagePickerController)
+        XCTAssertTrue(composerVC.mediaPickerVC === composerVC.mediaPickerVC)
+    }
+
+    @available(iOS 14.0, *)
+    func test_mediaPickerVC_whenConfigurationIsOverridden_thenPickerUsesTheCustomConfiguration() throws {
+        let customComposerVC = ComposerVC_CustomPickerConfig()
+        customComposerVC.channelController = mockedChatChannelController
+
+        let picker = try XCTUnwrap(customComposerVC.mediaPickerVC as? PHPickerViewController)
+        XCTAssertEqual(picker.configuration.selectionLimit, 3)
+        XCTAssertTrue(picker.delegate === customComposerVC)
+    }
+
+    // MARK: - imagePickerController(_:didFinishPickingMediaWithInfo:)
+
+    func test_didFinishPickingMedia_whenImageURLWithoutOriginalImage_thenResolutionIsReadFromTheFile() throws {
+        let imageURL = try makeTemporaryImageFile(width: 40, height: 20)
+
+        composerVC.imagePickerController(UIImagePickerController(), didFinishPickingMediaWithInfo: [.imageURL: imageURL])
+
+        AssertAsync {
+            Assert.willBeEqual(self.composerVC.content.attachments.count, 1)
+            Assert.willBeEqual(self.composerVC.content.attachments.first?.type, .image)
+            Assert.willBeEqual(self.imagePayload?.originalWidth, 40)
+            Assert.willBeEqual(self.imagePayload?.originalHeight, 20)
+        }
+    }
+
+    func test_didFinishPickingMedia_whenOriginalImageIsProvided_thenResolutionComesFromTheImage() throws {
+        let imageURL = try makeTemporaryImageFile(width: 40, height: 20)
+        let originalImage = try makeImage(width: 10, height: 30)
+
+        composerVC.imagePickerController(
+            UIImagePickerController(),
+            didFinishPickingMediaWithInfo: [.imageURL: imageURL, .originalImage: originalImage]
+        )
+
+        AssertAsync {
+            Assert.willBeEqual(self.composerVC.content.attachments.count, 1)
+            Assert.willBeEqual(self.imagePayload?.originalWidth, 10)
+            Assert.willBeEqual(self.imagePayload?.originalHeight, 30)
+        }
+    }
+
+    func test_didFinishPickingMedia_whenVideoURL_thenVideoAttachmentIsAdded() throws {
+        let videoURL = try makeTemporaryFile(named: "\(UUID().uuidString).mov")
+
+        composerVC.imagePickerController(UIImagePickerController(), didFinishPickingMediaWithInfo: [.mediaURL: videoURL])
+
+        AssertAsync {
+            Assert.willBeEqual(self.composerVC.content.attachments.count, 1)
+            Assert.willBeEqual(self.composerVC.content.attachments.first?.type, .video)
+        }
+    }
+
+    func test_didFinishPickingMedia_whenNothingIsPicked_thenNoAttachmentIsAdded() {
+        composerVC.imagePickerController(UIImagePickerController(), didFinishPickingMediaWithInfo: [:])
+
+        AssertAsync.staysEqual(self.composerVC.content.attachments.count, 0)
+    }
+
+    // MARK: - addSelectedMedia
+
+    func test_addSelectedMedia_whenVideoFitsTheUploadLimit_thenTheVideoIsStillCompressed() async throws {
+        let videoURL = try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096)
+        let compressedURL = try makeTemporaryFile(named: "\(UUID().uuidString).mp4", byteCount: 2048)
+        let compressor = VideoCompressor_Mock()
+        compressor.compressedURL = compressedURL
+        composerVC.components.videoCompressor = compressor
+
+        await composerVC.addSelectedMedia(from: [try makeItemProvider(for: videoURL)])
+
+        XCTAssertEqual(compressor.compressVideoCallCount, 1)
+        XCTAssertEqual(composerVC.content.attachments.count, 1)
+        XCTAssertEqual(composerVC.content.attachments.first?.type, .video)
+        XCTAssertEqual(composerVC.content.attachments.first?.localFileURL, compressedURL)
+    }
+
+    func test_addSelectedMedia_whenVideoExceedsTheLimit_thenItIsCompressed() async throws {
+        let videoURL = try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096)
+        let compressedURL = try makeTemporaryFile(named: "\(UUID().uuidString).mp4", byteCount: 512)
+        let compressor = VideoCompressor_Mock()
+        compressor.compressedURL = compressedURL
+        composerVC.components.videoCompressor = compressor
+        setUploadSizeLimit(1000)
+
+        await composerVC.addSelectedMedia(from: [try makeItemProvider(for: videoURL)])
+
+        XCTAssertEqual(compressor.compressVideoCallCount, 1)
+        XCTAssertEqual(composerVC.content.attachments.first?.localFileURL, compressedURL)
+    }
+
+    func test_addSelectedMedia_whenTheCompressedVideoIsEstimatedToExceedTheLimit_thenCompressionIsSkipped() async throws {
+        let videoURL = try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096)
+        let compressor = VideoCompressor_Mock()
+        compressor.estimatedFileLengthResult = 2_000_000
+        composerVC.components.videoCompressor = compressor
+        setUploadSizeLimit(1000)
+
+        await composerVC.addSelectedMedia(from: [try makeItemProvider(for: videoURL)])
+
+        XCTAssertEqual(compressor.compressVideoCallCount, 0)
+        XCTAssertTrue(composerVC.content.attachments.isEmpty)
+        XCTAssertTrue(composerVC.pendingMediaItems.isEmpty)
+    }
+
+    func test_addSelectedMedia_whenVideoIsSelected_thenTheAttachmentIsVisibleAndSendIsDisabledWhileCompressing() async throws {
+        let videoURL = try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096)
+        let compressedURL = try makeTemporaryFile(named: "\(UUID().uuidString).mp4", byteCount: 512)
+        let compressor = VideoCompressor_Mock()
+        compressor.compressedURL = compressedURL
+        composerVC.components.videoCompressor = compressor
+        setUploadSizeLimit(1000)
+        _ = composerVC.view
+        var pendingWhileCompressing = 0
+        var sendEnabledWhileCompressing = true
+        compressor.onCompress = { [weak composerVC] in
+            pendingWhileCompressing = composerVC?.pendingMediaItems.count ?? 0
+            sendEnabledWhileCompressing = composerVC?.composerView.sendButton.isEnabled ?? true
+        }
+
+        await composerVC.addSelectedMedia(from: [try makeItemProvider(for: videoURL)])
+
+        XCTAssertEqual(pendingWhileCompressing, 1)
+        XCTAssertFalse(sendEnabledWhileCompressing)
+        XCTAssertTrue(composerVC.pendingMediaItems.isEmpty)
+        XCTAssertTrue(composerVC.composerView.sendButton.isEnabled)
+    }
+
+    func test_enqueuePendingMedia_thenPlaceholderPreviewIsShownImmediately() throws {
+        _ = composerVC.view
+        let itemProvider = try makeItemProvider(for: try makeTemporaryFile(named: "\(UUID().uuidString).mov"))
+
+        composerVC.enqueuePendingMedia(from: [itemProvider])
+
+        XCTAssertEqual(composerVC.pendingMediaItems.count, 1)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.type, .video)
+        XCTAssertTrue(composerVC.hasProcessingAttachments)
+        XCTAssertFalse(composerVC.composerView.inputMessageView.attachmentsViewContainer.isHidden)
+        XCTAssertFalse(composerVC.composerView.sendButton.isEnabled)
+        XCTAssertTrue(composerVC.attachmentsVC.content.contains { $0 is ProcessingAttachmentPreview })
+    }
+
+    func test_enqueuePendingMedia_whenImageHasNoPreviewYet_thenTheGreyPlaceholderIsNotShown() throws {
+        _ = composerVC.view
+        let imageURL = try makeTemporaryImageFile(width: 40, height: 20)
+
+        composerVC.enqueuePendingMedia(from: [try makeItemProvider(for: imageURL)])
+
+        XCTAssertEqual(composerVC.pendingMediaItems.count, 1)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.type, .image)
+        XCTAssertTrue(composerVC.hasProcessingAttachments)
+        XCTAssertFalse(composerVC.composerView.sendButton.isEnabled)
+        XCTAssertFalse(composerVC.attachmentsVC.content.contains { $0 is ProcessingAttachmentPreview })
+    }
+
+    func test_enqueuePendingMedia_whenMediaIsAlreadyPending_thenItIsKeptAndTheNewItemsComeAfter() throws {
+        _ = composerVC.view
+        let firstIDs = composerVC.enqueuePendingMedia(from: [
+            try makeItemProvider(for: try makeTemporaryFile(named: "\(UUID().uuidString).mov"))
+        ])
+
+        let secondIDs = composerVC.enqueuePendingMedia(from: [
+            try makeItemProvider(for: try makeTemporaryFile(named: "\(UUID().uuidString).mov"))
+        ])
+
+        XCTAssertEqual(composerVC.pendingMediaItems.map(\.id), firstIDs + secondIDs)
+        XCTAssertEqual(composerVC.pendingMediaItems.map(\.order), [0, 1])
+    }
+
+    // MARK: - remainingNumberOfAttachments
+
+    func test_remainingNumberOfAttachments_thenMediaBeingProcessedAlreadyTakesASlot() throws {
+        _ = composerVC.view
+        try composerVC.addAttachmentToContent(from: makeTemporaryImageFile(width: 10, height: 10), type: .image)
+        let expectedRemaining = composerVC.maxNumberOfAttachments - 2
+
+        composerVC.enqueuePendingMedia(from: [
+            try makeItemProvider(for: try makeTemporaryFile(named: "\(UUID().uuidString).mov"))
+        ])
+
+        XCTAssertGreaterThan(expectedRemaining, 0)
+        XCTAssertEqual(composerVC.remainingNumberOfAttachments, expectedRemaining)
+    }
+
+    @available(iOS 14.0, *)
+    func test_mediaPickerVC_whenMediaIsStillBeingProcessed_thenSelectionIsLimitedToTheRemainingSlots() throws {
+        _ = composerVC.view
+        composerVC.enqueuePendingMedia(from: [
+            try makeItemProvider(for: try makeTemporaryFile(named: "\(UUID().uuidString).mov"))
+        ])
+
+        let picker = try XCTUnwrap(composerVC.mediaPickerVC as? PHPickerViewController)
+        XCTAssertEqual(picker.configuration.selectionLimit, composerVC.maxNumberOfAttachments - 1)
+    }
+
+    func test_loadPendingPreview_whenItemProviderHasAnImage_thenThePlaceholderShowsIt() async throws {
+        _ = composerVC.view
+        let imageURL = try makeTemporaryImageFile(width: 40, height: 20)
+
+        composerVC.enqueuePendingMedia(from: [try makeItemProvider(for: imageURL)])
+        let id = try XCTUnwrap(composerVC.pendingMediaItems.first?.id)
+        await composerVC.loadPendingPreview(for: id)
+
+        XCTAssertNotNil(composerVC.pendingMediaItems.first?.previewImage)
+        let preview = try XCTUnwrap(composerVC.attachmentsVC.content.first as? ProcessingAttachmentPreview)
+        XCTAssertNotNil(preview.previewImage)
+    }
+
+    func test_addSelectedMedia_whenImageIsSelected_thenTheImageIsNotCompressed() async throws {
+        let imageURL = try makeTemporaryImageFile(width: 40, height: 20)
+        let compressor = VideoCompressor_Mock()
+        composerVC.components.videoCompressor = compressor
+
+        await composerVC.addSelectedMedia(from: [try makeItemProvider(for: imageURL)])
+
+        XCTAssertEqual(compressor.compressVideoCallCount, 0)
+        XCTAssertEqual(composerVC.content.attachments.count, 1)
+        XCTAssertEqual(composerVC.content.attachments.first?.type, .image)
+        XCTAssertEqual(imagePayload?.originalWidth, 40)
+        XCTAssertEqual(imagePayload?.originalHeight, 20)
+    }
+
+    func test_addSelectedMedia_whenCompressionFails_thenTheOversizedOriginalVideoIsRejected() async throws {
+        let videoURL = try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096)
+        let compressor = VideoCompressor_Mock()
+        compressor.error = TestError()
+        composerVC.components.videoCompressor = compressor
+        setUploadSizeLimit(1000)
+
+        await composerVC.addSelectedMedia(from: [try makeItemProvider(for: videoURL)])
+
+        XCTAssertEqual(compressor.compressVideoCallCount, 1)
+        XCTAssertTrue(composerVC.content.attachments.isEmpty)
+        XCTAssertTrue(composerVC.pendingMediaItems.isEmpty)
+    }
+
+    func test_addSelectedMedia_whenCompressionIsCancelled_thenNoAttachmentIsAdded() async throws {
+        let videoURL = try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096)
+        let compressor = VideoCompressor_Mock()
+        compressor.error = CancellationError()
+        composerVC.components.videoCompressor = compressor
+        setUploadSizeLimit(1000)
+
+        await composerVC.addSelectedMedia(from: [try makeItemProvider(for: videoURL)])
+
+        XCTAssertEqual(composerVC.content.attachments.count, 0)
+    }
+
+    func test_addSelectedMedia_whenTheCompressedVideoIsBigger_thenTheTranscodedVideoIsKept() async throws {
+        let videoURL = try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096)
+        let compressedURL = try makeTemporaryFile(named: "\(UUID().uuidString).mp4", byteCount: 2048)
+        let compressor = VideoCompressor_Mock()
+        compressor.compressedURL = compressedURL
+        composerVC.components.videoCompressor = compressor
+
+        await composerVC.addSelectedMedia(from: [try makeItemProvider(for: videoURL)])
+
+        XCTAssertEqual(compressor.compressVideoCallCount, 1)
+        XCTAssertEqual(composerVC.content.attachments.first?.localFileURL, compressedURL)
+    }
+
+    func test_addSelectedMedia_whenTheCompressedVideoStillExceedsTheLimit_thenTheAttachmentIsRejected() async throws {
+        let videoURL = try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096)
+        let compressedURL = try makeTemporaryFile(named: "\(UUID().uuidString).mp4", byteCount: 2000)
+        let compressor = VideoCompressor_Mock()
+        compressor.compressedURL = compressedURL
+        composerVC.components.videoCompressor = compressor
+        setUploadSizeLimit(1000)
+
+        await composerVC.addSelectedMedia(from: [try makeItemProvider(for: videoURL)])
+
+        XCTAssertEqual(compressor.compressVideoCallCount, 1)
+        XCTAssertTrue(composerVC.content.attachments.isEmpty)
+        XCTAssertTrue(composerVC.pendingMediaItems.isEmpty)
+    }
+
+    func test_addSelectedMedia_whenMultipleVideosAreSelected_thenAllPlaceholdersAreVisibleBeforeCompression() async throws {
+        let compressor = VideoCompressor_Mock()
+        composerVC.components.videoCompressor = compressor
+        setUploadSizeLimit(1000)
+        // A compressor returns a new file for every video, so each one gets its own URL.
+        var compressedURLs = try (0..<2).map { _ in
+            try makeTemporaryFile(named: "\(UUID().uuidString).mp4", byteCount: 512)
+        }
+        var pendingWhenFirstCompressionStarted = 0
+        compressor.onCompress = { [weak composerVC] in
+            if pendingWhenFirstCompressionStarted == 0 {
+                pendingWhenFirstCompressionStarted = composerVC?.pendingMediaItems.count ?? 0
+            }
+            compressor.compressedURL = compressedURLs.isEmpty ? nil : compressedURLs.removeFirst()
+        }
+        let itemProviders = try (0..<2).map { _ in
+            try makeItemProvider(for: try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096))
+        }
+
+        await composerVC.addSelectedMedia(from: itemProviders)
+
+        XCTAssertEqual(pendingWhenFirstCompressionStarted, 2)
+        XCTAssertEqual(compressor.compressVideoCallCount, 2)
+        XCTAssertEqual(composerVC.content.attachments.count, 2)
+        XCTAssertTrue(composerVC.pendingMediaItems.isEmpty)
+    }
+
+    func test_attachmentIndex_whenEarlierItemsAreStillProcessing_thenTheFinishedItemLeavesSpaceForThem() {
+        XCTAssertEqual(ComposerVC.attachmentIndex(batchStartCount: 0, order: 2, unfinishedItemsBefore: 2), 0)
+        XCTAssertEqual(ComposerVC.attachmentIndex(batchStartCount: 0, order: 1, unfinishedItemsBefore: 1), 0)
+        XCTAssertEqual(ComposerVC.attachmentIndex(batchStartCount: 0, order: 0, unfinishedItemsBefore: 0), 0)
+        XCTAssertEqual(ComposerVC.attachmentIndex(batchStartCount: 3, order: 1, unfinishedItemsBefore: 0), 4)
+    }
+
+    func test_addSelectedMedia_whenMultipleImagesAreSelected_thenTheyAreAddedInPickerOrder() async throws {
+        let first = try makeTemporaryImageFile(width: 40, height: 20)
+        let second = try makeTemporaryImageFile(width: 10, height: 30)
+
+        await composerVC.addSelectedMedia(from: [
+            try makeItemProvider(for: first),
+            try makeItemProvider(for: second)
+        ])
+
+        let widths = composerVC.content.attachments.compactMap { ($0.payload as? ImageAttachmentPayload)?.originalWidth }
+        XCTAssertEqual(widths, [40, 10])
+        XCTAssertTrue(composerVC.pendingMediaItems.isEmpty)
+    }
+
+    func test_addSelectedMedia_whenImageAndVideoAreSelected_thenTheImageIsAddedWhileTheVideoCompresses() async throws {
+        let compressor = VideoCompressor_Mock()
+        let compressedURL = try makeTemporaryFile(named: "\(UUID().uuidString).mp4", byteCount: 512)
+        compressor.compressedURL = compressedURL
+        composerVC.components.videoCompressor = compressor
+        setUploadSizeLimit(1000)
+
+        var typesWhileCompressing: [AttachmentType] = []
+        compressor.compressionGate = { [weak composerVC] in
+            for _ in 0..<50 {
+                if composerVC?.content.attachments.contains(where: { $0.type == .image }) == true {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            typesWhileCompressing = composerVC?.content.attachments.map(\.type) ?? []
+        }
+
+        await composerVC.addSelectedMedia(from: [
+            try makeItemProvider(for: try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096)),
+            try makeItemProvider(for: try makeTemporaryImageFile(width: 40, height: 20))
+        ])
+
+        XCTAssertEqual(typesWhileCompressing, [.image])
+        XCTAssertEqual(composerVC.content.attachments.map(\.type), [.video, .image])
+        XCTAssertEqual(composerVC.content.attachments.first?.localFileURL, compressedURL)
+        XCTAssertEqual((composerVC.content.attachments.last?.payload as? ImageAttachmentPayload)?.originalWidth, 40)
+        XCTAssertTrue(composerVC.pendingMediaItems.isEmpty)
+    }
+
+    func test_addSelectedMedia_whenImageThenVideoAreSelected_thenPickerOrderIsKept() async throws {
+        let compressor = VideoCompressor_Mock()
+        compressor.compressedURL = try makeTemporaryFile(named: "\(UUID().uuidString).mp4", byteCount: 512)
+        composerVC.components.videoCompressor = compressor
+        setUploadSizeLimit(1000)
+        compressor.compressionGate = { [weak composerVC] in
+            for _ in 0..<50 {
+                if composerVC?.content.attachments.contains(where: { $0.type == .image }) == true {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+
+        await composerVC.addSelectedMedia(from: [
+            try makeItemProvider(for: try makeTemporaryImageFile(width: 40, height: 20)),
+            try makeItemProvider(for: try makeTemporaryFile(named: "\(UUID().uuidString).mov", byteCount: 4096))
+        ])
+
+        XCTAssertEqual(composerVC.content.attachments.map(\.type), [.image, .video])
+        XCTAssertTrue(composerVC.pendingMediaItems.isEmpty)
+    }
+
+    func test_processingProgress_whenVideoIsDownloadedAndCompressed_thenEachPhaseUsesHalfOfTheBar() throws {
+        let id = try enqueuePendingVideo()
+
+        composerVC.updateDownloadProgress(0.4, isCloudDownload: true, for: id)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 0.2)
+
+        composerVC.updateDownloadProgress(1, isCloudDownload: true, for: id)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 0.5)
+
+        composerVC.updateCompressionProgress(0, for: id)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 0.5)
+
+        composerVC.updateCompressionProgress(0.5, for: id)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 0.75)
+
+        composerVC.updateCompressionProgress(1, for: id)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 1)
+    }
+
+    func test_processingProgress_whenVideoIsLocal_thenCompressionUsesTheWholeBar() throws {
+        let id = try enqueuePendingVideo()
+
+        composerVC.updateDownloadProgress(1, isCloudDownload: false, for: id)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 0)
+
+        composerVC.updateCompressionProgress(0.5, for: id)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 0.5)
+
+        composerVC.updateCompressionProgress(1, for: id)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 1)
+    }
+
+    func test_processingProgress_whenImageIsDownloaded_thenTheDownloadUsesTheWholeBar() throws {
+        _ = composerVC.view
+        let imageURL = try makeTemporaryImageFile(width: 40, height: 20)
+        composerVC.enqueuePendingMedia(from: [try makeItemProvider(for: imageURL)])
+        let id = try XCTUnwrap(composerVC.pendingMediaItems.first?.id)
+
+        composerVC.updateDownloadProgress(0.4, isCloudDownload: true, for: id)
+
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 0.4)
+    }
+
+    func test_processingProgress_whenALowerValueIsReported_thenTheProgressDoesNotGoBackwards() throws {
+        let id = try enqueuePendingVideo()
+
+        composerVC.updateDownloadProgress(1, isCloudDownload: true, for: id)
+        composerVC.updateCompressionProgress(0.4, for: id)
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 0.7)
+
+        composerVC.updateCompressionProgress(0, for: id)
+        composerVC.updateDownloadProgress(0.1, isCloudDownload: true, for: id)
+
+        XCTAssertEqual(composerVC.pendingMediaItems.first?.progress, 0.7)
+    }
+
+    private func enqueuePendingVideo() throws -> UUID {
+        _ = composerVC.view
+        let itemProvider = try makeItemProvider(for: try makeTemporaryFile(named: "\(UUID().uuidString).mov"))
+        composerVC.enqueuePendingMedia(from: [itemProvider])
+        return try XCTUnwrap(composerVC.pendingMediaItems.first?.id)
+    }
+
+    // MARK: - maxAttachmentSize
+
+    func test_maxAttachmentSize_whenChannelControllerNotSet_thenReturnsDefaultFallbackLimit() {
+        composerVC.channelController = nil
+        XCTAssertEqual(composerVC.maxAttachmentSize(for: .file), Components.default.maxAttachmentSize)
+    }
+
+    func test_maxAttachmentSize_whenImageType_thenReturnsLimitFromImageUploadConfig() {
+        let expectedValue: Int64 = 50 * 1024 * 1024
+        let chatClient = ChatClient_Mock.mock
+        chatClient.mockedAppSettings = .mock(imageUploadConfig: .mock(
+            sizeLimitInBytes: expectedValue
+        ))
+        composerVC.channelController = ChatChannelController_Mock.mock(chatClient: chatClient)
+
+        XCTAssertEqual(composerVC.maxAttachmentSize(for: .image), expectedValue)
+    }
+
+    func test_maxAttachmentSize_whenFileType_thenReturnsLimitFromFileUploadConfig() {
+        let expectedValue: Int64 = 50 * 1024 * 1024
+        let chatClient = ChatClient_Mock.mock
+        chatClient.mockedAppSettings = .mock(fileUploadConfig: .mock(
+            sizeLimitInBytes: expectedValue
+        ))
+        composerVC.channelController = ChatChannelController_Mock.mock(chatClient: chatClient)
+
+        XCTAssertEqual(composerVC.maxAttachmentSize(for: .file), expectedValue)
+    }
+
+    func test_maxAttachmentSize_whenOtherType_thenReturnsLimitFromFileUploadConfig() {
+        let expectedValue: Int64 = 50 * 1024 * 1024
+        let chatClient = ChatClient_Mock.mock
+        chatClient.mockedAppSettings = .mock(fileUploadConfig: .mock(
+            sizeLimitInBytes: expectedValue
+        ))
+        composerVC.channelController = ChatChannelController_Mock.mock(chatClient: chatClient)
+
+        XCTAssertEqual(composerVC.maxAttachmentSize(for: .video), expectedValue)
+    }
+
+    // MARK: - audioPlayer
+    
+    func test_audioPlayer_voiceRecordingAndAttachmentsVCGetTheSameInstance() {
+        let audioPlayer = StreamAudioPlayer()
+        
+        composerVC.audioPlayer = audioPlayer
+        
+        XCTAssertTrue(composerVC.voiceRecordingVC.audioPlayer === audioPlayer)
+        XCTAssertTrue(composerVC.attachmentsVC.audioPlayer === audioPlayer)
+    }
+    
+    // MARK: - voiceRecordingVC
+    
+    func test_voiceRecordingVC_getsAReferenceOfTheExpectedComposerView() {
+        XCTAssertTrue(composerVC.voiceRecordingVC.view === composerVC.composerView)
+    }
+    
+    // MARK: - setUp
+    
+    func test_setUp_voiceRecordingVCWasConfiguredCorrectly() {
+        final class MockVoiceRecordingVC: VoiceRecordingVC {
+            var setUpWasCalled = false
+            var didMoveToParentWasCalledWithParent: UIViewController?
+            override func setUp() { setUpWasCalled = true }
+            override func didMove(toParent parent: UIViewController?) { didMoveToParentWasCalledWithParent = parent }
+        }
+        
+        let mockVoiceRecordingVC = MockVoiceRecordingVC(composerView: composerVC.composerView)
+        composerVC.voiceRecordingVC = mockVoiceRecordingVC
+        
+        composerVC.setUp()
+        
+        XCTAssertTrue(composerVC.voiceRecordingVC.delegate === composerVC)
+        XCTAssertNotNil(composerVC.children.first { $0 === composerVC.voiceRecordingVC })
+        XCTAssertTrue(mockVoiceRecordingVC.setUpWasCalled)
+        XCTAssertTrue(mockVoiceRecordingVC.didMoveToParentWasCalledWithParent === composerVC)
+    }
+    
+    // MARK: - voiceRecording(_:addAttachmentFromLocation:duration:waveformData:)
+    
+    func test_voiceRecordingAddAttachment_attachmentWasConfiguredCorrectly() throws {
+        let expectedURL: URL = URL(fileURLWithPath: "/tmp/\(UUID().uuidString)")
+        let expectedDuration: TimeInterval = 100
+        let expectedWaveformData: [Float] = .init(repeating: .random(in: 0...1), count: 10)
+        composerVC.channelController = .init(channelQuery: .init(cid: .unique), channelListQuery: nil, client: .mock)
+        try Data(count: 1024).write(to: expectedURL)
+        defer { try? FileManager.default.removeItem(at: expectedURL) }
+        
+        composerVC.voiceRecording(
+            composerVC.voiceRecordingVC,
+            addAttachmentFromLocation: expectedURL,
+            duration: expectedDuration,
+            waveformData: expectedWaveformData
+        )
+        
+        XCTAssertEqual(composerVC.content.attachments.first?.type, .voiceRecording)
+        XCTAssertEqual(composerVC.content.attachments.first?.localFileURL, expectedURL)
+        let payload = try XCTUnwrap(composerVC.content.attachments.first?.payload as? VoiceRecordingAttachmentPayload)
+        XCTAssertEqual(payload.duration, expectedDuration)
+        XCTAssertEqual(payload.waveformData, expectedWaveformData)
+    }
+
+    func test_addAttachmentToContent_withImageInfo_setsOriginalResolutionOnPayload() throws {
+        let image = UIImage(systemName: "person.fill")!
+        let imageURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
+        defer { try? FileManager.default.removeItem(at: imageURL) }
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100))
+        let imageData = try XCTUnwrap(renderer.jpegData(withCompressionQuality: 0.8) { context in
+            image.draw(in: context.format.bounds)
+        })
+        try imageData.write(to: imageURL)
+        composerVC.channelController = mockedChatChannelController
+
+        let info: [LocalAttachmentInfoKey: Any] = [.originalImage: image]
+        try composerVC.addAttachmentToContent(from: imageURL, type: .image, info: info)
+
+        XCTAssertEqual(composerVC.content.attachments.count, 1)
+        let payload = try XCTUnwrap(composerVC.content.attachments.first?.payload as? ImageAttachmentPayload)
+        XCTAssertEqual(payload.originalWidth, Double(image.size.width).rounded(.down))
+        XCTAssertEqual(payload.originalHeight, Double(image.size.height).rounded(.down))
+    }
+
+    func test_addAttachmentToContent_withVideoInfo_setsWidthHeightDurationOnPayload() throws {
+        let videoURL = URL(fileURLWithPath: "/tmp/\(UUID().uuidString).mp4")
+        try Data(count: 1024).write(to: videoURL)
+        defer { try? FileManager.default.removeItem(at: videoURL) }
+        composerVC.channelController = mockedChatChannelController
+
+        let duration: TimeInterval = 30.5
+        let width: Double = 1920
+        let height: Double = 1080
+        let info: [LocalAttachmentInfoKey: Any] = [
+            .duration: duration,
+            .originalWidth: width,
+            .originalHeight: height
+        ]
+
+        try composerVC.addAttachmentToContent(from: videoURL, type: .video, info: info)
+
+        XCTAssertEqual(composerVC.content.attachments.count, 1)
+        XCTAssertEqual(composerVC.content.attachments.first?.type, .video)
+        let payload = try XCTUnwrap(composerVC.content.attachments.first?.payload as? VideoAttachmentPayload)
+        XCTAssertEqual(payload.originalWidth, width)
+        XCTAssertEqual(payload.originalHeight, height)
+        XCTAssertEqual(payload.duration, duration)
+    }
+    
+    // MARK: - voiceRecordingPublishMessage
+    
+    func test_voiceRecordingPublishMessage_callsPublishMessageWithExpectedSender() {
+        let spyComposerVC = SpyComposerVC()
+        
+        spyComposerVC.voiceRecordingPublishMessage(spyComposerVC.voiceRecordingVC)
+        
+        XCTAssertTrue(spyComposerVC.publishMessageWasCalledWithSender == spyComposerVC.composerView.sendButton)
+    }
+    
+    // MARK: - voiceRecordingDidBeginRecording
+    
+    func test_voiceRecordingDidBeginRecording_contentChangesToRecording() {
+        composerVC.voiceRecordingDidBeginRecording(composerVC.voiceRecordingVC)
+        
+        XCTAssertEqual(composerVC.content.state, .recording)
+    }
+    
+    // MARK: - voiceRecordingDidLockRecording
+    
+    func test_voiceRecordingDidLockRecording_contentChangesToRecording() {
+        composerVC.voiceRecordingDidLockRecording(composerVC.voiceRecordingVC)
+        
+        XCTAssertEqual(composerVC.content.state, .recordingLocked)
+    }
+    
+    // MARK: - voiceRecordingDidStopRecording
+    
+    func test_voiceRecordingDidStopRecording_contentChangesToRecording() {
+        composerVC.voiceRecordingDidStopRecording(composerVC.voiceRecordingVC)
+        
+        XCTAssertEqual(composerVC.content.state, .new)
+    }
+    
+    // MARK: - voiceRecording(_:presentFloatingView:)
+    
+    func test_voiceRecordingPresentFloatingView_floatingViewWasAddedOnParentView() {
+        let containerViewController = UIViewController()
+        containerViewController.addChildViewController(composerVC, embedIn: containerViewController.view)
+        let floatingView = UIView()
+
+        composerVC.voiceRecording(composerVC.voiceRecordingVC, presentFloatingView: floatingView)
+
+        XCTAssertTrue(containerViewController.view.subviews.last === floatingView)
+    }
+
+    // MARK: - Draft Message Handling
+
+    func test_viewWillDisappear_whenContentIsEmpty_andNoDraftExists() {
+        composerVC.content = .initial()
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, draftMessage: nil)
+        composerVC.channelController = mock
+
+        composerVC.viewWillDisappear(false)
+
+        XCTAssertEqual(mock.updateDraftMessage_callCount, 0)
+        XCTAssertEqual(mock.deleteDraftMessage_callCount, 0)
+    }
+
+    func test_viewWillDisappear_whenHasContent_updatesDraft() {
+        composerVC.content.draftMessage(.mock(text: "New draft text"))
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique)
+        composerVC.channelController = mock
+
+        composerVC.viewWillDisappear(false)
+
+        XCTAssertEqual(mock.updateDraftMessage_callCount, 1)
+        XCTAssertEqual(mock.updateDraftMessage_text, "New draft text")
+    }
+
+    func test_viewWillDisappear_whenHasCommand_updatesDraft() {
+        composerVC.content.draftMessage(.mock(text: "", command: "giphy"))
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique)
+        composerVC.channelController = mock
+
+        composerVC.viewWillDisappear(false)
+
+        XCTAssertEqual(mock.updateDraftMessage_callCount, 1)
+    }
+
+    func test_content_whenAttachmentsCleared_whenHasDraft_deletesDraft() {
+        composerVC.content.text = ""
+        composerVC.content.attachments = [.mockFile]
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, draftMessage: .mock())
+        composerVC.channelController = mock
+
+        composerVC.content.attachments = []
+
+        XCTAssertEqual(mock.deleteDraftMessage_callCount, 1)
+    }
+
+    func test_content_whenAttachmentsCleared_whenHasText_doesNotCallDeleteDraft() {
+        composerVC.content.text = "Hey"
+        composerVC.content.attachments = [.mockFile]
+
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, draftMessage: .mock())
+        composerVC.channelController = mock
+
+        composerVC.content.attachments = []
+
+        XCTAssertEqual(mock.deleteDraftMessage_callCount, 0)
+    }
+
+    func test_textViewDidChange_whenInputIsEmpty_whenHasDraft_deletesDraft() {
+        composerVC.content.text = "Hey"
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, draftMessage: .mock())
+        composerVC.channelController = mock
+
+        composerVC.composerView.inputMessageView.textView.text = ""
+        composerVC.textViewDidChange(composerVC.composerView.inputMessageView.textView)
+
+        XCTAssertEqual(mock.deleteDraftMessage_callCount, 1)
+    }
+
+    func test_textViewDidChange_whenInputIsEmpty_whenNoDraft_doesNotCallDeleteDraft() {
+        composerVC.content.text = "Hey"
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, draftMessage: nil)
+        composerVC.channelController = mock
+
+        composerVC.composerView.inputMessageView.textView.text = ""
+        composerVC.textViewDidChange(composerVC.composerView.inputMessageView.textView)
+
+        XCTAssertEqual(mock.deleteDraftMessage_callCount, 0)
+    }
+
+    func test_textViewDidChange_whenHasContent_whenHasDraft_doesNotCallDeleteDraft() {
+        composerVC.content.text = "Hey"
+        let mock = ChatChannelController_Mock.mock()
+        mock.channel_mock = .mock(cid: .unique, draftMessage: .mock())
+        composerVC.channelController = mock
+
+        composerVC.composerView.inputMessageView.textView.text = "Ahahah"
+        composerVC.textViewDidChange(composerVC.composerView.inputMessageView.textView)
+
+        XCTAssertEqual(mock.deleteDraftMessage_callCount, 0)
+    }
+}
+
+// MARK: - Helpers
+
+private final class SpyComposerVC: ComposerVC {
+    private(set) var publishMessageWasCalledWithSender: UIButton?
+
+    override func publishMessage(sender: UIButton) {
+        publishMessageWasCalledWithSender = sender
+    }
+
+    var dismissLinkPreviewCallCount = 0
+    override func dismissLinkPreview() {
+        dismissLinkPreviewCallCount += 1
+        super.dismissLinkPreview()
+    }
+
+    var showLinkPreviewCallCount = 0
+    var showLinkPreviewCalledWith: LinkAttachmentPayload?
+    override func showLinkPreview(for linkPayload: LinkAttachmentPayload) {
+        showLinkPreviewCallCount += 1
+        showLinkPreviewCalledWith = linkPayload
+        super.showLinkPreview(for: linkPayload)
+    }
+}
+
+@available(iOS 14.0, *)
+private final class ComposerVC_CustomPickerConfig: ComposerVC {
+    override var mediaPickerConfiguration: PHPickerConfiguration {
+        var configuration = super.mediaPickerConfiguration
+        configuration.filter = .images
+        configuration.selectionLimit = 3
+        return configuration
+    }
+}
+
+@MainActor final class MediaLoadProgress_Tests: XCTestCase {
+    func test_observedFractionCompleted_whenTheFileIsBeingDownloaded_thenItIsAnICloudDownload() {
+        let loadProgress = MediaLoadProgress()
+        let progress = Progress(totalUnitCount: 100)
+        progress.completedUnitCount = 40
+        progress.kind = .file
+        progress.fileOperationKind = .downloading
+        loadProgress.progress = progress
+
+        XCTAssertEqual(loadProgress.observedFractionCompleted(), 0.4)
+        XCTAssertTrue(loadProgress.isCloudDownload)
+    }
+
+    func test_observedFractionCompleted_whenALocalCopyReportsProgress_thenItIsNotAnICloudDownload() {
+        let loadProgress = MediaLoadProgress()
+        let progress = Progress(totalUnitCount: 100)
+        progress.completedUnitCount = 40
+        loadProgress.progress = progress
+
+        XCTAssertEqual(loadProgress.observedFractionCompleted(), 0.4)
+        XCTAssertFalse(loadProgress.isCloudDownload)
+    }
+
+    func test_observedFractionCompleted_whenTheLoadHasNotStarted_thenThereIsNoFraction() {
+        XCTAssertNil(MediaLoadProgress().observedFractionCompleted())
+    }
+}
+
+private extension ComposerVC_Tests {
+    func makeLoadedComposerWithCooldownTracker(
+        cooldownDuration: Int,
+        ownCapabilities: Set<ChannelCapability> = [.sendMessage],
+        lastMessageFromCurrentUser: ChatMessage? = nil
+    ) -> CooldownTracker_Mock {
+        mockedChatChannelController.channel_mock = .mock(
+            cid: .unique,
+            config: .mock(commands: []),
+            ownCapabilities: ownCapabilities,
+            cooldownDuration: cooldownDuration,
+            lastMessageFromCurrentUser: lastMessageFromCurrentUser
+        )
+        let cooldownTracker = CooldownTracker_Mock(timer: ScheduledStreamTimer_Mock())
+        composerVC.cooldownTracker = cooldownTracker
+        composerVC.loadViewIfNeeded()
+        return cooldownTracker
     }
 }

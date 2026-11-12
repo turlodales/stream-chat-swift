@@ -1,5 +1,8 @@
 {
     "channel" : {
+        "custom" : {
+            "name" : "7070"
+        },
         "id" : "new_channel_7070",
         "members" : [
             {
@@ -73,6 +76,7 @@
         },
         "type" : "messaging",
         "cid" : "messaging:new_channel_7070",
+        "disabled" : false,
         "frozen" : false,
         "member_count" : 2,
         "updated_at" : "2020-07-17T11:44:16.63728Z",
@@ -103,7 +107,6 @@
             "uploads" : true,
             "name" : "messaging"
         },
-        "name" : "7070",
         "last_message_at" : "2020-07-16T15:39:03.010717Z"
     },
     "channel_type" : "messaging",

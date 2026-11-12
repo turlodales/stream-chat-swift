@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -21,5 +21,12 @@ final class EventDecoder_Mock: AnyEventDecoder {
             // just dummy error to make compiler happy
             throw NSError(domain: "some error", code: 0, userInfo: nil)
         }
+    }
+}
+
+struct EventDTODecoder {
+    func decode(from data: Data) throws -> Event {
+        let event = try EventDecoder().decode(from: data)
+        return (event as? WSEvent)?.rawValue ?? event
     }
 }

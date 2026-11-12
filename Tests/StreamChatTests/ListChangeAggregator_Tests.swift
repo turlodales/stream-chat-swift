@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -27,16 +27,6 @@ final class ListChangeAggregator_Tests: XCTestCase {
         aggregator = nil
 
         super.tearDown()
-    }
-
-    func test_onWillChange_isCalled() {
-        // Set up aggregator callback
-        var callbackCalled = false
-        aggregator.onWillChange = { callbackCalled = true }
-
-        // Simulate FRC starts updating
-        aggregator.controllerWillChangeContent(fakeController)
-        XCTAssertTrue(callbackCalled)
     }
 
     func test_addingItems() {

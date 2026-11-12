@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -9,7 +9,14 @@ import Foundation
 class DeviceDTO: NSManagedObject {
     @NSManaged var id: String
     @NSManaged var createdAt: DBDate?
-    
+    @NSManaged var disabled: NSNumber?
+    @NSManaged var disabledReason: String?
+    @NSManaged var hardwareId: String?
+    @NSManaged var pushProvider: String
+    @NSManaged var pushProviderName: String?
+    @NSManaged var userId: String
+    @NSManaged var voip: NSNumber?
+
     @NSManaged var user: CurrentUserDTO
 }
 
@@ -21,9 +28,9 @@ extension DeviceDTO {
     ///   - context: The context used to fetch `DeviceDTO`
     ///
     static func load(id: String, context: NSManagedObjectContext) -> DeviceDTO? {
-        load(by: id, context: context).first
+        load(by: id, context: context).first as? Self
     }
-    
+
     /// If a Device with the given id exists in the context, fetches and returns it. Otherwise creates a new
     /// `DeviceDTO` with the given id.
     ///
@@ -35,7 +42,7 @@ extension DeviceDTO {
         if let existing = load(id: id, context: context) {
             return existing
         }
-        
+
         let request = fetchRequest(id: id)
         let new = NSEntityDescription.insertNewObject(into: context, for: request)
         new.id = id
@@ -45,7 +52,17 @@ extension DeviceDTO {
 
 extension DeviceDTO {
     func asModel() throws -> Device {
-        guard isValid else { throw InvalidModel(self) }
-        return Device(id: id, createdAt: createdAt?.bridgeDate)
+        try isNotDeleted()
+        return Device(
+            createdAt: createdAt?.bridgeDate ?? Date(timeIntervalSince1970: 0),
+            disabled: disabled?.boolValue,
+            disabledReason: disabledReason,
+            hardwareId: hardwareId,
+            id: id,
+            pushProvider: pushProvider,
+            pushProviderName: pushProviderName,
+            userId: userId,
+            voip: voip?.boolValue
+        )
     }
 }

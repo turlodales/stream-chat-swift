@@ -1,0 +1,33 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+extension MemberListState {
+    struct Observer {
+        private let memberListObserver: StateLayerDatabaseObserver<ListResult, ChatChannelMember, MemberDTO>
+        
+        init(query: ChannelMemberListQuery, database: DatabaseContainer) {
+            memberListObserver = StateLayerDatabaseObserver(
+                database: database,
+                fetchRequest: MemberDTO.members(matching: query),
+                itemCreator: { try $0.asModel() },
+                itemReuseKeyPaths: (\ChatChannelMember.id, \MemberDTO.id)
+            )
+        }
+        
+        struct Handlers {
+            let membersDidChange: @Sendable @MainActor ([ChatChannelMember]) async -> Void
+        }
+        
+        func start(with handlers: Handlers) -> [ChatChannelMember] {
+            do {
+                return try memberListObserver.startObserving(didChange: handlers.membersDidChange)
+            } catch {
+                log.error("Failed to start the member list observer with error \(error)")
+                return []
+            }
+        }
+    }
+}

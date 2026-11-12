@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -13,12 +13,12 @@ final class GuestUserTokenPayload_Tests: XCTestCase {
 
     func test_guestUserDefaultExtraData_isSerialized() throws {
         let payload = try JSONDecoder.default.decode(
-            GuestUserTokenPayload.self,
+            CreateGuestResponse.self,
             from: guestUserDefaultExtraDataJSON
         )
 
         XCTAssertEqual(
-            payload.token,
+            try payload.validatedToken().rawValue,
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiYnJva2VuLXdhdGVyZmFsbC01In0.QPeAmdig1KbLwYInW8hwi0XML3kO1M6HH76k4IU0sDg"
         )
         XCTAssertNotNil(payload.user)
@@ -31,15 +31,15 @@ final class GuestUserTokenPayload_Tests: XCTestCase {
             payload.user.imageURL,
             URL(string: "https://getstream.io/random_svg/?id=broken-waterfall-5&amp;name=Broken+waterfall")!
         )
-        XCTAssertEqual(payload.user.role, .guest)
+        XCTAssertEqual(payload.user.role, "guest")
         XCTAssertTrue(payload.user.isOnline)
     }
-    
+
     func test_guestUserCustomExtraData_isSerialized() throws {
-        let payload = try JSONDecoder.default.decode(GuestUserTokenPayload.self, from: guestUserCustomExtraDataJSON)
+        let payload = try JSONDecoder.default.decode(CreateGuestResponse.self, from: guestUserCustomExtraDataJSON)
 
         XCTAssertEqual(
-            payload.token,
+            try payload.validatedToken().rawValue,
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiYnJva2VuLXdhdGVyZmFsbC01In0.QPeAmdig1KbLwYInW8hwi0XML3kO1M6HH76k4IU0sDg"
         )
         XCTAssertNotNil(payload.user)
@@ -48,14 +48,13 @@ final class GuestUserTokenPayload_Tests: XCTestCase {
         XCTAssertEqual(payload.user.createdAt, "2019-12-12T15:33:46.488935Z".toDate())
         XCTAssertEqual(payload.user.updatedAt, "2020-06-10T14:11:29.946106Z".toDate())
         XCTAssertEqual(payload.user.extraData, ["company": .string("getstream.io")])
-        XCTAssertEqual(payload.user.role, .guest)
+        XCTAssertEqual(payload.user.role, "guest")
         XCTAssertTrue(payload.user.isOnline)
     }
 
     func test_guestUserWithInvalidToken_isFailedToBeSerialized() throws {
-        XCTAssertThrowsError(
-            try JSONDecoder.default.decode(GuestUserTokenPayload.self, from: guestUserInvalidTokenJSON)
-        ) { error in
+        let payload = try JSONDecoder.default.decode(CreateGuestResponse.self, from: guestUserInvalidTokenJSON)
+        XCTAssertThrowsError(try payload.validatedToken()) { error in
             XCTAssertTrue(error is ClientError.InvalidToken)
         }
     }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -42,7 +42,7 @@ open class ChatMessageReactionAuthorsVC: _ViewController,
 
     /// The reactions of the message.
     open var content: [ChatMessageReaction] {
-        messageController.reactions.filter { appearance.images.availableReactions[$0.type] != nil }
+        messageController.reactions.filter { appearance.images.defaultReactions[$0.type] != nil }
     }
 
     /// A Boolean indicating whether the reactions are currently loading.
@@ -74,7 +74,7 @@ open class ChatMessageReactionAuthorsVC: _ViewController,
 
         view.layer.cornerRadius = 16
         view.layer.masksToBounds = true
-        view.backgroundColor = appearance.colorPalette.background
+        view.backgroundColor = appearance.colorPalette.backgroundCoreApp
 
         flowLayout.scrollDirection = .vertical
         flowLayout.sectionInset = .init(top: 0, left: 8, bottom: 0, right: 8)
@@ -86,7 +86,7 @@ open class ChatMessageReactionAuthorsVC: _ViewController,
         collectionView.showsVerticalScrollIndicator = false
 
         topLabel.font = appearance.fonts.title3
-        topLabel.textColor = appearance.colorPalette.text
+        topLabel.textColor = appearance.colorPalette.textPrimary
         topLabel.textAlignment = .center
     }
 

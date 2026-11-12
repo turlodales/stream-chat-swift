@@ -1,41 +1,43 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
-import StreamChatTestTools
+@testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import XCTest
 
-final class ChatMessageBubbleView_Tests: XCTestCase {
+@MainActor final class ChatMessageBubbleView_Tests: XCTestCase {
     private var bubbleContent = ChatMessageBubbleView.Content(
-        backgroundColor: Appearance.default.colorPalette.background2,
+        backgroundColor: Appearance.default.colorPalette.backgroundCoreSurfaceStrong,
+        borderColor: Appearance.default.colorPalette.chatBorderIncoming,
         roundedCorners: CACornerMask.all.subtracting(.layerMaxXMinYCorner)
     )
-    
+
     // MARK: - Appearance
 
     func test_appearance_whenNoContentSet() {
         // Create a bubble
         let bubble = ChatMessageBubbleView().withFixedSize
-        
+
         // Set bubble content
         bubble.content = nil
-        
+
         // Assert the bubble is rendered correctly
         AssertSnapshot(bubble, variants: .onlyUserInterfaceStyles)
     }
-    
+
     func test_appearance_whenContentIsSet() {
         // Create a bubble
         let bubble = ChatMessageBubbleView().withFixedSize
-        
+
         // Set bubble content
         bubble.content = bubbleContent
-        
+
         // Assert the bubble is rendered correctly
         AssertSnapshot(bubble, variants: .onlyUserInterfaceStyles)
-        
+
         // Assert bubble has correct values set
         XCTAssertEqual(bubble.layer.maskedCorners, bubble.content?.roundedCorners)
         XCTAssertEqual(bubble.backgroundColor, bubble.content?.backgroundColor)
@@ -46,8 +48,8 @@ final class ChatMessageBubbleView_Tests: XCTestCase {
         let bubble = ChatMessageBubbleView().withFixedSize
 
         // Set custom appearance
-        var appearance = Appearance()
-        appearance.colorPalette.border = Appearance.default.colorPalette.background4
+        let appearance = Appearance()
+        appearance.colorPalette.backgroundCoreSurfaceStrong = Appearance.default.colorPalette.backgroundCoreScrim
         bubble.appearance = appearance
 
         // Assert the bubble is rendered correctly
@@ -59,7 +61,7 @@ final class ChatMessageBubbleView_Tests: XCTestCase {
         class TestBubble: ChatMessageBubbleView {
             override func setUpAppearance() {
                 super.setUpAppearance()
-                
+
                 layer.cornerRadius = 8
                 layer.borderWidth = 4
             }
@@ -67,7 +69,7 @@ final class ChatMessageBubbleView_Tests: XCTestCase {
 
         // Create a custom bubble
         let bubble = TestBubble().withFixedSize
-        
+
         // Set bubble content
         bubble.content = bubbleContent
 

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -9,68 +9,205 @@ import XCTest
 final class ChannelUpdater_Tests: XCTestCase {
     var apiClient: APIClient_Spy!
     var database: DatabaseContainer_Spy!
-    
+    var channelRepository: ChannelRepository_Mock!
+    var messageRepository: MessageRepository_Mock!
+    var paginationStateHandler: MessagesPaginationStateHandler_Mock!
     var channelUpdater: ChannelUpdater!
-    
+
     override func setUp() {
         super.setUp()
 
         apiClient = APIClient_Spy()
         database = DatabaseContainer_Spy()
-        
-        channelUpdater = ChannelUpdater(database: database, apiClient: apiClient)
+        channelRepository = ChannelRepository_Mock(database: database, apiClient: apiClient)
+        messageRepository = MessageRepository_Mock(database: database, apiClient: apiClient)
+        paginationStateHandler = MessagesPaginationStateHandler_Mock()
+        channelUpdater = ChannelUpdater(
+            channelRepository: channelRepository,
+            messageRepository: messageRepository,
+            paginationStateHandler: paginationStateHandler,
+            database: database,
+            apiClient: apiClient
+        )
     }
-    
+
     override func tearDown() {
         apiClient.cleanUp()
         apiClient = nil
+        channelRepository = nil
         channelUpdater = nil
+        messageRepository = nil
 
         AssertAsync.canBeReleased(&database)
         database = nil
 
         super.tearDown()
     }
-    
+
     // MARK: - UpdateChannelQuery
-    
-    func test_updateChannelQuery_makesCorrectAPICall() {
+
+    func test_updateChannelQuery_makesCorrectAPICall() throws {
         // Simulate `update(channelQuery:)` call
         let query = ChannelQuery(cid: .unique)
         channelUpdater.update(channelQuery: query, isInRecoveryMode: false)
-        
-        let referenceEndpoint: Endpoint<ChannelPayload> = .updateChannel(query: query)
+
+        let referenceEndpoint = query.endpoint
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(query.type.rawValue)/\(try XCTUnwrap(query.id))/query")
     }
 
-    func test_updateChannelQueryRecovery_makesCorrectAPICall() {
+    func test_updateChannelQueryRecovery_makesCorrectAPICall() throws {
         // Simulate `update(channelQuery:)` call
         let query = ChannelQuery(cid: .unique)
         channelUpdater.update(channelQuery: query, isInRecoveryMode: true)
 
-        let referenceEndpoint: Endpoint<ChannelPayload> = .updateChannel(query: query)
+        let referenceEndpoint = query.endpoint
         XCTAssertEqual(apiClient.recoveryRequest_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(apiClient.recoveryRequest_endpoint?.path.value, "/api/v2/chat/channels/\(query.type.rawValue)/\(try XCTUnwrap(query.id))/query")
     }
-    
+
+    func test_createChannelQuery_makesCorrectAPICall() throws {
+        // Simulate `update(channelQuery:onChannelCreated:)` call for an existing channel id
+        let cid = ChannelId.unique
+        let channelInput = ChannelInput(
+            name: "Team",
+            imageURL: URL(string: "https://getstream.io/image.jpg"),
+            team: nil,
+            members: [.unique],
+            invites: [],
+            filterTags: [],
+            extraData: ["color": .string("blue")]
+        )
+        let query = ChannelQuery(type: cid.type, id: cid.id, channelInput: channelInput)
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false, onChannelCreated: { _ in })
+
+        let endpoint = try XCTUnwrap(apiClient.request_endpoint)
+        XCTAssertEqual(endpoint.path.value, "/api/v2/chat/channels/\(cid.type.rawValue)/\(cid.id)/query")
+
+        let body = try endpoint.bodyAsDictionary()
+        let data = try XCTUnwrap(body["data"] as? [String: Any])
+        let custom = try XCTUnwrap(data["custom"] as? [String: Any])
+        XCTAssertEqual(custom["name"] as? String, "Team")
+        XCTAssertEqual(custom["image"] as? String, "https://getstream.io/image.jpg")
+        XCTAssertEqual(custom["color"] as? String, "blue")
+    }
+
+    func test_createDistinctChannelQuery_makesCorrectAPICall() throws {
+        // Simulate `update(channelQuery:onChannelCreated:)` call for a distinct channel without an id
+        let memberIds: Set<UserId> = [.unique, .unique]
+        let channelInput = ChannelInput(
+            name: nil,
+            imageURL: nil,
+            team: nil,
+            members: memberIds,
+            invites: [],
+            filterTags: [],
+            extraData: [:]
+        )
+        let query = ChannelQuery(type: .messaging, id: nil, channelInput: channelInput)
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false, onChannelCreated: { _ in })
+
+        let endpoint = try XCTUnwrap(apiClient.request_endpoint)
+        XCTAssertEqual(endpoint.path.value, "/api/v2/chat/channels/messaging/query")
+
+        let body = try endpoint.bodyAsDictionary()
+        let data = try XCTUnwrap(body["data"] as? [String: Any])
+        let members = try XCTUnwrap(data["members"] as? [[String: Any]])
+        XCTAssertEqual(Set(members.compactMap { $0["user_id"] as? String }), memberIds)
+    }
+
     func test_updateChannelQuery_successfulResponseData_areSavedToDB() {
         // Simulate `update(channelQuery:)` call
-        let query = ChannelQuery(cid: .unique)
+        let expectedPaginationParameter = PaginationParameter.lessThan(.unique)
+        let query = ChannelQuery(cid: .unique, paginationParameter: expectedPaginationParameter)
         let expectation = self.expectation(description: "Update completes")
+        nonisolated(unsafe) var updateResult: Result<ChannelPayload, Error>!
         channelUpdater.update(channelQuery: query, isInRecoveryMode: false, completion: { result in
-            XCTAssertNil(result.error)
+            updateResult = result
             expectation.fulfill()
         })
-        
+
+        XCTAssertEqual(paginationStateHandler.beginCallCount, 1)
+        XCTAssertEqual(paginationStateHandler.beginCalledWith?.parameter, expectedPaginationParameter)
+        XCTAssertEqual(paginationStateHandler.endCallCount, 0)
+
         // Simulate API response with channel data
         let cid = ChannelId(type: .messaging, id: .unique)
         let payload = dummyPayload(with: cid, numberOfMessages: 2)
         apiClient.test_simulateResponse(.success(payload))
 
-        waitForExpectations(timeout: 0.5)
-        
+        waitForExpectations(timeout: defaultTimeout)
+
         let channel = database.viewContext.channel(cid: cid)
         XCTAssertNotNil(channel)
+        XCTAssertNil(updateResult.error)
         XCTAssertEqual(channel?.messages.count, 2)
+
+        XCTAssertEqual(paginationStateHandler.endCallCount, 1)
+        XCTAssertEqual(paginationStateHandler.endCalledWith?.0?.parameter, expectedPaginationParameter)
+        XCTAssertEqual(paginationStateHandler.endCalledWith?.1.value?.count, 2)
+    }
+
+    func test_updateChannelQuery_whenNoPagination_thenCallsPaginationStateHandlerWithNil() {
+        // Simulate `update(channelQuery:)` call with no pagination
+        let query = ChannelQuery(type: .messaging, id: .unique, channelInput: .unique)
+        let expectation = self.expectation(description: "Update completes")
+        nonisolated(unsafe) var updateResult: Result<ChannelPayload, Error>!
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false, completion: { result in
+            updateResult = result
+            expectation.fulfill()
+        })
+
+        // Assert begin is called with nil pagination
+        XCTAssertEqual(paginationStateHandler.beginCallCount, 1)
+        XCTAssertNil(paginationStateHandler.beginCalledWith)
+        XCTAssertEqual(paginationStateHandler.endCallCount, 0)
+
+        // Simulate API response with channel data
+        let cid = ChannelId(type: .messaging, id: .unique)
+        let payload = dummyPayload(with: cid, numberOfMessages: 2)
+        apiClient.test_simulateResponse(.success(payload))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        let channel = database.viewContext.channel(cid: cid)
+        XCTAssertNotNil(channel)
+        XCTAssertNil(updateResult.error)
+        XCTAssertEqual(channel?.messages.count, 2)
+
+        // Assert end is called with nil pagination
+        XCTAssertEqual(paginationStateHandler.endCallCount, 1)
+        XCTAssertNil(paginationStateHandler.endCalledWith?.0)
+        XCTAssertEqual(paginationStateHandler.endCalledWith?.1.value?.count, 2)
+    }
+
+    func test_updateChannelQuery_successfulResponseData_oldestMessageAtAndNewestMessageAtAreSavedToDB() {
+        // Simulate `update(channelQuery:)` call
+        let query = ChannelQuery(cid: .unique)
+        let expectation = self.expectation(description: "Update completes")
+        nonisolated(unsafe) var updateResult: Result<ChannelPayload, Error>!
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false, completion: { result in
+            updateResult = result
+            expectation.fulfill()
+        })
+
+        let expectedOldestFetchMessage = MessagePayload.dummy(createdAt: .unique)
+        let expectedNewestFetchMessage = MessagePayload.dummy(createdAt: .unique)
+        paginationStateHandler.mockState.oldestFetchedMessage = expectedOldestFetchMessage
+        paginationStateHandler.mockState.newestFetchedMessage = expectedNewestFetchMessage
+
+        // Simulate API response with channel data
+        let cid = ChannelId(type: .messaging, id: .unique)
+        let payload = dummyPayload(with: cid, numberOfMessages: 2)
+        apiClient.test_simulateResponse(.success(payload))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        let channel = database.viewContext.channel(cid: cid)
+        XCTAssertNotNil(channel)
+        XCTAssertNil(updateResult.error)
+        XCTAssertEqual(channel?.newestMessageAt, expectedNewestFetchMessage.createdAt.bridgeDate)
+        XCTAssertEqual(channel?.oldestMessageAt, expectedOldestFetchMessage.createdAt.bridgeDate)
     }
 
     func test_updateChannelQueryRecovery_successfulResponseData_areSavedToDB() {
@@ -87,7 +224,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         let payload = dummyPayload(with: cid, numberOfMessages: 2)
         apiClient.test_simulateRecoveryResponse(.success(payload))
 
-        waitForExpectations(timeout: 0.5)
+        waitForExpectations(timeout: defaultTimeout)
 
         // Assert the data is stored in the DB
         let channel = database.viewContext.channel(cid: cid)
@@ -102,7 +239,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         try database.createChannel(cid: cid, withMessages: false)
         // Local only message
         try database.createMessage(cid: cid, localState: .sendingFailed)
-        try database.createMessage(cid: cid, localState: .deletingFailed)
+        try database.createMessage(cid: cid, localState: .pendingSend)
         // Not local only message
         try database.createMessage(cid: cid, localState: .syncing)
 
@@ -123,7 +260,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         let payload = dummyPayload(with: cid, numberOfMessages: 2)
         apiClient.test_simulateResponse(.success(payload))
 
-        waitForExpectations(timeout: 0.5)
+        waitForExpectations(timeout: defaultTimeout)
 
         // Assert the data is stored in the DB
         let channel = database.viewContext.channel(cid: cid)
@@ -138,7 +275,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         try database.createChannel(cid: cid, withMessages: false)
         // Local only message
         try database.createMessage(cid: cid, localState: .sendingFailed)
-        try database.createMessage(cid: cid, localState: .deletingFailed)
+        try database.createMessage(cid: cid, localState: .pendingSend)
         // Not local only message
         try database.createMessage(cid: cid, localState: .syncing)
 
@@ -159,7 +296,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         let payload = dummyPayload(with: cid, numberOfMessages: 2)
         apiClient.test_simulateRecoveryResponse(.success(payload))
 
-        waitForExpectations(timeout: 0.5)
+        waitForExpectations(timeout: defaultTimeout)
 
         // Assert the data is stored in the DB
         let channel = database.viewContext.channel(cid: cid)
@@ -170,13 +307,13 @@ final class ChannelUpdater_Tests: XCTestCase {
     func test_updateChannelQuery_errorResponse_isPropagatedToCompletion() {
         // Simulate `update(channelQuery:)` call
         let query = ChannelQuery(cid: .unique)
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.update(channelQuery: query, isInRecoveryMode: false, completion: { completionCalledError = $0.error })
-        
+
         // Simulate API response with failure
         let error = TestError()
         apiClient.test_simulateResponse(Result<ChannelPayload, Error>.failure(error))
-        
+
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
@@ -184,7 +321,7 @@ final class ChannelUpdater_Tests: XCTestCase {
     func test_updateChannelQueryRecovery_errorResponse_isPropagatedToCompletion() {
         // Simulate `update(channelQuery:)` call
         let query = ChannelQuery(cid: .unique)
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.update(channelQuery: query, isInRecoveryMode: true, completion: { completionCalledError = $0.error })
 
         // Simulate API response with failure
@@ -197,14 +334,14 @@ final class ChannelUpdater_Tests: XCTestCase {
 
     func test_updateChannelQuery_completionForCreatedChannelCalled() {
         // Simulate `update(channelQuery:)` call
-        let query = ChannelQuery(channelPayload: .unique)
-        var cid: ChannelId = .unique
+        let query = ChannelQuery(type: .messaging, id: .unique, channelInput: .unique)
+        nonisolated(unsafe) var cid: ChannelId = .unique
 
         var channel: ChatChannel? {
             try? database.viewContext.channel(cid: cid)?.asModel()
         }
 
-        let callback: (ChannelId) -> Void = {
+        let callback: @Sendable (ChannelId) -> Void = {
             cid = $0
             // Assert channel is not saved to DB before callback returns
             AssertAsync.staysTrue(channel == nil)
@@ -213,17 +350,17 @@ final class ChannelUpdater_Tests: XCTestCase {
         // Simulate `updateChannel` call
         let completionCalled = expectation(description: "completion called")
         channelUpdater
-            .update(channelQuery: query, isInRecoveryMode: false, channelCreatedCallback: callback) { _ in
+            .update(channelQuery: query, isInRecoveryMode: false, onChannelCreated: callback, completion: { _ in
                 completionCalled.fulfill()
-            }
+            })
 
         // Simulate API response with channel data
         let payload = dummyPayload(with: query.cid!)
         apiClient.test_simulateResponse(.success(payload))
-        
-        wait(for: [completionCalled], timeout: 1)
 
-        // Assert `channelCreatedCallback` is called
+        wait(for: [completionCalled], timeout: defaultTimeout)
+
+        // Assert `onChannelCreated` is called
         XCTAssertEqual(cid, query.cid)
         // Assert channel is saved to DB after
         AssertAsync.willBeTrue(channel != nil)
@@ -231,14 +368,14 @@ final class ChannelUpdater_Tests: XCTestCase {
 
     func test_updateChannelQueryRecovery_completionForCreatedChannelCalled() {
         // Simulate `update(channelQuery:)` call
-        let query = ChannelQuery(channelPayload: .unique)
-        var cid: ChannelId = .unique
+        let query = ChannelQuery(type: .messaging, id: .unique, channelInput: .unique)
+        nonisolated(unsafe) var cid: ChannelId = .unique
 
         var channel: ChatChannel? {
             try? database.viewContext.channel(cid: cid)?.asModel()
         }
 
-        let callback: (ChannelId) -> Void = {
+        let callback: @Sendable (ChannelId) -> Void = {
             cid = $0
             // Assert channel is not saved to DB before callback returns
             AssertAsync.staysTrue(channel == nil)
@@ -247,17 +384,17 @@ final class ChannelUpdater_Tests: XCTestCase {
         // Simulate `updateChannel` call
         let completionCalled = expectation(description: "completion called")
         channelUpdater
-            .update(channelQuery: query, isInRecoveryMode: true, channelCreatedCallback: callback) { _ in
+            .update(channelQuery: query, isInRecoveryMode: true, onChannelCreated: callback, completion: { _ in
                 completionCalled.fulfill()
-            }
+            })
 
         // Simulate API response with channel data
         let payload = dummyPayload(with: query.cid!)
         apiClient.test_simulateRecoveryResponse(.success(payload))
-        
-        wait(for: [completionCalled], timeout: 1)
 
-        // Assert `channelCreatedCallback` is called
+        wait(for: [completionCalled], timeout: defaultTimeout)
+
+        // Assert `onChannelCreated` is called
         XCTAssertEqual(cid, query.cid)
         // Assert channel is saved to DB after
         AssertAsync.willBeTrue(channel != nil)
@@ -272,8 +409,7 @@ final class ChannelUpdater_Tests: XCTestCase {
             try session.saveChannel(payload: self.dummyPayload(with: cid, numberOfMessages: 0))
             try (1...3).forEach {
                 try session.saveMessage(
-                    payload: self.dummyMessagePayload(id: "\($0)dames"),
-                    for: cid,
+                    payload: self.dummyMessagePayload(id: "\($0)dames", cid: cid),
                     syncOwnReactions: false,
                     cache: nil
                 )
@@ -293,7 +429,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         let payload = dummyPayload(with: cid, numberOfMessages: 1)
         apiClient.test_simulateResponse(.success(payload))
 
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
 
         let channel = database.viewContext.channel(cid: cid)
         XCTAssertNotNil(channel)
@@ -310,8 +446,7 @@ final class ChannelUpdater_Tests: XCTestCase {
             try session.saveChannel(payload: self.dummyPayload(with: cid, numberOfMessages: 0))
             try (1...3).forEach {
                 try session.saveMessage(
-                    payload: self.dummyMessagePayload(id: "\($0)dames"),
-                    for: cid,
+                    payload: self.dummyMessagePayload(id: "\($0)dames", cid: cid),
                     syncOwnReactions: false,
                     cache: nil
                 )
@@ -331,7 +466,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         let payload = dummyPayload(with: cid, numberOfMessages: 1)
         apiClient.test_simulateRecoveryResponse(.success(payload))
 
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
 
         let channel = database.viewContext.channel(cid: cid)
         XCTAssertNotNil(channel)
@@ -354,8 +489,7 @@ final class ChannelUpdater_Tests: XCTestCase {
             try session.saveChannel(payload: self.dummyPayload(with: cid, numberOfMessages: 0))
             try (1...3).forEach {
                 try session.saveMessage(
-                    payload: self.dummyMessagePayload(id: "\($0)"),
-                    for: cid,
+                    payload: self.dummyMessagePayload(id: "\($0)", cid: cid),
                     syncOwnReactions: false,
                     cache: nil
                 )
@@ -375,7 +509,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         let payload = dummyPayload(with: cid, numberOfMessages: 1)
         apiClient.test_simulateResponse(.success(payload))
 
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
 
         let channel = database.viewContext.channel(cid: cid)
         XCTAssertNotNil(channel)
@@ -398,8 +532,7 @@ final class ChannelUpdater_Tests: XCTestCase {
             try session.saveChannel(payload: self.dummyPayload(with: cid, numberOfMessages: 0))
             try (1...3).forEach {
                 try session.saveMessage(
-                    payload: self.dummyMessagePayload(id: "\($0)"),
-                    for: cid,
+                    payload: self.dummyMessagePayload(id: "\($0)", cid: cid),
                     syncOwnReactions: false,
                     cache: nil
                 )
@@ -419,7 +552,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         let payload = dummyPayload(with: cid, numberOfMessages: 1)
         apiClient.test_simulateRecoveryResponse(.success(payload))
 
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
 
         let channel = database.viewContext.channel(cid: cid)
         XCTAssertNotNil(channel)
@@ -427,13 +560,257 @@ final class ChannelUpdater_Tests: XCTestCase {
         XCTAssertEqual(channel?.messages.count, 4)
     }
 
+    func test_updateChannelQuery_whenIsJumpingToMessage_thenPreservesPreviouslyCachedMessages() throws {
+        let cid = ChannelId(type: .messaging, id: .unique)
+        let query = ChannelQuery(cid: cid, paginationParameter: .around(.unique))
+
+        let previousMessagesCount = 10
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: self.dummyPayload(
+                with: cid, numberOfMessages: previousMessagesCount
+            ))
+        }
+
+        let expectation = self.expectation(description: "Update completes")
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false, completion: { _ in
+            expectation.fulfill()
+        })
+
+        let midPageMessagesCount = 5
+        let payload = dummyPayload(with: cid, numberOfMessages: midPageMessagesCount)
+        apiClient.test_simulateResponse(.success(payload))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        let channel = try XCTUnwrap(database.viewContext.channel(cid: cid))
+        // Mid-page jump must not wipe the cached messages, otherwise the channel's
+        // `latestMessages` (used for the channel list preview) would be lost.
+        XCTAssertEqual(channel.messages.count, previousMessagesCount + midPageMessagesCount)
+    }
+
+    func test_updateChannelQuery_whenIsJumpingToMessage_thenChannelLatestMessagesArePreserved() throws {
+        let cid = ChannelId(type: .messaging, id: .unique)
+
+        // Start from the channel's actual newest 5 messages (newest is `latest-0`).
+        let latestMessages: [MessagePayload] = (0..<5).map { offset in
+            .dummy(
+                messageId: "latest-\(offset)",
+                createdAt: Date().addingTimeInterval(-Double(offset))
+            )
+        }
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: self.dummyPayload(
+                with: cid,
+                messages: latestMessages
+            ))
+        }
+
+        // Jump to a mid-page far older than the cached messages.
+        let query = ChannelQuery(cid: cid, paginationParameter: .around(.unique))
+        let midPageBaseDate = Date().addingTimeInterval(-3600)
+        let midPageMessages: [MessagePayload] = (0..<5).map { offset in
+            .dummy(
+                messageId: "mid-\(offset)",
+                createdAt: midPageBaseDate.addingTimeInterval(-Double(offset))
+            )
+        }
+
+        let expectation = self.expectation(description: "Update completes")
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false, completion: { _ in
+            expectation.fulfill()
+        })
+        apiClient.test_simulateResponse(.success(dummyPayload(with: cid, messages: midPageMessages)))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        let channel = try XCTUnwrap(
+            try database.viewContext.channel(cid: cid)?.asModel()
+        )
+        // The channel preview must still surface the actually latest messages,
+        // not the mid-page slice that the active controller is paginating.
+        let expectedLatestIds = (0..<channel.latestMessages.count).map { "latest-\($0)" }
+        XCTAssertEqual(channel.latestMessages.map(\.id), expectedLatestIds)
+    }
+
+    func test_updateChannelQuery_whenIsJumpingToMessage_thenMessageObserverDropsOutOfBoundsMessages() throws {
+        let cid = ChannelId(type: .messaging, id: .unique)
+
+        // Cache the channel's newest 5 messages (the channel has been previously
+        // synchronized from the latest page). After the mid-page jump these will be
+        // newer than the new `newestMessageAt`, i.e. outside the active page.
+        let latestMessages: [MessagePayload] = (0..<5).map { offset in
+            .dummy(
+                messageId: "latest-\(offset)",
+                createdAt: Date().addingTimeInterval(-Double(offset))
+            )
+        }
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: self.dummyPayload(
+                with: cid,
+                messages: latestMessages
+            ))
+        }
+
+        // Same observer the UIKit `ChatChannelController` and the state-layer `Chat`
+        // use for the active page. Wiring it here lets us assert the FRC actually
+        // drops out-of-bounds messages after a mid-page jump.
+        let observer = BackgroundListDatabaseObserver<ChatMessage, MessageDTO>(
+            database: database,
+            fetchRequest: MessageDTO.messagesFetchRequest(
+                for: cid,
+                pageSize: .messagesPageSize,
+                sortAscending: false,
+                shouldShowShadowedMessages: false
+            ),
+            itemCreator: { try $0.asModel() }
+        )
+        try observer.startObserving()
+        AssertAsync.willBeEqual(observer.items.count, 5)
+
+        // Simulate a mid-page jump that lands on messages much older than the cached
+        // newest slice, so the new `(oldestMessageAt, newestMessageAt)` window does
+        // not contain any of the previously-cached messages.
+        let midPageBaseDate = Date().addingTimeInterval(-3600)
+        let midPageMessages: [MessagePayload] = (0..<5).map { offset in
+            .dummy(
+                messageId: "mid-\(offset)",
+                createdAt: midPageBaseDate.addingTimeInterval(-Double(offset))
+            )
+        }
+        // The mock pagination handler's `end` is a no-op; pre-set the state so the
+        // updater writes the mid-page bounds onto the channel.
+        paginationStateHandler.mockState.oldestFetchedMessage = midPageMessages.last
+        paginationStateHandler.mockState.newestFetchedMessage = midPageMessages.first
+
+        let query = ChannelQuery(cid: cid, paginationParameter: .around(.unique))
+        let expectation = self.expectation(description: "Update completes")
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false, completion: { _ in
+            expectation.fulfill()
+        })
+        apiClient.test_simulateResponse(.success(dummyPayload(with: cid, messages: midPageMessages)))
+        waitForExpectations(timeout: defaultTimeout)
+
+        // The cached newest 5 messages remain linked to the channel — that is what
+        // keeps `channel.latestMessages` correct for the channel-list preview.
+        let channelDTO = try XCTUnwrap(database.viewContext.channel(cid: cid))
+        XCTAssertEqual(channelDTO.messages.count, latestMessages.count + midPageMessages.count)
+
+        // But the active-page observer must only see the mid-page slice. Without the
+        // bounds-change nudge in `ChannelUpdater.update`, the FRC would still hold the
+        // 5 previously-cached messages (FRC does not re-evaluate cached rows when
+        // only the parent channel's `oldestMessageAt`/`newestMessageAt` change).
+        AssertAsync.willBeEqual(observer.items.count, midPageMessages.count)
+        XCTAssertTrue(observer.items.allSatisfy { $0.id.hasPrefix("mid-") })
+    }
+
+    func test_updateChannelQuery_whenIsJumpingToMessage_whenRequestFails_thenDoesNotDeleteMessages() throws {
+        let cid = ChannelId(type: .messaging, id: .unique)
+        let query = ChannelQuery(cid: cid, paginationParameter: .around(.unique))
+
+        let previousMessagesCount = 10
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: self.dummyPayload(
+                with: cid, numberOfMessages: previousMessagesCount
+            ))
+        }
+
+        let expectation = self.expectation(description: "Update completes")
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false, completion: { _ in
+            expectation.fulfill()
+        })
+
+        apiClient.test_simulateResponse(Result<ChannelPayload, Error>.failure(ClientError("fake")))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        let channel = try XCTUnwrap(database.viewContext.channel(cid: cid))
+        XCTAssertEqual(channel.messages.count, previousMessagesCount)
+    }
+
+    // MARK: - Stale mid-page state cleanup
+
+    // Verified by driving the public `update(channelQuery:isInRecoveryMode:)` entry point: the
+    // cleanup runs synchronously at the top of `update` before the network request is dispatched
+    // to the API spy, so we can assert immediately after the call without simulating a response.
+
+    func test_updateChannelQuery_whenChannelHasStaleMidPageState_clearsCacheBeforeFetching() throws {
+        let cid = ChannelId(type: .messaging, id: .unique)
+        try database.writeSynchronously { session in
+            let payload = self.dummyPayload(with: cid, numberOfMessages: 5)
+            let channelDTO = try session.saveChannel(payload: payload)
+            channelDTO.oldestMessageAt = .init(timeIntervalSinceNow: -200)
+            channelDTO.newestMessageAt = .init(timeIntervalSinceNow: -100)
+        }
+
+        channelUpdater.update(channelQuery: ChannelQuery(cid: cid), isInRecoveryMode: false)
+
+        try database.readSynchronously { session in
+            let dto = try XCTUnwrap(session.channel(cid: cid))
+            XCTAssertEqual(dto.messages.count, 0)
+            XCTAssertNil(dto.oldestMessageAt)
+            XCTAssertNil(dto.newestMessageAt)
+        }
+    }
+
+    func test_updateChannelQuery_whenChannelHasNoStaleMidPageState_keepsLocalCache() throws {
+        let cid = ChannelId(type: .messaging, id: .unique)
+        try database.writeSynchronously { session in
+            let payload = self.dummyPayload(with: cid, numberOfMessages: 5)
+            let channelDTO = try session.saveChannel(payload: payload)
+            channelDTO.newestMessageAt = nil
+        }
+
+        channelUpdater.update(channelQuery: ChannelQuery(cid: cid), isInRecoveryMode: false)
+
+        try database.readSynchronously { session in
+            let dto = try XCTUnwrap(session.channel(cid: cid))
+            XCTAssertEqual(dto.messages.count, 5)
+        }
+    }
+
+    func test_updateChannelQuery_whenInRecoveryMode_keepsLocalCacheEvenIfMidPageStateIsStale() throws {
+        let cid = ChannelId(type: .messaging, id: .unique)
+        try database.writeSynchronously { session in
+            let payload = self.dummyPayload(with: cid, numberOfMessages: 5)
+            let channelDTO = try session.saveChannel(payload: payload)
+            channelDTO.newestMessageAt = .init(timeIntervalSinceNow: -100)
+        }
+
+        channelUpdater.update(channelQuery: ChannelQuery(cid: cid), isInRecoveryMode: true)
+
+        try database.readSynchronously { session in
+            let dto = try XCTUnwrap(session.channel(cid: cid))
+            XCTAssertEqual(dto.messages.count, 5)
+            XCTAssertNotNil(dto.newestMessageAt)
+        }
+    }
+
+    func test_updateChannelQuery_whenPaginationParameterIsSet_keepsLocalCacheEvenIfMidPageStateIsStale() throws {
+        let cid = ChannelId(type: .messaging, id: .unique)
+        try database.writeSynchronously { session in
+            let payload = self.dummyPayload(with: cid, numberOfMessages: 5)
+            let channelDTO = try session.saveChannel(payload: payload)
+            channelDTO.newestMessageAt = .init(timeIntervalSinceNow: -100)
+        }
+
+        // A query with a pagination parameter is NOT a fresh first-page fetch.
+        let query = ChannelQuery(cid: cid, paginationParameter: .around(.unique))
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false)
+
+        try database.readSynchronously { session in
+            let dto = try XCTUnwrap(session.channel(cid: cid))
+            XCTAssertEqual(dto.messages.count, 5)
+            XCTAssertNotNil(dto.newestMessageAt)
+        }
+    }
+
     // MARK: - Messages
-    
+
     func test_createNewMessage() throws {
         // Prepare the current user and channel first
         let cid: ChannelId = .unique
         let currentUserId: UserId = .unique
-        
+
         _ = try waitFor { completion in
             database.write({ (session) in
                 let currentUserPayload: CurrentUserPayload = .dummy(
@@ -443,12 +820,12 @@ final class ChannelUpdater_Tests: XCTestCase {
                 )
 
                 try session.saveCurrentUser(payload: currentUserPayload)
-                
+
                 try session.saveChannel(payload: self.dummyPayload(with: cid))
-                
+
             }, completion: completion)
         }
-        
+
         // New message values
         let text: String = .unique
         let command: String = .unique
@@ -466,36 +843,48 @@ final class ChannelUpdater_Tests: XCTestCase {
         ]
 
         // Create new message
-        let newMessageId: MessageId = try waitFor { completion in
+        let newMessage: ChatMessage = try waitFor { completion in
             channelUpdater.createNewMessage(
                 in: cid,
+                messageId: .unique,
                 text: text,
                 pinning: MessagePinning(expirationDate: .unique),
                 isSilent: false,
+                isSystem: false,
                 command: command,
                 arguments: arguments,
                 attachments: attachmentEnvelopes,
                 mentionedUserIds: [currentUserId],
                 quotedMessageId: nil,
+                skipPush: true,
+                skipEnrichUrl: true,
                 extraData: extraData
             ) { result in
                 do {
-                    let newMessageId = try result.get()
-                    completion(newMessageId)
+                    let newMessage = try result.get()
+                    completion(newMessage)
                 } catch {
                     XCTFail("Saving the message failed. \(error)")
                 }
             }
         }
 
-        func id(for envelope: AnyAttachmentPayload) -> AttachmentId {
-            .init(cid: cid, messageId: newMessageId, index: attachmentEnvelopes.firstIndex(of: envelope)!)
-        }
-        
-        let message: ChatMessage = try XCTUnwrap(
-            database.viewContext.message(id: newMessageId)?.asModel()
-        )
+        // Make sure when creating a new message, the cid is locally available.
+        XCTAssertNotNil(newMessage.cid)
 
+        func id(for envelope: AnyAttachmentPayload) -> AttachmentId {
+            .init(cid: cid, messageId: newMessage.id, index: attachmentEnvelopes.firstIndex(of: envelope)!)
+        }
+
+        let messageDTO: MessageDTO = try XCTUnwrap(
+            database.viewContext.message(id: newMessage.id)
+        )
+        XCTAssertEqual(messageDTO.skipPush, true)
+        XCTAssertEqual(messageDTO.skipEnrichUrl, true)
+        XCTAssertEqual(messageDTO.mentionedUserIds, [currentUserId])
+        XCTAssertEqual(messageDTO.type, "regular")
+
+        let message = try messageDTO.asModel()
         XCTAssertEqual(message.text, text)
         XCTAssertEqual(message.command, command)
         XCTAssertEqual(message.arguments, arguments)
@@ -506,19 +895,18 @@ final class ChannelUpdater_Tests: XCTestCase {
             message.attachments(payloadType: TestAttachmentPayload.self),
             [customAttachmentEnvelope.attachment(id: id(for: customAttachmentEnvelope))]
         )
-        
+
         XCTAssertEqual(message.extraData, [:])
         XCTAssertEqual(message.localState, .pendingSend)
         XCTAssertEqual(message.isPinned, true)
         XCTAssertEqual(message.isSilent, false)
-        XCTAssertEqual(message.mentionedUsers.map(\.id), [currentUserId])
     }
-    
+
     func test_createNewMessage_propagatesErrorWhenSavingFails() throws {
         // Prepare the current user and channel first
         let cid: ChannelId = .unique
         let currentUserId: UserId = .unique
-        
+
         _ = try waitFor { completion in
             database.write({ (session) in
                 let currentUserPayload: CurrentUserPayload = .dummy(
@@ -528,94 +916,404 @@ final class ChannelUpdater_Tests: XCTestCase {
                 )
 
                 try session.saveCurrentUser(payload: currentUserPayload)
-                
+
                 try session.saveChannel(payload: self.dummyPayload(with: cid))
-                
+
             }, completion: completion)
         }
 
         // Simulate the DB failing with `TestError`
         let testError = TestError()
         database.write_errorResponse = testError
-        
-        let result: Result<MessageId, Error> = try waitFor { completion in
+
+        let result: Result<ChatMessage, Error> = try waitFor { completion in
             channelUpdater.createNewMessage(
                 in: .unique,
+                messageId: .unique,
                 text: .unique,
                 isSilent: false,
+                isSystem: false,
                 command: .unique,
                 arguments: .unique,
                 mentionedUserIds: [.unique],
                 quotedMessageId: nil,
+                skipPush: false,
+                skipEnrichUrl: false,
                 extraData: [:]
             ) { completion($0) }
         }
-        
+
         AssertResultFailure(result, testError)
     }
-    
+
     // MARK: - Update channel
 
     func test_updateChannel_makesCorrectAPICall() {
-        let channelPayload: ChannelEditDetailPayload = .unique
+        let cid = ChannelId.unique
+        let name: String = .unique
 
-        // Simulate `updateChannel(channelPayload:, completion:)` call
-        channelUpdater.updateChannel(channelPayload: channelPayload)
+        // Simulate `updateChannel(cid:..., completion:)` call
+        updateChannel(cid: cid, name: name)
+        apiClient.waitForRequest()
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .updateChannel(channelPayload: channelPayload)
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: cid.type.rawValue,
+            id: cid.id,
+            updateChannelRequest: UpdateChannelRequest(data: ChannelInputRequest(custom: ["name": .string(name)]))
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(cid.type.rawValue)/\(cid.id)")
+    }
+
+    func test_updateChannel_whenChannelIsStored_sendsStoredStateAndTeam() throws {
+        let cid = ChannelId.unique
+        try database.writeSynchronously { session in
+            try session.saveChannel(
+                payload: .dummy(
+                    cid: cid,
+                    isFrozen: true,
+                    isDisabled: true,
+                    team: "red",
+                    autoTranslationEnabled: true,
+                    autoTranslationLanguage: "en,fr"
+                ),
+                query: nil,
+                cache: nil
+            )
+        }
+
+        updateChannel(cid: cid, name: "Updated")
+
+        let body = try XCTUnwrap(apiClient.waitForRequest()).bodyAsDictionary()
+        let data = try XCTUnwrap(body["data"] as? [String: Any])
+        XCTAssertEqual(data["auto_translation_enabled"] as? Bool, true)
+        XCTAssertEqual(data["auto_translation_language"] as? String, "en,fr")
+        XCTAssertEqual(data["disabled"] as? Bool, true)
+        XCTAssertEqual(data["frozen"] as? Bool, true)
+        XCTAssertEqual(data["team"] as? String, "red")
+    }
+
+    func test_updateChannel_whenTeamIsPassed_sendsPassedTeam() throws {
+        let cid = ChannelId.unique
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: cid, team: "red"), query: nil, cache: nil)
+        }
+
+        updateChannel(cid: cid, name: "Updated", team: "blue")
+
+        let body = try XCTUnwrap(apiClient.waitForRequest()).bodyAsDictionary()
+        let data = try XCTUnwrap(body["data"] as? [String: Any])
+        XCTAssertEqual(data["team"] as? String, "blue")
+    }
+
+    func test_updateChannel_whenAutoTranslationLanguagesArePassed_sendsPassedLanguages() throws {
+        let cid = ChannelId.unique
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: cid, autoTranslationLanguage: "de"), query: nil, cache: nil)
+        }
+
+        updateChannel(cid: cid, autoTranslationLanguages: [.french, .english])
+
+        let body = try XCTUnwrap(apiClient.waitForRequest()).bodyAsDictionary()
+        let data = try XCTUnwrap(body["data"] as? [String: Any])
+        XCTAssertEqual(data["auto_translation_language"] as? String, "en,fr")
+    }
+
+    func test_updateChannel_whenAutoTranslationLanguagesAreEmpty_removesLanguages() throws {
+        let cid = ChannelId.unique
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: cid, autoTranslationLanguage: "de"), query: nil, cache: nil)
+        }
+
+        updateChannel(cid: cid, autoTranslationLanguages: [])
+
+        let body = try XCTUnwrap(apiClient.waitForRequest()).bodyAsDictionary()
+        let data = try XCTUnwrap(body["data"] as? [String: Any])
+        XCTAssertEqual(data["auto_translation_language"] as? String, "")
+    }
+
+    func test_updateChannel_whenChannelIsNotStored_omitsStoredState() throws {
+        updateChannel()
+
+        let body = try XCTUnwrap(apiClient.waitForRequest()).bodyAsDictionary()
+        let data = try XCTUnwrap(body["data"] as? [String: Any])
+        XCTAssertNil(data["auto_translation_enabled"])
+        XCTAssertNil(data["auto_translation_language"])
+        XCTAssertNil(data["disabled"])
+        XCTAssertNil(data["frozen"])
+    }
+
+    func test_updateChannel_savesResponseChannelMembersAndMessage() throws {
+        let cid = ChannelId.unique
+        let memberId = UserId.unique
+        let systemMessage = MessagePayload.dummy(messageId: .unique, text: "Channel updated", cid: cid)
+        try database.createChannel(cid: cid, withMessages: false)
+        apiClient.test_mockResponseResult(
+            Result<UpdateChannelResponse, Error>.success(
+                .dummy(
+                    channel: .dummy(cid: cid, name: "Updated"),
+                    members: [.dummy(user: .dummy(userId: memberId))],
+                    message: systemMessage
+                )
+            )
+        )
+
+        let error: Error? = try waitFor { done in
+            updateChannel(cid: cid, name: "Updated", completion: done)
+        }
+        XCTAssertNil(error)
+
+        try database.readSynchronously { session in
+            XCTAssertEqual(session.channel(cid: cid)?.name, "Updated")
+            XCTAssertNotNil(session.member(userId: memberId, cid: cid))
+            XCTAssertEqual(session.message(id: systemMessage.id)?.text, "Channel updated")
+        }
     }
 
     func test_updateChannel_successfulResponse_isPropagatedToCompletion() {
-        // Simulate `updateChannel(channelPayload:, completion:)` call
-        var completionCalled = false
-        channelUpdater.updateChannel(channelPayload: .unique) { error in
+        // Simulate `updateChannel(cid:..., completion:)` call
+        nonisolated(unsafe) var completionCalled = false
+        updateChannel { error in
             XCTAssertNil(error)
             completionCalled = true
         }
+
+        apiClient.waitForRequest()
 
         // Assert completion is not called yet
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.success(.dummy()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
     }
 
     func test_updateChannel_errorResponse_isPropagatedToCompletion() {
-        // Simulate `updateChannel(channelPayload:, completion:)` call
-        var completionCalledError: Error?
-        channelUpdater.updateChannel(channelPayload: .unique) { completionCalledError = $0 }
+        // Simulate `updateChannel(cid:..., completion:)` call
+        nonisolated(unsafe) var completionCalledError: Error?
+        updateChannel { completionCalledError = $0 }
+        apiClient.waitForRequest()
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
     
+    func test_updateChannel_noPagination_clearsMembers() throws {
+        let context = database.backgroundReadOnlyContext
+        let cid = ChannelId.unique
+        try database.createChannel(cid: cid)
+        try database.createMember(cid: cid)
+        // Initially 2 members (one is created with the channel)
+        context.performAndWait {
+            let members = context.channel(cid: cid)?.members
+            XCTAssertEqual(2, members?.count)
+        }
+        
+        // Response has 1 member
+        let members = [MemberPayload.dummy()]
+        apiClient.test_mockResponseResult(
+            .success(
+                ChannelPayload.dummy(
+                    channel: .dummy(
+                        cid: cid,
+                        members: members
+                    ),
+                    members: members
+                )
+            )
+        )
+        
+        let query = ChannelQuery(cid: .unique)
+        let expectation = XCTestExpectation()
+        channelUpdater.update(channelQuery: query, isInRecoveryMode: false, completion: { _ in
+            expectation.fulfill()
+        })
+        wait(for: [expectation], timeout: defaultTimeout)
+        
+        context.performAndWait {
+            let dto = context.channel(cid: cid)
+            XCTAssertEqual(1, dto?.members.count)
+        }
+    }
+
+    // MARK: - Partial channel update
+
+    func test_partialChannelUpdate_makesCorrectAPICall() {
+        let cid = ChannelId.unique
+        let name: String = .unique
+        let unsetProperties: [String] = ["user.id", "channel_store"]
+
+        // Simulate `partialChannelUpdate(cid:..., unsetProperties:completion:)` call
+        partialChannelUpdate(cid: cid, name: name, unsetProperties: unsetProperties)
+
+        // Assert correct endpoint is called
+        let referenceEndpoint: Endpoint<UpdateChannelPartialResponse> = .updateChannelPartial(
+            type: cid.type.rawValue,
+            id: cid.id,
+            updateChannelPartialRequest: UpdateChannelPartialRequest(set: ["name": .string(name)], unset: unsetProperties)
+        )
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(cid.type.rawValue)/\(cid.id)")
+    }
+
+    func test_partialChannelUpdate_setsPassedFields() throws {
+        let member: UserId = .unique
+        let invite: UserId = .unique
+        channelUpdater.partialChannelUpdate(
+            cid: .unique,
+            name: "Updated",
+            imageURL: URL(string: "https://getstream.io/image.jpg"),
+            team: "red",
+            members: [member],
+            invites: [invite],
+            filterTags: ["vip"],
+            extraData: ["color": .string("blue")],
+            unsetProperties: []
+        )
+
+        let body = try XCTUnwrap(apiClient.request_endpoint).bodyAsDictionary()
+        let set = try XCTUnwrap(body["set"] as? [String: Any])
+        XCTAssertEqual(set["name"] as? String, "Updated")
+        XCTAssertEqual(set["image"] as? String, "https://getstream.io/image.jpg")
+        XCTAssertEqual(set["color"] as? String, "blue")
+        XCTAssertEqual(set["team"] as? String, "red")
+        XCTAssertEqual(set["filter_tags"] as? [String], ["vip"])
+        XCTAssertEqual(set["invites"] as? [String], [invite])
+        XCTAssertEqual(Set(set["members"] as? [String] ?? []), [member, invite])
+    }
+
+    func test_partialChannelUpdate_savesResponseChannelAndMembers() throws {
+        let cid = ChannelId.unique
+        let memberId = UserId.unique
+        try database.createChannel(cid: cid, withMessages: false)
+
+        let error: Error? = try waitFor { done in
+            partialChannelUpdate(cid: cid, name: "Updated", completion: done)
+            apiClient.test_simulateResponse(
+                Result<UpdateChannelPartialResponse, Error>.success(
+                    .dummy(
+                        channel: .dummy(cid: cid, name: "Updated"),
+                        members: [.dummy(user: .dummy(userId: memberId))]
+                    )
+                )
+            )
+        }
+        XCTAssertNil(error)
+
+        try database.readSynchronously { session in
+            XCTAssertEqual(session.channel(cid: cid)?.name, "Updated")
+            XCTAssertNotNil(session.member(userId: memberId, cid: cid))
+        }
+    }
+
+    func test_partialChannelUpdate_successfulResponse_isPropagatedToCompletion() {
+        // Simulate `partialChannelUpdate(cid:..., unsetProperties:completion:)` call
+        nonisolated(unsafe) var receivedError: Error?
+        let expectation = self.expectation(description: "partialChannelUpdate completion")
+        partialChannelUpdate { error in
+            receivedError = error
+            expectation.fulfill()
+        }
+
+        // Simulate API response with success
+        apiClient.test_simulateResponse(Result<UpdateChannelPartialResponse, Error>.success(.dummy()))
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertNil(receivedError)
+    }
+
+    func test_partialChannelUpdate_errorResponse_isPropagatedToCompletion() {
+        // Simulate `partialChannelUpdate(cid:..., unsetProperties:completion:)` call
+        nonisolated(unsafe) var receivedError: Error?
+        let expectation = self.expectation(description: "partialChannelUpdate completion")
+        partialChannelUpdate { error in
+            receivedError = error
+            expectation.fulfill()
+        }
+
+        // Simulate API response with failure
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<UpdateChannelPartialResponse, Error>.failure(error))
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertEqual(receivedError, error)
+    }
+
     // MARK: - Mute channel
 
     func test_muteChannel_makesCorrectAPICall() {
         let channelID = ChannelId.unique
-        let mute = true
 
-        // Simulate `muteChannel(cid:, mute:, completion:)` call
-        channelUpdater.muteChannel(cid: channelID, mute: mute)
+        // Simulate `muteChannel()` call
+        channelUpdater.muteChannel(cid: channelID)
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .muteChannel(cid: channelID, mute: mute)
+        let referenceEndpoint: Endpoint<MutedChannelPayloadResponse> = .muteChannel(
+            muteChannelRequest: .init(channelCids: [channelID.rawValue])
+        )
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+    }
+    
+    func test_muteChannelWithExpiration_makesCorrectAPICall() {
+        let channelID = ChannelId.unique
+        let expiration = 1_000_000
+
+        // Simulate `muteChannel(cid:, mute:, completion:)` call
+        channelUpdater.muteChannel(cid: channelID, expiration: expiration)
+
+        // Assert correct endpoint is called
+        let referenceEndpoint: Endpoint<MutedChannelPayloadResponse> = .muteChannel(
+            muteChannelRequest: .init(channelCids: [channelID.rawValue], expiration: expiration)
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
 
-    func test_muteChannel_successfulResponse_isPropagatedToCompletion() {
-        // Simulate `muteChannel(cid:, mute:, completion:)` call
-        var completionCalled = false
-        channelUpdater.muteChannel(cid: .unique, mute: true) { error in
+    func test_muteChannel_successfulResponse_isPropagatedToCompletion() throws {
+        // Pre-save channel and current user
+        let cid = ChannelId.unique
+        try database.writeSynchronously { session in
+            try session.saveCurrentUser(payload: .dummy(userId: .unique, role: .admin))
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid)))
+        }
+
+        // Simulate `muteChannel(cid:, completion:)` call
+        let exp = expectation(description: "muteChannel completion")
+        channelUpdater.muteChannel(cid: cid) { error in
+            XCTAssertNil(error)
+            exp.fulfill()
+        }
+
+        // Simulate API response with success
+        apiClient.test_simulateResponse(
+            Result<MutedChannelPayloadResponse, Error>.success(
+                .init(
+                    channelMute: .init(
+                        mutedChannel: .dummy(cid: cid),
+                        user: .dummy(userId: .unique),
+                        createdAt: .unique,
+                        updatedAt: .unique
+                    )
+                )
+            )
+        )
+
+        waitForExpectations(timeout: defaultTimeout)
+        XCTAssert(database.viewContext.channel(cid: cid)?.mute != nil)
+    }
+    
+    func test_muteChannelWithExpiration_successfulResponse_isPropagatedToCompletion() {
+        let expiration = 1_000_000
+        
+        // Simulate `muteChannel(cid:, completion:, expiration:)` call
+        nonisolated(unsafe) var completionCalled = false
+        channelUpdater.muteChannel(cid: .unique, expiration: expiration) { error in
             XCTAssertNil(error)
             completionCalled = true
         }
@@ -624,20 +1322,114 @@ final class ChannelUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(
+            Result<MutedChannelPayloadResponse, Error>.success(
+                .init(
+                    channelMute: .init(
+                        mutedChannel: .dummy(),
+                        user: .dummy(userId: .unique),
+                        createdAt: .unique,
+                        updatedAt: .unique
+                    )
+                )
+            )
+        )
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
     }
 
     func test_muteChannel_errorResponse_isPropagatedToCompletion() {
-        // Simulate `muteChannel(cid:, mute:, completion:)` call
-        var completionCalledError: Error?
-        channelUpdater.muteChannel(cid: .unique, mute: true) { completionCalledError = $0 }
+        // Simulate `muteChannel(cid:, completion:)` call
+        nonisolated(unsafe) var completionCalledError: Error?
+        channelUpdater.muteChannel(cid: .unique) { completionCalledError = $0 }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<MutedChannelPayloadResponse, Error>.failure(error))
+
+        // Assert the completion is called with the error
+        AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+    }
+    
+    func test_muteChannelWithExpiration_errorResponse_isPropagatedToCompletion() {
+        let expiration = 1_000_000
+        
+        // Simulate `muteChannel(cid:, completion:, expiration:)` call
+        nonisolated(unsafe) var completionCalledError: Error?
+        channelUpdater.muteChannel(cid: .unique, expiration: expiration) { completionCalledError = $0 }
+
+        // Simulate API response with failure
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<MutedChannelPayloadResponse, Error>.failure(error))
+
+        // Assert the completion is called with the error
+        AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+    }
+
+    // MARK: - Unmute channel
+
+    func test_unmuteChannel_makesCorrectAPICall() {
+        let channelID = ChannelId.unique
+
+        // Simulate `unmuteChannel(cid:, completion:)` call
+        channelUpdater.unmuteChannel(cid: channelID)
+
+        // Assert correct endpoint is called
+        let referenceEndpoint: Endpoint<UnmuteUsersResponse> = .unmuteChannel(
+            unmuteChannelRequest: .init(channelCids: [channelID.rawValue])
+        )
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+    }
+
+    func test_unmuteChannel_successfulResponse_isPropagatedToCompletion() throws {
+        // Pre-save muted channel
+        let cid = ChannelId.unique
+        try database.writeSynchronously { session in
+            let userId = UserId.unique
+            try session.saveCurrentUser(payload: .dummy(userId: userId, role: .admin))
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid)))
+            try session.saveChannelMute(
+                payload: .init(
+                    mutedChannel: .dummy(cid: cid),
+                    user: .dummy(userId: userId),
+                    createdAt: .unique,
+                    updatedAt: .unique
+                )
+            )
+        }
+        XCTAssertEqual(try? database.viewContext.channel(cid: cid)?.asModel().isMuted, true)
+
+        // Simulate `unmuteChannel(cid:, completion:)` call
+        nonisolated(unsafe) var completionCalled = false
+        channelUpdater.unmuteChannel(cid: cid) { error in
+            XCTAssertNil(error)
+            completionCalled = true
+        }
+
+        // Assert completion is not called yet
+        XCTAssertFalse(completionCalled)
+
+        // Simulate API response with success
+        apiClient.test_simulateResponse(Result<UnmuteUsersResponse, Error>.success(.init()))
+
+        // Assert completion is called
+        AssertAsync.willBeTrue(completionCalled)
+        // Assert the channel is unmuted in the DB
+        AssertAsync.willBeEqual(
+            try? database.viewContext.channel(cid: cid)?.asModel().isMuted,
+            false
+        )
+    }
+
+    func test_unmuteChannel_errorResponse_isPropagatedToCompletion() {
+        // Simulate `unmuteChannel(cid:, completion:)` call
+        nonisolated(unsafe) var completionCalledError: Error?
+        channelUpdater.unmuteChannel(cid: .unique) { completionCalledError = $0 }
+
+        // Simulate API response with failure
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<UnmuteUsersResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
@@ -652,13 +1444,17 @@ final class ChannelUpdater_Tests: XCTestCase {
         channelUpdater.deleteChannel(cid: channelID)
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .deleteChannel(cid: channelID)
+        let referenceEndpoint: Endpoint<DeleteChannelResponse> = .deleteChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            hardDelete: nil
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
 
     func test_deleteChannel_successfulResponse_isPropagatedToCompletion() {
         // Simulate `deleteChannel(cid:, completion:)` call
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         channelUpdater.deleteChannel(cid: .unique) { error in
             XCTAssertNil(error)
             completionCalled = true
@@ -668,7 +1464,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<DeleteChannelResponse, Error>.success(.dummy()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
@@ -676,19 +1472,19 @@ final class ChannelUpdater_Tests: XCTestCase {
 
     func test_deleteChannel_errorResponse_isPropagatedToCompletion() {
         // Simulate `deleteChannel(cid:, completion:)` call
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.deleteChannel(cid: .unique) { completionCalledError = $0 }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<DeleteChannelResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
 
     // MARK: - Truncate channel
-    
+
     func test_truncateChannel_makesCorrectAPICallWithoutMessage() {
         let channelID = ChannelId.unique
         let skipPush = true
@@ -703,11 +1499,10 @@ final class ChannelUpdater_Tests: XCTestCase {
         )
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .truncateChannel(
-            cid: channelID,
-            skipPush: skipPush,
-            hardDelete: hardDelete,
-            message: nil
+        let referenceEndpoint: Endpoint<TruncateChannelResponse> = .truncateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            truncateChannelRequest: .init(hardDelete: hardDelete, skipPush: skipPush)
         )
 
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
@@ -715,15 +1510,6 @@ final class ChannelUpdater_Tests: XCTestCase {
 
     func test_truncateChannel_makesCorrectAPICallWithMessage() throws {
         // GIVEN
-        let currentUserId: UserId = .unique
-        let currentUserName = "John"
-        try channelUpdater.database.createCurrentUser(id: currentUserId, name: currentUserName)
-        let currentUser: UserRequestBody = .dummy(
-            userId: currentUserId,
-            name: currentUserName,
-            imageURL: nil
-        )
-
         let channelID = ChannelId.unique
         let skipPush = true
         let hardDelete = true
@@ -735,59 +1521,56 @@ final class ChannelUpdater_Tests: XCTestCase {
             cid: channelID,
             skipPush: skipPush,
             hardDelete: hardDelete,
-            systemMessage: systemMessage
+            systemMessage: SystemMessage(text: systemMessage)
         )
 
         // THEN
         AssertAsync { [unowned self] in
             // Assert correct endpoint is called
             Assert.willBeEqual(self.apiClient.request_endpoint, AnyEndpoint(.truncateChannel(
-                cid: channelID,
-                skipPush: skipPush,
-                hardDelete: hardDelete,
-                message: MessageRequestBody(
-                    // inject generated message id
-                    id: (
-                        self.apiClient
-                            .request_endpoint?.body?
-                            .encodable as? ChannelTruncateRequestPayload
-                    )?
-                        .message?.id ?? "id",
-                    user: currentUser,
-                    text: systemMessage,
-                    extraData: [:]
+                type: channelID.type.rawValue,
+                id: channelID.id,
+                truncateChannelRequest: .init(
+                    hardDelete: hardDelete,
+                    message: MessageRequest(
+                        custom: [:],
+                        // inject generated message id
+                        id: (
+                            self.apiClient
+                                .request_endpoint?.body?
+                                .encodable as? TruncateChannelRequest
+                        )?
+                            .message?.id ?? "id",
+                        text: systemMessage
+                    ),
+                    skipPush: skipPush
                 )
             )))
         }
     }
-    
-    func test_truncateChannel_failsAPICallWithMessageWhenNoCurrentUser() throws {
-        // GIVEN
-        let expectation = expectation(description: "When no current user is provided, truncate channel with system message fails")
-        let channelID = ChannelId.unique
-        let skipPush = true
-        let hardDelete = true
-        let systemMessage = "System message"
 
-        // WHEN
-        // Simulate `truncateChannel(cid:, completion:)` call
-        channelUpdater.truncateChannel(
-            cid: channelID,
-            skipPush: skipPush,
-            hardDelete: hardDelete,
-            systemMessage: systemMessage
-        ) { error in
-            // THEN
-            XCTAssertNotNil(error)
-            expectation.fulfill()
+    func test_truncateChannel_makesCorrectAPICallWithSystemMessageExtraData() throws {
+        let systemMessage = SystemMessage(text: "System message", extraData: ["warning": .bool(true)])
+
+        // Simulate `truncateChannel` call with a system message carrying extra data
+        channelUpdater.truncateChannel(cid: .unique, systemMessage: systemMessage)
+
+        // Assert the truncate message payload carries the system message text and extra data
+        AssertAsync { [unowned self] in
+            Assert.willBeEqual(
+                (self.apiClient.request_endpoint?.body?.encodable as? TruncateChannelRequest)?.message?.text,
+                systemMessage.text
+            )
+            Assert.willBeEqual(
+                (self.apiClient.request_endpoint?.body?.encodable as? TruncateChannelRequest)?.message?.custom,
+                systemMessage.extraData
+            )
         }
-                                       
-        wait(for: [expectation], timeout: 5.0)
     }
 
     func test_truncateChannel_successfulResponse_isPropagatedToCompletion() {
         // Simulate `truncateChannel(cid:, completion:)` call
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         channelUpdater.truncateChannel(cid: .unique) { error in
             XCTAssertNil(error)
             completionCalled = true
@@ -797,7 +1580,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<TruncateChannelResponse, Error>.success(.dummy()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
@@ -805,15 +1588,42 @@ final class ChannelUpdater_Tests: XCTestCase {
 
     func test_truncateChannel_errorResponse_isPropagatedToCompletion() {
         // Simulate `truncateChannel(cid:, completion:)` call
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.truncateChannel(cid: .unique) { completionCalledError = $0 }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<TruncateChannelResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+    }
+
+    func test_truncateChannel_savesResponseChannelAndMessage() throws {
+        let cid = ChannelId.unique
+        let truncatedAt = Date().addingTimeInterval(-10)
+        let systemMessage = MessagePayload.dummy(messageId: .unique, text: "Channel truncated", cid: cid)
+
+        try database.createChannel(cid: cid, withMessages: false)
+
+        let error: Error? = try waitFor { done in
+            channelUpdater.truncateChannel(cid: cid, systemMessage: SystemMessage(text: "Channel truncated"), completion: done)
+            apiClient.test_simulateResponse(
+                Result<TruncateChannelResponse, Error>.success(
+                    .dummy(
+                        channel: .dummy(cid: cid, truncatedAt: truncatedAt),
+                        message: systemMessage
+                    )
+                )
+            )
+        }
+        XCTAssertNil(error)
+
+        // The response channel sets `truncatedAt` and the system message is persisted
+        try database.readSynchronously { session in
+            XCTAssertNearlySameDate(session.channel(cid: cid)?.truncatedAt?.bridgeDate, truncatedAt)
+            XCTAssertEqual(session.message(id: systemMessage.id)?.text, "Channel truncated")
+        }
     }
 
     // MARK: - Hide channel
@@ -826,12 +1636,15 @@ final class ChannelUpdater_Tests: XCTestCase {
         channelUpdater.hideChannel(cid: channelID, clearHistory: clearHistory)
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .hideChannel(cid: channelID, clearHistory: clearHistory)
+        let referenceEndpoint: Endpoint<EmptyResponse> = .hideChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            hideChannelRequest: .init(clearHistory: clearHistory)
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
 
-    // TODO: Disabling flaky test temporarily
-    func _test_hideChannel_successfulResponse_isPropagatedToCompletion() throws {
+    func test_hideChannel_successfulResponse_isPropagatedToCompletion() throws {
         // This part is for the case where the channel is already hidden on backend
         // But SDK is not aware of this (so channel.hiddenAt is not set)
         // Consecutive `hideChannel` calls won't generate `channel.hidden` events
@@ -840,16 +1653,16 @@ final class ChannelUpdater_Tests: XCTestCase {
 
         // Create a channel in DB
         let cid = ChannelId.unique
-        
+
         try database.writeSynchronously {
             try $0.saveChannel(payload: self.dummyPayload(with: cid))
         }
-        
+
         var channel: ChannelDTO? { database.viewContext.channel(cid: cid) }
-        
+
         // Assert that channel is not hidden
         XCTAssertEqual(channel?.isHidden, false)
-        
+
         // Simulate `hideChannel(cid:, clearHistory:, completion:)` call
         let exp = expectation(description: "should hide channel")
         channelUpdater.hideChannel(cid: cid, clearHistory: true) { error in
@@ -860,8 +1673,9 @@ final class ChannelUpdater_Tests: XCTestCase {
         // Simulate API response with success
         apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
 
-        wait(for: [exp], timeout: 5)
-        
+        // In this case, timeout `10` should be used for both local and CI runs
+        wait(for: [exp], timeout: 10)
+
         // Ensure channel is marked as hidden
         XCTAssertEqual(channel?.isHidden, true)
     }
@@ -869,20 +1683,20 @@ final class ChannelUpdater_Tests: XCTestCase {
     func test_hideChannel_errorResponse_isPropagatedToCompletion() throws {
         // Create a channel in DB
         let cid = ChannelId.unique
-        
+
         try database.writeSynchronously {
             try $0.saveChannel(payload: self.dummyPayload(with: cid))
         }
-        
+
         var channel: ChannelDTO? {
             database.viewContext.channel(cid: cid)
         }
-        
+
         // Assert that channel is not hidden
         XCTAssertEqual(channel?.isHidden, false)
-        
+
         // Simulate `hideChannel(cid:, clearHistory:, completion:)` call
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.hideChannel(cid: .unique, clearHistory: true) { completionCalledError = $0 }
 
         // Simulate API response with failure
@@ -891,7 +1705,7 @@ final class ChannelUpdater_Tests: XCTestCase {
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
-        
+
         // Assert that channel is not hidden
         XCTAssertEqual(channel?.isHidden, false)
     }
@@ -905,13 +1719,16 @@ final class ChannelUpdater_Tests: XCTestCase {
         channelUpdater.showChannel(cid: channelID)
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .showChannel(cid: channelID)
+        let referenceEndpoint: Endpoint<EmptyResponse> = .showChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
 
     func test_showChannel_successfulResponse_isPropagatedToCompletion() {
         // Simulate `showChannel(cid:)` call
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         channelUpdater.showChannel(cid: .unique) { error in
             XCTAssertNil(error)
             completionCalled = true
@@ -929,7 +1746,7 @@ final class ChannelUpdater_Tests: XCTestCase {
 
     func test_showChannel_errorResponse_isPropagatedToCompletion() {
         // Simulate `showChannel(cid:)` call
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.showChannel(cid: .unique) { completionCalledError = $0 }
 
         // Simulate API response with failure
@@ -940,6 +1757,37 @@ final class ChannelUpdater_Tests: XCTestCase {
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
     
+    // MARK: - Load Members
+    
+    func test_loadMembersWithReads_makesCorrectAPICall() async throws {
+        let channelID = ChannelId.unique
+        let membersPagination = Pagination(pageSize: 25)
+        try database.createChannel(cid: channelID)
+        
+        // Dummy response for exiting the API call
+        apiClient.test_mockResponseResult(.success(ChannelPayload.dummy()))
+        
+        let result = try await channelUpdater.loadMembersWithReads(
+            in: channelID,
+            membersPagination: membersPagination,
+            memberListSorting: []
+        )
+        XCTAssertEqual(0, result.count)
+        
+        // Assert correct endpoint is called
+        var expectedQuery = ChannelQuery(
+            cid: channelID,
+            pageSize: 0,
+            messagesPagination: MessagesPagination(pageSize: 0), // avoid default set of messages
+            membersPagination: membersPagination,
+            watchersLimit: 0 // avoid default set of watchers
+        )
+        expectedQuery.options = .state
+        let referenceEndpoint = expectedQuery.endpoint
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(expectedQuery.type.rawValue)/\(try XCTUnwrap(expectedQuery.id))/query")
+    }
+
     // MARK: - Add members
 
     func test_addMembers_makesCorrectAPICall() {
@@ -947,20 +1795,166 @@ final class ChannelUpdater_Tests: XCTestCase {
         let userIds: Set<UserId> = Set([UserId.unique])
 
         // Simulate `addMembers(cid:, mute:, userIds:)` call
-        channelUpdater.addMembers(cid: channelID, userIds: userIds, hideHistory: false)
+        channelUpdater.addMembers(
+            cid: channelID,
+            members: userIds.map { MemberInfo(userId: $0, extraData: nil) },
+            hideHistory: false
+        )
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .addMembers(cid: channelID, userIds: userIds, hideHistory: false)
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(
+                addMembers: userIds.map { ChannelMemberRequest(userId: $0) },
+                hideHistory: false
+            )
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(channelID.type.rawValue)/\(channelID.id)")
+    }
+    
+    func test_addMembers_withChannelRoleAndExtraData_forwardsThemInRequest() {
+        let channelID = ChannelId.unique
+        let userId = UserId.unique
+
+        channelUpdater.addMembers(
+            cid: channelID,
+            members: [MemberInfo(userId: userId, channelRole: .moderator, extraData: ["department": .string("support")])],
+            hideHistory: false
+        )
+
+        let body = apiClient.request_endpoint?.body?.encodable as? UpdateChannelRequest
+        XCTAssertEqual(body?.addMembers?.count, 1)
+        XCTAssertEqual(body?.addMembers?.first?.userId, userId)
+        XCTAssertEqual(body?.addMembers?.first?.channelRole, "channel_moderator")
+        XCTAssertEqual(body?.addMembers?.first?.custom, ["department": .string("support")])
+    }
+
+    func test_addMembersWithMessage_makesCorrectAPICall() {
+        let channelID = ChannelId.unique
+        let userIds: Set<UserId> = Set([UserId.unique])
+        let message: String = "Someone joined the channel"
+
+        // Simulate `addMembers(cid:, mute:, userIds:)` call
+        channelUpdater.addMembers(
+            cid: channelID,
+            members: userIds.map { MemberInfo(userId: $0, extraData: nil) },
+            systemMessage: SystemMessage(text: message),
+            hideHistory: false
+        )
+        
+        let body = apiClient.request_endpoint?.body?.encodable as? UpdateChannelRequest
+        let messageId = body?.message?.id ?? .newUniqueId
+        
+        // Assert correct endpoint is called
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(
+                addMembers: userIds.map { ChannelMemberRequest(userId: $0) },
+                hideHistory: false,
+                message: MessageRequest(custom: [:], id: messageId, text: message)
+            )
+        )
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+    }
+
+    func test_addMembersWithSystemMessageExtraData_makesCorrectAPICall() {
+        let channelID = ChannelId.unique
+        let userIds: Set<UserId> = Set([UserId.unique])
+        let systemMessage = SystemMessage(text: "Someone joined the channel", extraData: ["warning": .bool(true)])
+
+        // Simulate `addMembers` call with a system message carrying extra data
+        channelUpdater.addMembers(
+            cid: channelID,
+            members: userIds.map { MemberInfo(userId: $0, extraData: nil) },
+            systemMessage: systemMessage,
+            hideHistory: false
+        )
+
+        let body = apiClient.request_endpoint?.body?.encodable as? UpdateChannelRequest
+        let messageId = body?.message?.id ?? .newUniqueId
+
+        // Assert the message payload contains the system message extra data
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(
+                addMembers: userIds.map { ChannelMemberRequest(userId: $0) },
+                hideHistory: false,
+                message: MessageRequest(custom: ["warning": .bool(true)], id: messageId, text: systemMessage.text)
+            )
+        )
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+    }
+
+    func test_addMembersWithHideHistoryBefore_makesCorrectAPICall() {
+        let channelID = ChannelId.unique
+        let userIds: Set<UserId> = Set([UserId.unique])
+        let hideHistoryBefore = Date()
+
+        // Simulate `addMembers` call with hideHistoryBefore
+        channelUpdater.addMembers(
+            cid: channelID,
+            members: userIds.map { MemberInfo(userId: $0, extraData: nil) },
+            hideHistory: false,
+            hideHistoryBefore: hideHistoryBefore
+        )
+
+        // Assert correct endpoint is called
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(
+                addMembers: userIds.map { ChannelMemberRequest(userId: $0) },
+                hideHistoryBefore: hideHistoryBefore
+            )
+        )
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+    }
+    
+    func test_addMembersWithHideHistoryBefore_takesPrecedenceOverHideHistory() {
+        let channelID = ChannelId.unique
+        let userIds: Set<UserId> = Set([UserId.unique])
+        let hideHistoryBefore = Date()
+
+        // Simulate `addMembers` call with both hideHistory and hideHistoryBefore
+        channelUpdater.addMembers(
+            cid: channelID,
+            members: userIds.map { MemberInfo(userId: $0, extraData: nil) },
+            hideHistory: true,
+            hideHistoryBefore: hideHistoryBefore
+        )
+
+        // Assert correct endpoint is called with hideHistoryBefore (precedence)
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(
+                addMembers: userIds.map { ChannelMemberRequest(userId: $0) },
+                hideHistoryBefore: hideHistoryBefore
+            )
+        )
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        
+        // Verify the body contains hide_history_before and not hide_history
+        let body = apiClient.request_endpoint?.body?.encodable as? UpdateChannelRequest
+        XCTAssertNotNil(body?.hideHistoryBefore)
+        XCTAssertNil(body?.hideHistory)
     }
 
     func test_addMembers_successfulResponse_isPropagatedToCompletion() {
         let channelID = ChannelId.unique
         let userIds: Set<UserId> = Set([UserId.unique])
-        
+
         // Simulate `addMembers(cid:, mute:, userIds:)` call
-        var completionCalled = false
-        channelUpdater.addMembers(cid: channelID, userIds: userIds, hideHistory: false) { error in
+        nonisolated(unsafe) var completionCalled = false
+        channelUpdater.addMembers(
+            cid: channelID,
+            members: userIds.map { MemberInfo(userId: $0, extraData: nil) },
+            hideHistory: false
+        ) { error in
             XCTAssertNil(error)
             completionCalled = true
         }
@@ -969,7 +1963,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.success(.dummy()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
@@ -978,19 +1972,24 @@ final class ChannelUpdater_Tests: XCTestCase {
     func test_addMembers_errorResponse_isPropagatedToCompletion() {
         let channelID = ChannelId.unique
         let userIds: Set<UserId> = Set([UserId.unique])
-        
-        // Simulate `muteChannel(cid:, mute:, completion:)` call
-        var completionCalledError: Error?
-        channelUpdater.addMembers(cid: channelID, userIds: userIds, hideHistory: false) { completionCalledError = $0 }
+
+        nonisolated(unsafe) var completionCalledError: Error?
+        channelUpdater.addMembers(
+            cid: channelID,
+            members: userIds.map { MemberInfo(userId: $0, extraData: nil) },
+            hideHistory: false
+        ) {
+            completionCalledError = $0
+        }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // MARK: - Invite members
 
     func test_inviteMembers_makesCorrectAPICall() {
@@ -1001,16 +2000,20 @@ final class ChannelUpdater_Tests: XCTestCase {
         channelUpdater.inviteMembers(cid: channelID, userIds: userIds)
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .inviteMembers(cid: channelID, userIds: userIds)
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(invites: userIds.map { ChannelMemberRequest(userId: $0) })
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
 
     func test_inviteMembers_successfulResponse_isPropagatedToCompletion() {
         let channelID = ChannelId.unique
         let userIds: Set<UserId> = Set([UserId.unique])
-        
+
         // Simulate `inviteMembers(cid:, mute:, userIds:)` call
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         channelUpdater.inviteMembers(cid: channelID, userIds: userIds) { error in
             XCTAssertNil(error)
             completionCalled = true
@@ -1020,7 +2023,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.success(.dummy()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
@@ -1029,19 +2032,19 @@ final class ChannelUpdater_Tests: XCTestCase {
     func test_inviteMembers_errorResponse_isPropagatedToCompletion() {
         let channelID = ChannelId.unique
         let userIds: Set<UserId> = Set([UserId.unique])
-        
-        // Simulate `muteChannel(cid:, mute:, completion:)` call
-        var completionCalledError: Error?
+
+        // Simulate `inviteMembers(cid:, channelID:, userIds:)` call
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.inviteMembers(cid: channelID, userIds: userIds) { completionCalledError = $0 }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // MARK: - Accept invite
 
     func test_acceptInvite_makesCorrectAPICall() {
@@ -1051,7 +2054,13 @@ final class ChannelUpdater_Tests: XCTestCase {
         channelUpdater.acceptInvite(cid: channelID, message: message)
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .acceptInvite(cid: channelID, message: message)
+        let body = apiClient.request_endpoint?.body?.encodable as? UpdateChannelRequest
+        let messageId = body?.message?.id ?? .newUniqueId
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(acceptInvite: true, message: MessageRequest(id: messageId, text: message))
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
 
@@ -1060,7 +2069,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         let message = "Hooray"
 
         // Simulate `acceptInvite(cid:, mute:, userIds:)` call
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         channelUpdater.acceptInvite(cid: channelID, message: message) { error in
             XCTAssertNil(error)
             completionCalled = true
@@ -1070,7 +2079,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.success(.dummy()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
@@ -1078,18 +2087,18 @@ final class ChannelUpdater_Tests: XCTestCase {
 
     func test_acceptInvite_errorResponse_isPropagatedToCompletion() {
         let channelID = ChannelId.unique
-        
-        var completionCalledError: Error?
+
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.acceptInvite(cid: channelID, message: "Hooray") { completionCalledError = $0 }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // MARK: - Reject invite
 
     func test_rejectInvite_makesCorrectAPICall() {
@@ -1098,7 +2107,11 @@ final class ChannelUpdater_Tests: XCTestCase {
         channelUpdater.rejectInvite(cid: channelID)
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .rejectInvite(cid: channelID)
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(rejectInvite: true)
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
 
@@ -1106,7 +2119,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         let channelID = ChannelId.unique
 
         // Simulate `rejectInvite(cid:, mute:, userIds:)` call
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         channelUpdater.rejectInvite(cid: channelID) { error in
             XCTAssertNil(error)
             completionCalled = true
@@ -1116,7 +2129,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.success(.dummy()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
@@ -1124,18 +2137,18 @@ final class ChannelUpdater_Tests: XCTestCase {
 
     func test_rejectInvite_errorResponse_isPropagatedToCompletion() {
         let channelID = ChannelId.unique
-        
-        var completionCalledError: Error?
+
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.rejectInvite(cid: channelID) { completionCalledError = $0 }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // MARK: - Remove members
 
     func test_removeMembers_makesCorrectAPICall() {
@@ -1146,16 +2159,74 @@ final class ChannelUpdater_Tests: XCTestCase {
         channelUpdater.removeMembers(cid: channelID, userIds: userIds)
 
         // Assert correct endpoint is called
-        let referenceEndpoint: Endpoint<EmptyResponse> = .removeMembers(cid: channelID, userIds: userIds)
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(removeMembers: Array(userIds))
+        )
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+    }
+    
+    func test_removeMembersWithMessage_makesCorrectAPICall() {
+        let channelID = ChannelId.unique
+        let userIds: Set<UserId> = Set([UserId.unique])
+        let message: String = "Someone left the channel"
+
+        // Simulate `removeMembers(cid:, mute:, userIds:)` call
+        channelUpdater.removeMembers(
+            cid: channelID,
+            userIds: userIds,
+            systemMessage: SystemMessage(text: message)
+        )
+        
+        let body = apiClient.request_endpoint?.body?.encodable as? UpdateChannelRequest
+        let messageId = body?.message?.id ?? .newUniqueId
+        
+        // Assert correct endpoint is called
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(
+                message: MessageRequest(custom: [:], id: messageId, text: message),
+                removeMembers: Array(userIds)
+            )
+        )
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+    }
+
+    func test_removeMembersWithSystemMessageExtraData_makesCorrectAPICall() {
+        let channelID = ChannelId.unique
+        let userIds: Set<UserId> = Set([UserId.unique])
+        let systemMessage = SystemMessage(text: "Someone left the channel", extraData: ["warning": .bool(true)])
+
+        // Simulate `removeMembers` call with a system message carrying extra data
+        channelUpdater.removeMembers(
+            cid: channelID,
+            userIds: userIds,
+            systemMessage: systemMessage
+        )
+
+        let body = apiClient.request_endpoint?.body?.encodable as? UpdateChannelRequest
+        let messageId = body?.message?.id ?? .newUniqueId
+
+        // Assert the message payload contains the system message extra data
+        let referenceEndpoint: Endpoint<UpdateChannelResponse> = .updateChannel(
+            type: channelID.type.rawValue,
+            id: channelID.id,
+            updateChannelRequest: UpdateChannelRequest(
+                message: MessageRequest(custom: ["warning": .bool(true)], id: messageId, text: systemMessage.text),
+                removeMembers: Array(userIds)
+            )
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
 
     func test_removeMembers_successfulResponse_isPropagatedToCompletion() {
         let channelID = ChannelId.unique
         let userIds: Set<UserId> = Set([UserId.unique])
-        
+
         // Simulate `removeMembers(cid:, mute:, userIds:)` call
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         channelUpdater.removeMembers(cid: channelID, userIds: userIds) { error in
             XCTAssertNil(error)
             completionCalled = true
@@ -1165,7 +2236,7 @@ final class ChannelUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.success(.dummy()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
@@ -1174,133 +2245,231 @@ final class ChannelUpdater_Tests: XCTestCase {
     func test_removeMembers_errorResponse_isPropagatedToCompletion() {
         let channelID = ChannelId.unique
         let userIds: Set<UserId> = Set([UserId.unique])
-        
+
         // Simulate `removeMembers(cid:, mute:, completion:)` call
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.removeMembers(cid: channelID, userIds: userIds) { completionCalledError = $0 }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<UpdateChannelResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // MARK: - Mark channel as read
-    
+
     func test_markRead_makesCorrectAPICall() {
         let cid = ChannelId.unique
-        
-        channelUpdater.markRead(cid: cid, userId: .unique)
-        
-        let referenceEndpoint = Endpoint<EmptyResponse>.markRead(cid: cid)
-        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        let userId = UserId.unique
+
+        channelUpdater.markRead(cid: cid, userId: userId)
+
+        XCTAssertEqual(channelRepository.markReadCid, cid)
+        XCTAssertEqual(channelRepository.markReadUserId, userId)
     }
-    
+
     func test_markRead_successfulResponse_isPropagatedToCompletion() {
-        var completionCalled = false
+        let expectation = self.expectation(description: "markRead completes")
+        nonisolated(unsafe) var receivedError: Error?
+
+        channelRepository.markReadResult = .success(())
         channelUpdater.markRead(cid: .unique, userId: .unique) { error in
-            XCTAssertNil(error)
-            completionCalled = true
+            receivedError = error
+            expectation.fulfill()
         }
-        
-        XCTAssertFalse(completionCalled)
-        
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
-        
-        AssertAsync.willBeTrue(completionCalled)
+
+        waitForExpectations(timeout: defaultTimeout)
+        XCTAssertNil(receivedError)
     }
-    
+
     func test_markRead_errorResponse_isPropagatedToCompletion() {
-        var completionCalledError: Error?
-        channelUpdater.markRead(cid: .unique, userId: .unique) { completionCalledError = $0 }
-        
-        let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
-        
-        AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+        let expectation = self.expectation(description: "markRead completes")
+        let mockedError = TestError()
+        nonisolated(unsafe) var receivedError: Error?
+
+        channelRepository.markReadResult = .failure(mockedError)
+        channelUpdater.markRead(cid: .unique, userId: .unique) { error in
+            receivedError = error
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: defaultTimeout)
+        XCTAssertEqual(receivedError, mockedError)
     }
-    
+
+    // MARK: - Mark channel as unread
+
+    func test_markUnread_makesCorrectAPICall() {
+        let cid = ChannelId.unique
+        let userId = UserId.unique
+        let messageId = MessageId.unique
+        let lastReadMessageId = MessageId.unique
+
+        channelUpdater.markUnread(cid: cid, userId: userId, from: .init(messageId: messageId), lastReadMessageId: lastReadMessageId)
+
+        XCTAssertEqual(channelRepository.markUnreadCid, cid)
+        XCTAssertEqual(channelRepository.markUnreadUserId, userId)
+        XCTAssertEqual(channelRepository.markUnreadRequest, .init(messageId: messageId))
+        XCTAssertEqual(channelRepository.markUnreadLastReadMessageId, lastReadMessageId)
+    }
+
+    func test_markUnread_successfulResponse_isPropagatedToCompletion() {
+        let expectation = self.expectation(description: "markUnread completes")
+        nonisolated(unsafe) var receivedError: Error?
+
+        channelRepository.markUnreadResult = .success(.mock(cid: .unique))
+        channelUpdater.markUnread(cid: .unique, userId: .unique, from: .init(messageId: .unique), lastReadMessageId: .unique) { result in
+            receivedError = result.error
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: defaultTimeout)
+        XCTAssertNil(receivedError)
+    }
+
+    func test_markUnread_errorResponse_isPropagatedToCompletion() {
+        let expectation = self.expectation(description: "markUnread completes")
+        let mockedError = TestError()
+        nonisolated(unsafe) var receivedError: Error?
+
+        channelRepository.markUnreadResult = .failure(mockedError)
+        channelUpdater.markUnread(cid: .unique, userId: .unique, from: .init(messageId: .unique), lastReadMessageId: .unique) { result in
+            receivedError = result.error
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: defaultTimeout)
+        XCTAssertEqual(receivedError, mockedError)
+    }
+
     // MARK: - Enable slow mode (cooldown)
-    
+
     func test_enableSlowMode_makesCorrectAPICall() {
         let cid = ChannelId.unique
         let cooldownDuration = Int.random(in: 0...120)
-        
+
         channelUpdater.enableSlowMode(cid: cid, cooldownDuration: cooldownDuration)
-        
-        let referenceEndpoint = Endpoint<EmptyResponse>.enableSlowMode(cid: cid, cooldownDuration: cooldownDuration)
+
+        let referenceEndpoint = Endpoint<UpdateChannelPartialResponse>.updateChannelPartial(
+            type: cid.type.rawValue,
+            id: cid.id,
+            updateChannelPartialRequest: UpdateChannelPartialRequest(set: ["cooldown": .number(Double(cooldownDuration))])
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(cid.type.rawValue)/\(cid.id)")
     }
-    
+
     func test_enableSlowMode_successfulResponse_isPropagatedToCompletion() {
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         channelUpdater.enableSlowMode(cid: .unique, cooldownDuration: .random(in: 0...120)) { error in
             XCTAssertNil(error)
             completionCalled = true
         }
-        
+
         XCTAssertFalse(completionCalled)
-        
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
-        
+
+        apiClient.test_simulateResponse(Result<UpdateChannelPartialResponse, Error>.success(.dummy()))
+
         AssertAsync.willBeTrue(completionCalled)
     }
-    
+
     func test_enableSlowMode_errorResponse_isPropagatedToCompletion() {
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.enableSlowMode(cid: .unique, cooldownDuration: .random(in: 0...120)) { completionCalledError = $0 }
-        
+
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
-        
+        apiClient.test_simulateResponse(Result<UpdateChannelPartialResponse, Error>.failure(error))
+
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
-    // MARK: - Start watching
-    
-    func test_startWatching_makesCorrectAPICall() {
+
+    // MARK: - Disable slow mode
+
+    func test_disableSlowMode_makesCorrectAPICall() {
         let cid = ChannelId.unique
-        
-        channelUpdater.startWatching(cid: cid, isInRecoveryMode: false)
-        
-        var query = ChannelQuery(cid: cid)
-        query.options = .all
-        let referenceEndpoint: Endpoint<ChannelPayload> = .updateChannel(query: query)
+
+        channelUpdater.disableSlowMode(cid: cid) { _ in }
+
+        // Assert that disableSlowMode calls enableSlowMode endpoint with cooldownDuration: 0
+        let referenceEndpoint = Endpoint<UpdateChannelPartialResponse>.updateChannelPartial(
+            type: cid.type.rawValue,
+            id: cid.id,
+            updateChannelPartialRequest: UpdateChannelPartialRequest(set: ["cooldown": .number(0)])
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
 
-    func test_startWatchingRecovery_makesCorrectAPICall() {
+    func test_disableSlowMode_successfulResponse_isPropagatedToCompletion() {
+        nonisolated(unsafe) var completionCalled = false
+        channelUpdater.disableSlowMode(cid: .unique) { error in
+            XCTAssertNil(error)
+            completionCalled = true
+        }
+
+        XCTAssertFalse(completionCalled)
+
+        apiClient.test_simulateResponse(Result<UpdateChannelPartialResponse, Error>.success(.dummy()))
+
+        AssertAsync.willBeTrue(completionCalled)
+    }
+
+    func test_disableSlowMode_errorResponse_isPropagatedToCompletion() {
+        nonisolated(unsafe) var completionCalledError: Error?
+        channelUpdater.disableSlowMode(cid: .unique) { completionCalledError = $0 }
+
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<UpdateChannelPartialResponse, Error>.failure(error))
+
+        AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+    }
+
+    // MARK: - Start watching
+
+    func test_startWatching_makesCorrectAPICall() throws {
+        let cid = ChannelId.unique
+
+        channelUpdater.startWatching(cid: cid, isInRecoveryMode: false)
+
+        var query = ChannelQuery(cid: cid)
+        query.options = .all
+        let referenceEndpoint = query.endpoint
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(query.type.rawValue)/\(try XCTUnwrap(query.id))/query")
+    }
+
+    func test_startWatchingRecovery_makesCorrectAPICall() throws {
         let cid = ChannelId.unique
 
         channelUpdater.startWatching(cid: cid, isInRecoveryMode: true)
 
         var query = ChannelQuery(cid: cid)
         query.options = .all
-        let referenceEndpoint: Endpoint<ChannelPayload> = .updateChannel(query: query)
+        let referenceEndpoint = query.endpoint
         XCTAssertEqual(apiClient.recoveryRequest_endpoint, AnyEndpoint(referenceEndpoint))
+        XCTAssertEqual(apiClient.recoveryRequest_endpoint?.path.value, "/api/v2/chat/channels/\(query.type.rawValue)/\(try XCTUnwrap(query.id))/query")
     }
 
     func test_startWatching_successfulResponse_isPropagatedToCompletion() {
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         let cid = ChannelId.unique
         channelUpdater.startWatching(cid: cid, isInRecoveryMode: false) { error in
             XCTAssertNil(error)
             completionCalled = true
         }
-        
+
         XCTAssertFalse(completionCalled)
-        
+
         // Simulate API response with channel data
         let payload = dummyPayload(with: cid)
         apiClient.test_simulateResponse(.success(payload))
-        
+
         AssertAsync.willBeTrue(completionCalled)
     }
 
     func test_startWatchingRecovery_successfulResponse_isPropagatedToCompletion() {
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         let cid = ChannelId.unique
         channelUpdater.startWatching(cid: cid, isInRecoveryMode: true) { error in
             XCTAssertNil(error)
@@ -1315,19 +2484,19 @@ final class ChannelUpdater_Tests: XCTestCase {
 
         AssertAsync.willBeTrue(completionCalled)
     }
-    
+
     func test_startWatching_errorResponse_isPropagatedToCompletion() {
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.startWatching(cid: .unique, isInRecoveryMode: false) { completionCalledError = $0 }
-        
+
         let error = TestError()
         apiClient.test_simulateResponse(Result<ChannelPayload, Error>.failure(error))
-        
+
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
 
     func test_startWatchingRecovery_errorResponse_isPropagatedToCompletion() {
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.startWatching(cid: .unique, isInRecoveryMode: true) { completionCalledError = $0 }
 
         let error = TestError()
@@ -1335,197 +2504,213 @@ final class ChannelUpdater_Tests: XCTestCase {
 
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // MARK: - Stop watching
-    
+
     func test_stopWatching_makesCorrectAPICall() {
         let cid = ChannelId.unique
-        
+
         channelUpdater.stopWatching(cid: cid)
 
-        let referenceEndpoint: Endpoint<EmptyResponse> = .stopWatching(cid: cid)
-        
+        let referenceEndpoint = Endpoint<EmptyResponse>.stopWatchingChannel(type: cid.type.rawValue, id: cid.id)
+
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
-    
+
     func test_stopWatching_successfulResponse_isPropagatedToCompletion() {
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         let cid = ChannelId.unique
         channelUpdater.stopWatching(cid: cid) { error in
             XCTAssertNil(error)
             completionCalled = true
         }
-        
+
         XCTAssertFalse(completionCalled)
-        
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
-        
+
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(EmptyResponse()))
+
         AssertAsync.willBeTrue(completionCalled)
     }
-    
+
     func test_stopWatching_errorResponse_isPropagatedToCompletion() {
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.stopWatching(cid: .unique) { completionCalledError = $0 }
-        
+
         let error = TestError()
         apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
-        
+
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // MARK: - Channel watchers
-    
-    func test_channelWatchers_makesCorrectAPICall() {
+
+    func test_channelWatchers_makesCorrectAPICall() throws {
         let cid = ChannelId.unique
-        let query = ChannelWatcherListQuery(cid: cid)
-        
+        let query = ChannelWatcherListQuery(cid: cid, pagination: Pagination(pageSize: 10, offset: 20))
+
         channelUpdater.channelWatchers(query: query)
-        
-        let referenceEndpoint: Endpoint<ChannelPayload> = .channelWatchers(query: query)
-        
-        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
+
+        let endpoint = try XCTUnwrap(apiClient.request_endpoint)
+        XCTAssertEqual(endpoint.path.value, "/api/v2/chat/channels/\(cid.type.rawValue)/\(cid.id)/query")
+        XCTAssertTrue(endpoint.requiresConnectionId)
+
+        let body = try endpoint.bodyAsDictionary()
+        XCTAssertEqual(body["state"] as? Bool, true)
+        XCTAssertEqual(body["watch"] as? Bool, true)
+        let watchers = try XCTUnwrap(body["watchers"] as? [String: Any])
+        XCTAssertEqual(watchers["limit"] as? Int, 10)
+        XCTAssertEqual(watchers["offset"] as? Int, 20)
     }
-    
+
     func test_channelWatchers_successfulResponse_isPropagatedToCompletion() {
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         let cid = ChannelId.unique
         let query = ChannelWatcherListQuery(cid: cid)
-        channelUpdater.channelWatchers(query: query) { error in
-            XCTAssertNil(error)
+        channelUpdater.channelWatchers(query: query) { result in
+            XCTAssertNil(result.error)
             completionCalled = true
         }
-        
+
         XCTAssertFalse(completionCalled)
-        
+
         apiClient.test_simulateResponse(
             Result<ChannelPayload, Error>.success(dummyPayload(with: cid))
         )
-        
+
         AssertAsync.willBeTrue(completionCalled)
     }
-    
+
     func test_channelWatchers_errorResponse_isPropagatedToCompletion() {
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         let query = ChannelWatcherListQuery(cid: .unique)
-        channelUpdater.channelWatchers(query: query) { completionCalledError = $0 }
-        
+        channelUpdater.channelWatchers(query: query) { completionCalledError = $0.error }
+
         let error = TestError()
         apiClient.test_simulateResponse(Result<ChannelPayload, Error>.failure(error))
-        
+
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     func test_channelWatchers_clearsWatchers_whenFirstPageIsRequestedAndEmpty() throws {
         // Create a dummy channel
         let cid = ChannelId.unique
         try database.createChannel(cid: cid, withMessages: false)
-        
+
         var channel: ChatChannel? {
             try? database.viewContext.channel(cid: cid)?.asModel()
         }
-        
+
         // Assert that the dummy channel has a watcher
         assert(!(channel?.lastActiveWatchers.isEmpty ?? true))
-        
+
         // Save first watcher's id so we can compare later
         let firstWatcherId = channel?.lastActiveWatchers.first?.id
-        
+
         // Call `channelWatchers` for this channel
         // This query doesn't provide any `offset` so it's requesting the first page of watchers
         let query = ChannelWatcherListQuery(cid: cid)
         let completionCalled = expectation(description: "completion called")
         channelUpdater.channelWatchers(query: query) { _ in completionCalled.fulfill() }
-        
+
         // Simulate successful response
         apiClient.test_simulateResponse(
             Result<ChannelPayload, Error>.success(dummyPayload(with: cid, watchers: []))
         )
-        
-        wait(for: [completionCalled], timeout: 1)
-        
+
+        wait(for: [completionCalled], timeout: defaultTimeout)
+
         // Assert that the old watcher is replaced
         AssertAsync {
             Assert.willBeFalse(channel?.lastActiveWatchers.contains(where: { $0.id == firstWatcherId }) ?? true)
         }
     }
-    
+
     // MARK: - Freeze channel
-    
+
     func test_freezeChannel_makesCorrectAPICall() {
         let cid = ChannelId.unique
         let freeze = Bool.random()
-        
+
         channelUpdater.freezeChannel(freeze, cid: cid)
-        
-        let referenceEndpoint: Endpoint<EmptyResponse> = .freezeChannel(freeze, cid: cid)
-        
+
+        let referenceEndpoint: Endpoint<UpdateChannelPartialResponse> = .updateChannelPartial(
+            type: cid.type.rawValue,
+            id: cid.id,
+            updateChannelPartialRequest: UpdateChannelPartialRequest(set: ["frozen": .bool(freeze)])
+        )
+
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
-    
+
     func test_freezeChannel_successfulResponse_isPropagatedToCompletion() {
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         let cid = ChannelId.unique
         let freeze = Bool.random()
         channelUpdater.freezeChannel(freeze, cid: cid) { error in
             XCTAssertNil(error)
             completionCalled = true
         }
-        
+
         XCTAssertFalse(completionCalled)
-        
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
-        
+
+        apiClient.test_simulateResponse(Result<UpdateChannelPartialResponse, Error>.success(.dummy()))
+
         AssertAsync.willBeTrue(completionCalled)
     }
-    
+
     func test_freezeChannel_errorResponse_isPropagatedToCompletion() {
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.freezeChannel(.random(), cid: .unique) { completionCalledError = $0 }
-        
+
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
-        
+        apiClient.test_simulateResponse(Result<UpdateChannelPartialResponse, Error>.failure(error))
+
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // MARK: - UploadFile
-    
+
     func test_uploadFile_makesCorrectAPICall() {
         let cid = ChannelId.unique
         let type = AttachmentType.image
-        
+
         XCTAssertNil(apiClient.uploadFile_attachment)
-        
+
         channelUpdater.uploadFile(type: type, localFileURL: .localYodaImage, cid: cid) { _ in }
-        
+
         XCTAssertNotNil(apiClient.uploadFile_attachment)
     }
-    
+
     func test_uploadFile_successfulResponse_isPropagatedToCompletion() {
         let cid = ChannelId.unique
         let type = AttachmentType.image
-        
-        var completionCalled = false
+
+        nonisolated(unsafe) var completionCalled = false
         channelUpdater.uploadFile(type: type, localFileURL: .localYodaImage, cid: cid) { result in
             do {
-                let url = try result.get()
-                XCTAssertEqual(url, .localYodaQuote)
+                let uploadedAttachment = try result.get()
+                XCTAssertEqual(uploadedAttachment.remoteURL, .localYodaQuote)
             } catch {
                 XCTFail("Error \(error)")
             }
             completionCalled = true
         }
-        
-        apiClient.uploadFile_completion?(.success(.localYodaQuote))
-        
+
+        let attachment = UploadedAttachment(
+            attachment: ChatMessageImageAttachment.mock(id: .unique).asAnyAttachment,
+            remoteURL: .localYodaQuote,
+            thumbnailURL: nil
+        )
+        apiClient.uploadFile_completion?(.success(attachment))
+
         AssertAsync.willBeTrue(completionCalled)
     }
-    
+
     func test_uploadFile_errorResponse_isPropagatedToCompletion() {
         let cid = ChannelId.unique
         let type = AttachmentType.image
-        
-        var completionCalledError: Error?
+
+        nonisolated(unsafe) var completionCalledError: Error?
         channelUpdater.uploadFile(type: type, localFileURL: .localYodaImage, cid: cid) { result in
             do {
                 _ = try result.get()
@@ -1534,56 +2719,73 @@ final class ChannelUpdater_Tests: XCTestCase {
                 completionCalledError = error
             }
         }
-        
+
         let error = TestError()
         apiClient.uploadFile_completion?(.failure(error))
-        
+
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // MARK: - Load pinned messages
-    
+
     func test_loadPinnedMessages_makesCorrectAPICall() {
         // Create channel id
         let cid = ChannelId.unique
-        
+
         // Create query
         let query = PinnedMessagesQuery(pageSize: 10, pagination: .aroundMessage(.unique))
-                
+
         // Simulate `loadPinnedMessages` call
         channelUpdater.loadPinnedMessages(in: cid, query: query, completion: { _ in })
-        
+
         // Create expected endpoint
-        let endpoint: Endpoint<PinnedMessagesPayload> = .pinnedMessages(cid: cid, query: query)
-        
+        let endpoint: Endpoint<PinnedMessagesPayload> = .getPinnedMessages(
+            type: cid.type.rawValue,
+            id: cid.id,
+            limit: query.pageSize,
+            offset: nil,
+            idGte: query.pagination?.messageIdAfterOrEqual,
+            idGt: query.pagination?.messageIdAfter,
+            idLte: query.pagination?.messageIdBeforeOrEqual,
+            idLt: query.pagination?.messageIdBefore,
+            pinnedAtAfterOrEqual: query.pagination?.timestampAfterOrEqual,
+            pinnedAtAfter: query.pagination?.timestampAfter,
+            pinnedAtBeforeOrEqual: query.pagination?.timestampBeforeOrEqual,
+            pinnedAtBefore: query.pagination?.timestampBefore,
+            idAround: query.pagination?.aroundMessageId,
+            pinnedAtAround: query.pagination?.aroundTimestamp,
+            sort: nil,
+            memberCustomInclude: nil
+        )
+
         // Assert correct endpoint is called
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(endpoint))
     }
-    
+
     func test_loadPinnedMessages_propagatesResultsToCompletion() {
         // Create channel id
         let cid = ChannelId.unique
-        
+
         try! database.writeSynchronously { session in
             try session.saveChannel(payload: .dummy(cid: cid), query: nil, cache: nil)
         }
 
         // Create query
         let query = PinnedMessagesQuery(pageSize: 10, pagination: .aroundMessage(.unique))
-                
+
         // Simulate `loadPinnedMessages` call
-        var completionPayload: [ChatMessage]?
+        nonisolated(unsafe) var completionPayload: [ChatMessage]?
         channelUpdater.loadPinnedMessages(in: cid, query: query) {
             completionPayload = try? $0.get()
         }
-        
+
         // Simulate API response
         let payload = PinnedMessagesPayload(messages: [
-            .dummy(messageId: .unique, authorUserId: .unique),
-            .dummy(messageId: .unique, authorUserId: .unique),
-            .dummy(messageId: .unique, authorUserId: .unique)
+            .dummy(messageId: .unique, authorUserId: .unique, cid: cid),
+            .dummy(messageId: .unique, authorUserId: .unique, cid: cid),
+            .dummy(messageId: .unique, authorUserId: .unique, cid: cid)
         ])
-        
+
         apiClient.test_simulateResponse(Result<PinnedMessagesPayload, Error>.success(payload))
 
         // Assert payload is propagated to completion
@@ -1592,27 +2794,330 @@ final class ChannelUpdater_Tests: XCTestCase {
             payload.messages.map(\.id)
         )
     }
-    
+
     func test_loadPinnedMessages_propagatesErrorToCompletion() {
         // Simulate `loadPinnedMessages` call
-        var completionError: Error?
+        nonisolated(unsafe) var completionError: Error?
         channelUpdater.loadPinnedMessages(in: .unique, query: .init(pageSize: 10, pagination: nil)) {
             completionError = $0.error
         }
-        
+
         // Simulate API error
         let error = TestError()
         apiClient.test_simulateResponse(Result<PinnedMessagesPayload, Error>.failure(error))
-        
+
         // Assert error is propagated to completion
         AssertAsync.willBeEqual(completionError as? TestError, error)
     }
-    
+
     func test_loadPinnedMessages_doesNotRetainUpdater() {
         // Simulate `loadPinnedMessages` call
         channelUpdater.loadPinnedMessages(in: .unique, query: .init(pageSize: 10, pagination: nil)) { _ in }
-        
+
         // Assert updater can be released
         AssertAsync.canBeReleased(&channelUpdater)
+    }
+
+    // MARK: - enrichUrl
+
+    func test_enrichUrl_whenSuccess() {
+        let exp = expectation(description: "enrichUrl completes")
+        let url = URL(string: "www.google.com")!
+        nonisolated(unsafe) var linkPayload: LinkAttachmentPayload?
+        channelUpdater.enrichUrl(url) { result in
+            XCTAssertNil(result.error)
+            linkPayload = result.value
+            exp.fulfill()
+        }
+
+        apiClient.test_simulateResponse(.success(GetOGResponse.dummy(
+            ogScrapeUrl: url.absoluteString,
+            title: "Google"
+        )))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(linkPayload?.originalURL, url)
+        XCTAssertEqual(linkPayload?.title, "Google")
+    }
+
+    func test_enrichUrl_whenFailure() {
+        let exp = expectation(description: "enrichUrl completes")
+        let url = URL(string: "www.google.com")!
+        nonisolated(unsafe) var linkPayload: LinkAttachmentPayload?
+        channelUpdater.enrichUrl(url) { result in
+            XCTAssertNotNil(result.error)
+            linkPayload = result.value
+            exp.fulfill()
+        }
+
+        apiClient
+            .test_simulateResponse(Result<GetOGResponse, Error>.failure(ClientError()))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertNil(linkPayload)
+    }
+
+    // MARK: - setPushPreference
+
+    func test_setPushPreference_makesCorrectAPICall() {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let preference = PushPreferenceInput(
+            channelCid: cid.rawValue,
+            chatLevel: .directMentions,
+            removeDisable: true
+        )
+
+        // WHEN
+        channelUpdater.setPushPreference(preference, cid: cid) { _ in }
+
+        // THEN
+        let expectedEndpoint: Endpoint<UpsertPushPreferencesResponse> = .updatePushNotificationPreferences(upsertPushPreferencesRequest: .init(preferences: [preference]))
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
+    }
+
+    func test_setPushPreference_successfulResponse_savesToDatabase() {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let preference = PushPreferenceInput(
+            channelCid: cid.rawValue,
+            chatLevel: .all,
+            removeDisable: true
+        )
+
+        let response = UpsertPushPreferencesResponse(
+            userChannelPreferences: [
+                "userId": [
+                    cid.rawValue: PushPreference(level: "all")
+                ]
+            ],
+            userPreferences: [:]
+        )
+
+        // WHEN
+        nonisolated(unsafe) var completionCalled = false
+        channelUpdater.setPushPreference(preference, cid: cid) { result in
+            XCTAssertNil(result.error)
+            completionCalled = true
+        }
+
+        apiClient.test_simulateResponse(.success(response))
+
+        // THEN
+        AssertAsync.willBeTrue(completionCalled)
+    }
+
+    func test_setPushPreference_propagatesNetworkError() {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let preference = PushPreferenceInput(
+            channelCid: cid.rawValue,
+            chatLevel: .directMentions,
+            removeDisable: true
+        )
+
+        // WHEN
+        nonisolated(unsafe) var completionError: Error?
+        channelUpdater.setPushPreference(preference, cid: cid) { result in
+            if case let .failure(error) = result {
+                completionError = error
+            }
+        }
+
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<UpsertPushPreferencesResponse, Error>.failure(error))
+
+        // THEN
+        AssertAsync.willBeEqual(completionError as? TestError, error)
+    }
+
+    func test_setPushPreference_whenNoChannelPreferences_returnsError() {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let preference = PushPreferenceInput(
+            channelCid: cid.rawValue,
+            chatLevel: .directMentions,
+            removeDisable: true
+        )
+
+        let response = UpsertPushPreferencesResponse(
+            userChannelPreferences: [:],
+            userPreferences: [:]
+        )
+
+        // WHEN
+        nonisolated(unsafe) var completionError: Error?
+        channelUpdater.setPushPreference(preference, cid: cid) { result in
+            if case let .failure(error) = result {
+                completionError = error
+            }
+        }
+
+        apiClient.test_simulateResponse(.success(response))
+
+        // THEN
+        AssertAsync.willBeTrue(completionError is ClientError.ChannelDoesNotExist)
+    }
+
+    func test_setPushPreference_firstTimeUpdate_associatesPushPreferenceWithChannel() throws {
+        // GIVEN
+        // Create a channel without any push preference
+        let cid: ChannelId = .unique
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: cid), query: nil, cache: nil)
+        }
+
+        // Verify channel exists but has no push preference initially
+        XCTAssertNotNil(database.viewContext.channel(cid: cid))
+        XCTAssertNil(database.viewContext.channel(cid: cid)?.pushPreference)
+
+        let preference = PushPreferenceInput(
+            channelCid: cid.rawValue,
+            chatLevel: .directMentions,
+            removeDisable: true
+        )
+
+        let response = UpsertPushPreferencesResponse(
+            userChannelPreferences: [
+                "userId": [
+                    cid.rawValue: PushPreference(level: "mentions")
+                ]
+            ],
+            userPreferences: [:]
+        )
+
+        // WHEN
+        let exp = expectation(description: "setPushPreference completion")
+        nonisolated(unsafe) var receivedPreference: PushPreference?
+        channelUpdater.setPushPreference(preference, cid: cid) { result in
+            if case .success(let pref) = result {
+                receivedPreference = pref
+            }
+            exp.fulfill()
+        }
+
+        apiClient.test_simulateResponse(.success(response))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        // THEN
+        // Verify the push preference was successfully set
+        XCTAssertEqual(receivedPreference?.level, PushPreferenceLevel(rawValue: "mentions"))
+        XCTAssertNil(receivedPreference?.disabledUntil)
+
+        // Verify the channel now has the push preference associated
+        let channel: ChatChannel? = try database.readSynchronously { session in
+            try session.channel(cid: cid)?.asModel()
+        }
+        XCTAssertNotNil(channel?.pushPreference)
+        XCTAssertEqual(channel?.pushPreference?.level, PushPreferenceLevel(rawValue: "mentions"))
+        XCTAssertNil(channel?.pushPreference?.disabledUntil)
+    }
+
+    func test_setPushPreference_subsequentUpdate_updatesPushPreferenceCorrectly() throws {
+        // GIVEN
+        // Create a channel with an existing push preference
+        let cid: ChannelId = .unique
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: cid), query: nil, cache: nil)
+            let pushPreferenceDTO = try session.savePushPreference(
+                id: cid.rawValue,
+                payload: .init(
+                    level: "none",
+                    disabledUntil: nil
+                )
+            )
+            session.channel(cid: cid)?.pushPreference = pushPreferenceDTO
+        }
+
+        // Verify channel has the initial push preference
+        XCTAssertEqual(database.viewContext.channel(cid: cid)?.pushPreference?.chatLevel, "none")
+
+        let preference = PushPreferenceInput(
+            channelCid: cid.rawValue,
+            chatLevel: .all,
+            removeDisable: true
+        )
+
+        let response = UpsertPushPreferencesResponse(
+            userChannelPreferences: [
+                "userId": [
+                    cid.rawValue: PushPreference(level: "all")
+                ]
+            ],
+            userPreferences: [:]
+        )
+
+        // WHEN
+        let exp = expectation(description: "setPushPreference completion")
+        nonisolated(unsafe) var receivedPreference: PushPreference?
+        channelUpdater.setPushPreference(preference, cid: cid) { result in
+            if case .success(let pref) = result {
+                receivedPreference = pref
+            }
+            exp.fulfill()
+        }
+
+        apiClient.test_simulateResponse(.success(response))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        // THEN
+        // Verify the push preference was successfully updated
+        XCTAssertEqual(receivedPreference?.level, .all)
+        XCTAssertNil(receivedPreference?.disabledUntil)
+
+        // Verify the channel's push preference was updated
+        let channel: ChatChannel? = try database.readSynchronously { session in
+            try session.channel(cid: cid)?.asModel()
+        }
+        XCTAssertNotNil(channel?.pushPreference)
+        XCTAssertEqual(channel?.pushPreference?.level, .all)
+        XCTAssertNil(channel?.pushPreference?.disabledUntil)
+    }
+
+    // MARK: - Helpers
+
+    private func updateChannel(
+        cid: ChannelId = .unique,
+        name: String? = .unique,
+        team: String? = nil,
+        autoTranslationLanguages: Set<TranslationLanguage>? = nil,
+        completion: (@Sendable (Error?) -> Void)? = nil
+    ) {
+        channelUpdater.updateChannel(
+            cid: cid,
+            name: name,
+            imageURL: nil,
+            team: team,
+            members: [],
+            invites: [],
+            filterTags: [],
+            autoTranslationLanguages: autoTranslationLanguages,
+            extraData: [:],
+            completion: completion
+        )
+    }
+
+    private func partialChannelUpdate(
+        cid: ChannelId = .unique,
+        name: String? = .unique,
+        unsetProperties: [String] = [],
+        completion: (@Sendable (Error?) -> Void)? = nil
+    ) {
+        channelUpdater.partialChannelUpdate(
+            cid: cid,
+            name: name,
+            imageURL: nil,
+            team: nil,
+            members: [],
+            invites: [],
+            filterTags: [],
+            extraData: [:],
+            unsetProperties: unsetProperties,
+            completion: completion
+        )
     }
 }

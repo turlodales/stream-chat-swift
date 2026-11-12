@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -11,30 +11,24 @@ final class CurrentUserController_Tests: XCTestCase {
     private var env: TestEnvironment!
     private var client: ChatClient!
     private var controller: CurrentChatUserController!
-    private var controllerCallbackQueueID: UUID!
-    private var callbackQueueID: UUID { controllerCallbackQueueID }
-    
+
     // MARK: - Setup
-    
+
     override func setUp() {
         super.setUp()
-        
+
         env = TestEnvironment()
         client = ChatClient.mock
         controller = CurrentChatUserController(client: client, environment: env.currentUserControllerEnvironment)
-        controllerCallbackQueueID = UUID()
-        controller.callbackQueue = .testQueue(withId: controllerCallbackQueueID)
     }
-    
+
     override func tearDown() {
         client.completeConnectionIdWaiters(connectionId: nil)
         client.completeTokenWaiters(token: nil)
 
-        controllerCallbackQueueID = nil
         client.mockAPIClient.cleanUp()
-        env.chatClientUpdater?.cleanUp()
         env.currentUserUpdater?.cleanUp()
-        
+
         AssertAsync {
             Assert.canBeReleased(&controller)
             Assert.canBeReleased(&client)
@@ -43,66 +37,65 @@ final class CurrentUserController_Tests: XCTestCase {
 
         super.tearDown()
     }
-    
+
     // MARK: Controller
 
     // MARK: - currentUser tests
 
     func test_currentUser_startsObserving_returnsCurrentUserObserverItem() {
         let expectedId = UserId.unique
-        let expectedUnreadCount = UnreadCount(channels: .unique, messages: .unique)
+        let expectedUnreadCount = UnreadCount(channels: .unique, messages: .unique, threads: .unique)
 
-        env.currentUserObserverItem = .mock(id: expectedId, unreadCount: expectedUnreadCount)
+        env.currentUserObserverItem = .mock(currentUserId: expectedId, unreadCount: expectedUnreadCount)
 
         XCTAssertEqual(controller.currentUser?.id, expectedId)
         XCTAssertTrue(env.currentUserObserver.startObservingCalled)
     }
-    
+
     // MARK: - Synchronize tests
-    
+
     func test_synchronize_localDataIsAvailable() {
         let expectedId = UserId.unique
-        let expectedUnreadCount = UnreadCount(channels: .unique, messages: .unique)
-        
-        env.currentUserObserverItem = .mock(id: expectedId, unreadCount: expectedUnreadCount)
-        
+        let expectedUnreadCount = UnreadCount(channels: .unique, messages: .unique, threads: .unique)
+
+        env.currentUserObserverItem = .mock(currentUserId: expectedId, unreadCount: expectedUnreadCount)
+
         let expectation = self.expectation(description: "synchronize called")
 
         controller.synchronize { error in
             XCTAssertNil(error)
             expectation.fulfill()
         }
-        
+
         // the sync completion is called when there is a connectionID
         client.completeConnectionIdWaiters(connectionId: UUID().uuidString)
 
         // Assert client is assigned correctly
         XCTAssertTrue(controller.client === client)
-        
+
         // Assert user is correct
         XCTAssertEqual(controller.currentUser?.id, expectedId)
-        
+
         // Assert unread-count is correct
         XCTAssertEqual(controller.unreadCount, expectedUnreadCount)
-        
-        waitForExpectations(timeout: 0.5, handler: nil)
+
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
     }
-    
+
     func test_synchronize_changesState_and_propagatesObserverErrorOnCallbackQueue() {
         // Update observer to throw the error.
         let observerError = TestError()
         env.currentUserObserverStartUpdatingError = observerError
-        
+
         // Simulate `synchronize` call.
-        var synchronizeError: Error?
-        controller.synchronize { [callbackQueueID] error in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var synchronizeError: Error?
+        controller.synchronize { error in
             synchronizeError = error
         }
-        
+
         // Assert controller is in `localDataFetchFailed` state.
         XCTAssertEqual(controller.state, .localDataFetchFailed(ClientError(with: observerError)))
-        
+
         // Assert error from observer is forwarded.
         AssertAsync.willBeEqual(synchronizeError as? ClientError, ClientError(with: observerError))
     }
@@ -112,11 +105,10 @@ final class CurrentUserController_Tests: XCTestCase {
         XCTAssertEqual(controller.state, .initialized)
 
         // Simulate current user
-        env.currentUserObserverItem = .mock(id: .unique)
+        env.currentUserObserverItem = .mock(currentUserId: .unique)
 
-        var synchronizeCalled = false
-        controller.synchronize { [callbackQueueID] error in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var synchronizeCalled = false
+        controller.synchronize { error in
             XCTAssertNil(error)
             synchronizeCalled = true
         }
@@ -135,11 +127,10 @@ final class CurrentUserController_Tests: XCTestCase {
         XCTAssertEqual(controller.state, .initialized)
 
         // Simulate current user
-        env.currentUserObserverItem = .mock(id: .unique)
+        env.currentUserObserverItem = .mock(currentUserId: .unique)
 
-        var synchronizeError: Error?
-        controller.synchronize { [callbackQueueID] error in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var synchronizeError: Error?
+        controller.synchronize { error in
             synchronizeError = error
         }
 
@@ -157,100 +148,100 @@ final class CurrentUserController_Tests: XCTestCase {
     func test_currentUserIsFetched_afterCallingSynchronize() throws {
         // Simulate `synchronize` call
         controller.synchronize()
-                
+
         // Create the current user in the DB
         let userId = UserId.unique
         try client.databaseContainer.createCurrentUser(id: userId)
-        
+
         // Assert the existing user is loaded
         XCTAssertEqual(controller.currentUser?.id, userId)
     }
-    
+
     // MARK: - Delegate
-    
+
     func test_delegate_isAssignedCorrectly() {
         // Set the delegate
-        let delegate = UserController_Delegate(expectedQueueId: callbackQueueID)
+        let delegate = UserController_Delegate()
         controller.delegate = delegate
-        
+
         // Assert the delegate is assigned correctly
         XCTAssert(controller.delegate === delegate)
     }
-    
+
     func test_delegate_isReferencedWeakly() {
         // Create the delegate
-        var delegate: UserController_Delegate? = .init(expectedQueueId: callbackQueueID)
-        
+        var delegate: UserController_Delegate? = .init()
+
         // Set the delegate
         controller.delegate = delegate
-        
+
         // Stop keeping a delegate alive
         delegate = nil
-        
+
         // Assert delegate is deallocated
         XCTAssertNil(controller.delegate)
     }
-    
-    func test_delegate_isNotifiedAboutCreatedUser() throws {
+
+    @MainActor func test_delegate_isNotifiedAboutCreatedUser() throws {
         // Call synchronize to get updates from DB
         controller.synchronize()
-        
+
         let extraData: [String: RawJSON] = [:]
         let currentUserPayload: CurrentUserPayload = .dummy(
             userId: .unique,
             role: .user,
             extraData: extraData
         )
-        
+
         // Set the delegate
-        let delegate = UserController_Delegate(expectedQueueId: callbackQueueID)
+        let delegate = UserController_Delegate()
         controller.delegate = delegate
 
         // Simulate saving current user to a database
         try client.databaseContainer.writeSynchronously {
             try $0.saveCurrentUser(payload: currentUserPayload)
         }
-        
+
         // Assert delegate received correct entity change
         AssertAsync {
             Assert.willBeEqual(delegate.didChangeCurrentUser_change?.fieldChange(\.id), .create(currentUserPayload.id))
             Assert.willBeEqual(delegate.didChangeCurrentUser_change?.fieldChange(\.extraData), .create(extraData))
         }
     }
-    
-    func test_delegate_isNotifiedAboutUpdatedUser() throws {
+
+    @MainActor func test_delegate_isNotifiedAboutUpdatedUser() throws {
         // Call synchronize to get updates from DB
         controller.synchronize()
-        
+
         var extraData: [String: RawJSON] = [:]
-        var currentUserPayload: CurrentUserPayload = .dummy(
+        nonisolated(unsafe) var currentUserPayload: CurrentUserPayload = .dummy(
             userId: .unique,
             role: .user,
             extraData: extraData
         )
-        
+
         // Set the delegate
-        let delegate = UserController_Delegate(expectedQueueId: callbackQueueID)
+        let delegate = UserController_Delegate()
         controller.delegate = delegate
 
         // Simulate saving current user to a database
         try client.databaseContainer.writeSynchronously {
             try $0.saveCurrentUser(payload: currentUserPayload)
         }
-        
+
         // Update current user data
         extraData = [:]
         currentUserPayload = .dummy(
             userId: currentUserPayload.id,
-            role: currentUserPayload.role,
+            role: UserRole(rawValue: currentUserPayload.role),
             extraData: extraData
         )
-        
+
         // Simulate updating current user in a database
         try client.databaseContainer.writeSynchronously {
             try $0.saveCurrentUser(payload: currentUserPayload)
         }
-        
+
         // Assert delegate received correct entity change
         AssertAsync {
             Assert.willBeEqual(delegate.didChangeCurrentUser_change?.fieldChange(\.id), .update(currentUserPayload.id))
@@ -258,14 +249,14 @@ final class CurrentUserController_Tests: XCTestCase {
         }
     }
 
-    func test_delegate_isNotifiedAboutUnreadCount_whenUserIsCreated() throws {
+    @MainActor func test_delegate_isNotifiedAboutUnreadCount_whenUserIsCreated() throws {
         // Call synchronize to get updates from DB
         controller.synchronize()
-        
-        let unreadCount = UnreadCount(channels: 10, messages: 15)
-        
+
+        let unreadCount = UnreadCountPayload(channels: 10, messages: 15, threads: 10)
+
         // Set the delegate
-        let delegate = UserController_Delegate(expectedQueueId: callbackQueueID)
+        let delegate = UserController_Delegate()
         controller.delegate = delegate
 
         // Simulate saving current user to a database
@@ -278,81 +269,90 @@ final class CurrentUserController_Tests: XCTestCase {
             try $0.saveCurrentUser(payload: currentUserPayload)
         }
 
+        wait(for: [delegate.didChangeCurrentUserUnreadCountExpectation], timeout: defaultTimeout)
+        
         // Assert delegate received correct unread count
-        AssertAsync.willBeEqual(delegate.didChangeCurrentUserUnreadCount_count, unreadCount)
+        let delegateUnreadCount = delegate.didChangeCurrentUserUnreadCount_count
+        XCTAssertTrue(delegateUnreadCount?.isEqual(toPayload: unreadCount) == true)
     }
-    
+
     // MARK: - Updating current user
-    
+
     func test_updateUserData_callCurrentUserUpdater_withCorrectValues() {
         // Simulate `connectUser`
-        client.currentUserId = .unique
-        
+        client.authenticationRepository.setMockToken()
+
         let expectedName = String.unique
         let expectedImageUrl = URL.unique()
-        
+
         controller.updateUserData(
             name: expectedName,
             imageURL: expectedImageUrl,
-            userExtraData: [:]
+            privacySettings: .init(
+                typingIndicators: .init(enabled: true), readReceipts: .init(enabled: true)
+            ),
+            teamsRole: ["teamId": "role"],
+            userExtraData: [:],
+            unsetProperties: ["image"]
         )
-        
+
         // Assert udpater is called with correct data
         XCTAssertEqual(env.currentUserUpdater.updateUserData_name, expectedName)
         XCTAssertEqual(env.currentUserUpdater.updateUserData_imageURL, expectedImageUrl)
+        XCTAssertEqual(env.currentUserUpdater.updateUserData_privacySettings?.typingIndicators?.enabled, true)
+        XCTAssertEqual(env.currentUserUpdater.updateUserData_privacySettings?.readReceipts?.enabled, true)
+        XCTAssertEqual(env.currentUserUpdater.updateUserData_unset, ["image"])
+        XCTAssertEqual(env.currentUserUpdater.updateUserData_teamsRole, ["teamId": "role"])
         XCTAssertNotNil(env.currentUserUpdater.updateUserData_completion)
     }
-    
+
     func test_updateUserData_propagatesError() throws {
         // Simulate `connectUser`
-        client.currentUserId = .unique
-        
-        var completionError: Error?
-        controller.updateUserData(name: .unique, imageURL: .unique(), userExtraData: [:]) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        client.authenticationRepository.setMockToken()
+
+        nonisolated(unsafe) var completionError: Error?
+        controller.updateUserData(name: .unique, imageURL: .unique(), userExtraData: [:]) {
             completionError = $0
         }
-        
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.currentUserUpdater.updateUserData_completion?(networkError)
-        
-        // Assert error is propogated.
+
+        // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
     func test_updateUserData_propagatesNilError() throws {
         // Simulate `connectUser`
-        client.currentUserId = .unique
-        
-        var completionIsCalled = false
+        client.authenticationRepository.setMockToken()
+
+        nonisolated(unsafe) var completionIsCalled = false
         controller
-            .updateUserData(name: .unique, imageURL: .unique(), userExtraData: [:]) { [callbackQueueID] error in
-                // Assert callback queue is correct.
-                AssertTestQueue(withId: callbackQueueID)
+            .updateUserData(name: .unique, imageURL: .unique(), userExtraData: [:]) { error in
                 // Assert there is no error.
                 XCTAssertNil(error)
                 completionIsCalled = true
             }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.currentUserUpdater.updateUserData_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.currentUserUpdater.updateUserData_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_updateUser_whenCurrentUserDoesNotExist_shouldError() throws {
         let error = try waitFor {
             controller.updateUserData(
@@ -362,41 +362,28 @@ final class CurrentUserController_Tests: XCTestCase {
                 completion: $0
             )
         }
-        
+
         XCTAssert(error is ClientError.CurrentUserDoesNotExist)
     }
-    
+
     func test_updateUser_doesNotDeadlock() throws {
         // GIVEN
         // Simulate saving current user to a database
-        try client.databaseContainer.writeSynchronously {
-            let currentUserPayload: CurrentUserPayload = .dummy(
-                userId: .unique,
-                role: .user,
-                unreadCount: .none
-            )
-            try $0.saveCurrentUser(payload: currentUserPayload)
-        }
+        client.authenticationRepository.setMockToken()
 
         // WHEN
         // updateUser is called from background queue
         DispatchQueue.global().async {
             self.controller.updateUserData()
         }
-        
-        // Sleep main thread for a little time
-        // to make sure background thread acquires lock (from Atomic, in EntityDatabaseObserver.item)
-        // if we don't sleep, main thread acquires lock first & no deadlock occurs
-        sleep(1)
-        
+
         // THEN
         // updateUser is called from main queue and actually finishes
-        let exp = expectation(description: "completion called")
-        controller.updateUserData() { _ in
-            exp.fulfill()
-        }
-        
-        wait(for: [exp], timeout: 5)
+        delayExecution(of: { completion in
+            self.controller.updateUserData(completion: completion)
+        }, onCompletion: {
+            self.env.currentUserUpdater.updateUserData_completion?(nil)
+        })
     }
 
     // MARK: - Device endpoints
@@ -405,35 +392,33 @@ final class CurrentUserController_Tests: XCTestCase {
 
     func test_synchronizeDevices_whenRequestSuccess_completionCalledWithoutError() throws {
         // Simulate `connectUser`
-        client.currentUserId = .unique
+        client.authenticationRepository.setMockToken()
 
-        var completionError: Error?
-        controller.synchronizeDevices { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.synchronizeDevices {
             completionError = $0
         }
 
         // Simulate successful network call.
-        env.currentUserUpdater.fetchDevices_completion?(nil)
+        env.currentUserUpdater.fetchDevices_completion?(.success([]))
 
         AssertAsync.willBeNil(completionError)
     }
 
     func test_synchronizeDevices_whenRequestFails_propagatesError() {
         // Simulate `connectUser`
-        client.currentUserId = .unique
+        client.authenticationRepository.setMockToken()
 
-        var completionError: Error?
-        controller.synchronizeDevices { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.synchronizeDevices {
             completionError = $0
         }
 
         // Simulate network response with the error.
         let networkError = TestError()
-        env.currentUserUpdater.fetchDevices_completion?(networkError)
+        env.currentUserUpdater.fetchDevices_completion?(.failure(networkError))
 
-        // Assert error is propogated.
+        // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
 
@@ -444,50 +429,37 @@ final class CurrentUserController_Tests: XCTestCase {
 
         XCTAssert(error is ClientError.CurrentUserDoesNotExist)
     }
-    
+
     func test_synchronizeDevices_doesNotDeadlock() throws {
         // GIVEN
         // Simulate saving current user to a database
-        try client.databaseContainer.writeSynchronously {
-            let currentUserPayload: CurrentUserPayload = .dummy(
-                userId: .unique,
-                role: .user,
-                unreadCount: .none
-            )
-            try $0.saveCurrentUser(payload: currentUserPayload)
-        }
-        
+        client.authenticationRepository.setMockToken()
+
         // WHEN
         // updateUser is called from background queue
         DispatchQueue.global().async {
             self.controller.synchronizeDevices()
         }
-        
-        // Sleep main thread for a little time
-        // to make sure background thread acquires lock (from Atomic, in EntityDatabaseObserver.item)
-        // if we don't sleep, main thread acquires lock first & no deadlock occurs
-        sleep(1)
-        
+
         // THEN
-        // updateUser is called from main queue and actually finishes
-        let exp = expectation(description: "completion called")
-        controller.synchronizeDevices() { _ in
-            exp.fulfill()
-        }
-        
-        wait(for: [exp], timeout: 5)
+        // synchronizeDevices is called from main queue and actually finishes
+        delayExecution(of: { completion in
+            self.controller.synchronizeDevices(completion: completion)
+        }, onCompletion: {
+            self.env.currentUserUpdater.fetchDevices_completion?(.success([]))
+        })
     }
-    
+
     // MARK: addDevice
-    
+
     func test_addDevice_whenPushProviderIsAPN_callsCurrentUserUpdaterWithCorrectValues() {
         // Simulate `connectUser`
-        client.currentUserId = .unique
-        
+        client.authenticationRepository.setMockToken()
+
         let expectedDeviceToken = "test".data(using: .utf8)!
-        
+
         controller.addDevice(.apn(token: expectedDeviceToken))
-        
+
         // Assert updater is called with correct data
         XCTAssertEqual(env.currentUserUpdater.addDevice_id, expectedDeviceToken.deviceId)
         XCTAssertEqual(env.currentUserUpdater.addDevice_pushProvider, PushProvider.apn)
@@ -496,7 +468,7 @@ final class CurrentUserController_Tests: XCTestCase {
 
     func test_addDevice_whenPushProviderIsFirebase_callsCurrentUserUpdaterWithCorrectValues() {
         // Simulate `connectUser`
-        client.currentUserId = .unique
+        client.authenticationRepository.setMockToken()
 
         let expectedDeviceId = "test"
 
@@ -507,304 +479,718 @@ final class CurrentUserController_Tests: XCTestCase {
         XCTAssertEqual(env.currentUserUpdater.addDevice_pushProvider, PushProvider.firebase)
         XCTAssertNotNil(env.currentUserUpdater.addDevice_completion)
     }
-    
+
+    func test_addDevice_forwardsForceRegistration() {
+        client.authenticationRepository.setMockToken()
+
+        controller.addDevice(.apn(token: Data("test".utf8)))
+        XCTAssertEqual(env.currentUserUpdater.addDevice_forceRegistration, false)
+
+        controller.addDevice(.apn(token: Data("test".utf8)), forceRegistration: true)
+        XCTAssertEqual(env.currentUserUpdater.addDevice_forceRegistration, true)
+    }
+
     func test_addDevice_propagatesError() throws {
         // Simulate `connectUser`
-        client.currentUserId = .unique
-        
-        var completionError: Error?
-        controller.addDevice(.firebase(token: "test")) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        client.authenticationRepository.setMockToken()
+
+        nonisolated(unsafe) var completionError: Error?
+        controller.addDevice(.firebase(token: "test")) {
             completionError = $0
         }
-        
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.currentUserUpdater.addDevice_completion?(networkError)
-        
-        // Assert error is propogated.
+
+        // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
     func test_addDevice_propagatesNilError() throws {
         // Simulate `connectUser`
-        client.currentUserId = .unique
-        
-        var completionIsCalled = false
-        controller.addDevice(.firebase(token: "test")) { [callbackQueueID] error in
-            // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
+        client.authenticationRepository.setMockToken()
+
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.addDevice(.firebase(token: "test")) { error in
             // Assert there is no error.
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.currentUserUpdater.addDevice_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.currentUserUpdater.addDevice_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_addDevice_whenCurrentUserDoesNotExist_shouldError() throws {
+        client.authenticationRepository.logOutUser()
+
         let error = try waitFor {
             controller.addDevice(.firebase(token: "test"), completion: $0)
         }
-        
+
         XCTAssert(error is ClientError.CurrentUserDoesNotExist)
     }
-    
+
     func test_addDevice_doesNotDeadlock() throws {
         // GIVEN
         // Simulate saving current user to a database
-        try client.databaseContainer.writeSynchronously {
-            let currentUserPayload: CurrentUserPayload = .dummy(
-                userId: .unique,
-                role: .user,
-                unreadCount: .none
-            )
-            try $0.saveCurrentUser(payload: currentUserPayload)
-        }
-        
+        client.authenticationRepository.setMockToken()
+
         // WHEN
         // updateUser is called from background queue
         DispatchQueue.global().async {
             self.controller.addDevice(.apn(token: .init()))
         }
-        
-        // Sleep main thread for a little time
-        // to make sure background thread acquires lock (from Atomic, in EntityDatabaseObserver.item)
-        // if we don't sleep, main thread acquires lock first & no deadlock occurs
-        sleep(1)
-        
+
         // THEN
-        // updateUser is called from main queue and actually finishes
-        let exp = expectation(description: "completion called")
-        controller.addDevice(.apn(token: .init())) { _ in
-            exp.fulfill()
-        }
-        
-        wait(for: [exp], timeout: 5)
+        // addDevice is called from main queue and actually finishes
+        delayExecution(of: { completion in
+            self.controller.addDevice(.apn(token: .init()), completion: completion)
+        }, onCompletion: {
+            self.env.currentUserUpdater.addDevice_completion?(nil)
+        })
     }
-    
+
     // MARK: removeDevice
-    
+
     func test_removeDevice_callCurrentUserUpdater_withCorrectValues() {
         // Simulate `connectUser`
-        client.currentUserId = .unique
-        
+        client.authenticationRepository.setMockToken()
+
         let expectedId = String.unique
-        
+
         controller.removeDevice(id: expectedId)
-        
+
         // Assert udpater is called with correct data
         XCTAssertEqual(env.currentUserUpdater.removeDevice_id, expectedId)
         XCTAssertNotNil(env.currentUserUpdater.removeDevice_completion)
     }
-    
+
     func test_removeDevice_propagatesError() throws {
         // Simulate `connectUser`
-        client.currentUserId = .unique
-        
+        client.authenticationRepository.setMockToken()
+
         let expectedId = String.unique
-        
-        var completionError: Error?
-        controller.removeDevice(id: expectedId) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+
+        nonisolated(unsafe) var completionError: Error?
+        controller.removeDevice(id: expectedId) {
             completionError = $0
         }
-        
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.currentUserUpdater.removeDevice_completion?(networkError)
-        
-        // Assert error is propogated.
+
+        // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
     func test_removeDevice_propagatesNilError() throws {
         // Simulate `connectUser`
-        client.currentUserId = .unique
-        
+        client.authenticationRepository.setMockToken()
+
         let expectedId = String.unique
-        
-        var completionIsCalled = false
-        controller.removeDevice(id: expectedId) { [callbackQueueID] error in
-            // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
+
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.removeDevice(id: expectedId) { error in
             // Assert there is no error.
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.currentUserUpdater.removeDevice_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.currentUserUpdater.removeDevice_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_removeDevice_whenCurrentUserDoesNotExist_shouldError() throws {
+        client.authenticationRepository.logOutUser()
+
         let error = try waitFor {
             controller.removeDevice(id: .unique, completion: $0)
         }
-        
+
         XCTAssert(error is ClientError.CurrentUserDoesNotExist)
     }
-    
+
     func test_removeDevice_doesNotDeadlock() throws {
         // GIVEN
         // Simulate saving current user to a database
-        try client.databaseContainer.writeSynchronously {
-            let currentUserPayload: CurrentUserPayload = .dummy(
-                userId: .unique,
-                role: .user,
-                unreadCount: .none
-            )
-            try $0.saveCurrentUser(payload: currentUserPayload)
-        }
-        
+        client.authenticationRepository.setMockToken()
+
         // WHEN
         // updateUser is called from background queue
         DispatchQueue.global().async {
             self.controller.removeDevice(id: .unique)
         }
-        
-        // Sleep main thread for a little time
-        // to make sure background thread acquires lock (from Atomic, in EntityDatabaseObserver.item)
-        // if we don't sleep, main thread acquires lock first & no deadlock occurs
-        sleep(1)
-        
+
         // THEN
         // updateUser is called from main queue and actually finishes
-        let exp = expectation(description: "completion called")
-        controller.removeDevice(id: .unique) { _ in
-            exp.fulfill()
-        }
-        
-        wait(for: [exp], timeout: 5)
+        delayExecution(of: { completion in
+            self.controller.removeDevice(id: .unique, completion: completion)
+        }, onCompletion: {
+            self.env.currentUserUpdater.removeDevice_completion?(nil)
+        })
     }
-    
+
     // MARK: - Reload user if needed
 
-    func test_reloadUserIfNeeded_callsClientUpdater_and_propagatesTheResult() {
+    func test_reloadUserIfNeeded_callsClientUpdater_and_propagatesTheResult() throws {
+        let authenticationRepository = try XCTUnwrap(client.authenticationRepository as? AuthenticationRepository_Mock)
         for error in [nil, TestError()] {
             // Simulate `reloadUserIfNeeded` and capture the result.
-            var reloadUserIfNeededCompletionCalled = false
-            var reloadUserIfNeededCompletionError: Error?
-            controller.reloadUserIfNeeded { [callbackQueueID] error in
-                AssertTestQueue(withId: callbackQueueID)
+            authenticationRepository.refreshTokenResult = error.map { .failure($0) } ?? .success(())
+
+            let expectation = self.expectation(description: "reloadCompletes")
+            nonisolated(unsafe) var reloadUserIfNeededCompletionError: Error?
+            controller.reloadUserIfNeeded { error in
                 reloadUserIfNeededCompletionError = error
-                reloadUserIfNeededCompletionCalled = true
+                expectation.fulfill()
             }
 
-            // Assert the `chatClientUpdater` is called.
-            XCTAssertTrue(env.chatClientUpdater.reloadUserIfNeeded_called)
-            // The completion hasn't been called yet.
-            XCTAssertFalse(reloadUserIfNeededCompletionCalled)
-
-            // Simulate `chatClientUpdater` result.
-            env.chatClientUpdater.reloadUserIfNeeded_completion!(error)
-
-            // Assert `reloadUserIfNeeded` completion is called.
-            AssertAsync.willBeTrue(reloadUserIfNeededCompletionCalled)
+            waitForExpectations(timeout: defaultTimeout)
 
             // Assert `error` is propagated.
             XCTAssertEqual(reloadUserIfNeededCompletionError as? TestError, error)
         }
     }
-    
+
     // MARK: - Mark all read
-    
+
     func test_markAllRead_callsChannelListUpdater() {
         // GIVEN
-        var completionCalled = false
-        
+        nonisolated(unsafe) var completionCalled = false
+
         // WHEN
-        controller.markAllRead { [callbackQueueID] error in
-            AssertTestQueue(withId: callbackQueueID)
+        controller.markAllRead { error in
             XCTAssertNil(error)
             completionCalled = true
         }
-                                        
+
         env.currentUserUpdater!.markAllRead_completion?(nil)
-        
+
         // THEN
         AssertAsync.willBeTrue(completionCalled)
     }
-    
+
     func test_markAllRead_keepsControllerAlive() {
         // GIVEN
-        weak var weakController = controller
-        
+        let weakController = { [weak controller] in controller }
+
         // WHEN
         controller.markAllRead { _ in }
-        
+
         controller = nil
-        
+
         // THEN
-        AssertAsync.staysTrue(weakController != nil)
+        AssertAsync.staysTrue(weakController() != nil)
     }
-    
+
     func test_markAllRead_propagatesErrorFromUpdater() {
         // GIVEN
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         let testError = TestError()
-        
+
         // WHEN
-        controller.markAllRead { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        controller.markAllRead {
             completionCalledError = $0
         }
-        
+
         env.currentUserUpdater!.markAllRead_completion?(testError)
-        
+
         // THEN
         AssertAsync.willBeEqual(completionCalledError as? TestError, testError)
+    }
+
+    // Delay execution for a bit to make sure background thread acquires lock
+    // (from Atomic, in EntityDatabaseObserver.item) if we don't sleep, main thread acquires lock first
+    // & no deadlock occurs
+    private func delayExecution(of function: @escaping @Sendable ((@Sendable (Error?) -> Void)?) -> Void, onCompletion: (@Sendable () -> Void)?) {
+        let exp = expectation(description: "completion called")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            function() { _ in
+                exp.fulfill()
+            }
+            onCompletion?()
+        }
+
+        wait(for: [exp], timeout: defaultTimeout)
+    }
+    
+    // MARK: - Delete All Attachment Downloads
+    
+    func test_deleteAllLocalAttachmentDownloads_propagatesErrorFromUpdater() {
+        let testError = TestError()
+        let expectation = XCTestExpectation()
+        controller.deleteAllLocalAttachmentDownloads { error in
+            XCTAssertEqual(testError, error as? TestError)
+            expectation.fulfill()
+        }
+        env.currentUserUpdater.deleteAllLocalAttachmentDownloads_completion?(testError)
+        wait(for: [expectation], timeout: defaultTimeout)
+    }
+    
+    func test_deleteAllLocalAttachmentDownloads_success() {
+        let expectation = XCTestExpectation()
+        controller.deleteAllLocalAttachmentDownloads { error in
+            XCTAssertNil(error)
+            expectation.fulfill()
+        }
+        env.currentUserUpdater.deleteAllLocalAttachmentDownloads_completion?(nil)
+        wait(for: [expectation], timeout: defaultTimeout)
+    }
+
+    // MARK: - Load All Unreads
+    
+    func test_loadAllUnreads_callsUpdaterCorrectly() {
+        // Simulate having a current user
+        client.authenticationRepository.setMockToken()
+        
+        // Call loadAllUnreads
+        nonisolated(unsafe) var receivedUnreads: CurrentUserUnreads?
+        let exp = expectation(description: "loadAllUnreads called")
+        controller.loadAllUnreads { result in
+            receivedUnreads = try? result.get()
+            exp.fulfill()
+        }
+        
+        // Simulate successful response
+        let expectedUnreads = CurrentUserUnreads(
+            channelType: [
+                UnreadChannelByType(
+                    channelCount: 5,
+                    channelType: .messaging,
+                    unreadCount: 10
+                )
+            ],
+            channels: [
+                UnreadChannel(
+                    channelId: .init(type: .messaging, id: "channel1"),
+                    lastRead: Date(),
+                    unreadCount: 5
+                )
+            ],
+            threads: [
+                UnreadThread(
+                    lastRead: Date(),
+                    lastReadMessageId: "lastRead1",
+                    parentMessageId: "thread1",
+                    unreadCount: 3
+                )
+            ],
+            totalUnreadCount: 10,
+            totalUnreadCountByTeam: ["Benfica": 3],
+            totalUnreadThreadsCount: 3
+        )
+        
+        // Simulate completion with success
+        env.currentUserUpdater.loadAllUnreads_completion?(.success(expectedUnreads))
+        
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Assert the result is correct
+        XCTAssertEqual(receivedUnreads?.totalUnreadMessagesCount, expectedUnreads.totalUnreadMessagesCount)
+        XCTAssertEqual(receivedUnreads?.totalUnreadCountByTeam?["Benfica"], 3)
+    }
+    
+    func test_loadAllUnreads_propagatesError() {
+        // Simulate having a current user
+        client.authenticationRepository.setMockToken()
+        
+        // Call loadAllUnreads
+        nonisolated(unsafe) var receivedError: Error?
+        let exp = expectation(description: "loadAllUnreads called")
+        controller.loadAllUnreads { result in
+            receivedError = result.error
+            exp.fulfill()
+        }
+        
+        // Simulate error response
+        let expectedError = TestError()
+        env.currentUserUpdater.loadAllUnreads_completion?(.failure(expectedError))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Assert error is received correctly
+        XCTAssertEqual(receivedError as? TestError, expectedError)
+    }
+    
+    func test_loadAllUnreads_keepsControllerAlive() {
+        // Simulate having a current user
+        client.authenticationRepository.setMockToken()
+        
+        // Create weak reference to controller
+        let weakController = { [weak controller] in controller }
+        
+        // Call loadAllUnreads
+        controller.loadAllUnreads { _ in }
+        
+        // Try to deallocate controller
+        controller = nil
+        
+        // Verify controller is still alive due to the async operation
+        AssertAsync.staysTrue(weakController() != nil)
+    }
+
+    // MARK: - setPushPreference
+
+    func test_setPushPreference_callsUpdaterWithCorrectParameters() {
+        // GIVEN
+        let level: PushPreferenceLevel = .directMentions
+        let expectedPreference = PushPreferenceInput(
+            chatLevel: .directMentions,
+            removeDisable: true
+        )
+
+        // WHEN
+        controller.setPushPreference(level: level)
+
+        // THEN
+        XCTAssertEqual(env.currentUserUpdater?.setPushPreference_preference, expectedPreference)
+    }
+
+    func test_setPushPreference_propagatesSuccess() {
+        // GIVEN
+        let level: PushPreferenceLevel = .all
+        let expectedPreference = PushPreference(
+            level: .all,
+            disabledUntil: nil
+        )
+
+        // WHEN
+        nonisolated(unsafe) var completionResult: Result<PushPreference, Error>?
+        controller.setPushPreference(level: level) { result in
+            completionResult = result
+        }
+
+        env.currentUserUpdater?.setPushPreference_completion_result = .success(expectedPreference)
+        env.currentUserUpdater?.setPushPreference_completion_result?.invoke(with: env.currentUserUpdater?.setPushPreference_completion)
+
+        // THEN
+        AssertAsync.willBeEqual(completionResult?.value, expectedPreference)
+    }
+
+    func test_setPushPreference_propagatesError() {
+        // GIVEN
+        let level: PushPreferenceLevel = .directMentions
+        let expectedError = TestError()
+
+        // WHEN
+        nonisolated(unsafe) var completionResult: Result<PushPreference, Error>?
+        controller.setPushPreference(level: level) { result in
+            completionResult = result
+        }
+
+        env.currentUserUpdater?.setPushPreference_completion_result = .failure(expectedError)
+        env.currentUserUpdater?.setPushPreference_completion_result?.invoke(with: env.currentUserUpdater?.setPushPreference_completion)
+
+        // THEN
+        AssertAsync.willBeEqual(completionResult?.error as? TestError, expectedError)
+    }
+
+    // MARK: - setQuietHours
+
+    func test_setQuietHours_callsUpdaterWithSchedule() {
+        // GIVEN
+        let schedule = PushSchedule(
+            quietHours: [QuietHoursRule(days: QuietHoursDay.weekdays, start: "18:00", end: "09:00")],
+            timezone: TimeZone(identifier: "Europe/Amsterdam")!
+        )
+
+        // WHEN
+        controller.setQuietHours(schedule)
+
+        // THEN
+        let expectedPreference = PushPreferenceInput(
+            schedule: PushScheduleInput(
+                quietHours: [QuietHoursRuleInput(days: QuietHoursDay.weekdays, end: "09:00", start: "18:00")],
+                timezone: "Europe/Amsterdam"
+            )
+        )
+        XCTAssertEqual(env.currentUserUpdater?.setPushPreference_preference, expectedPreference)
+        XCTAssertNil(env.currentUserUpdater?.setPushPreference_preference?.disabledUntil)
+        XCTAssertNil(env.currentUserUpdater?.setPushPreference_preference?.channelCid)
+    }
+
+    func test_setQuietHours_whenScheduleIsReturned_propagatesSuccess() throws {
+        // GIVEN
+        let schedule = PushSchedule(quietHours: [QuietHoursRule(start: "22:00", end: "07:00")])
+        let expectedPreference = PushPreference(level: .all, schedule: schedule)
+
+        // WHEN
+        let result: Result<PushPreference, Error> = try waitFor { done in
+            controller.setQuietHours(schedule, completion: done)
+            env.currentUserUpdater?.setPushPreference_completion?(.success(expectedPreference))
+        }
+
+        // THEN
+        XCTAssertEqual(result.value, expectedPreference)
+    }
+
+    func test_setQuietHours_whenScheduleIsNotReturned_fails() throws {
+        // GIVEN
+        let schedule = PushSchedule(quietHours: [QuietHoursRule(start: "22:00", end: "07:00")])
+
+        // WHEN
+        let result: Result<PushPreference, Error> = try waitFor { done in
+            controller.setQuietHours(schedule, completion: done)
+            env.currentUserUpdater?.setPushPreference_completion?(.success(PushPreference(level: .all)))
+        }
+
+        // THEN
+        XCTAssertTrue(result.error is ClientError.QuietHoursNotStored)
+    }
+
+    func test_setQuietHours_whenScheduleHasNoRules_failsWithoutCallingUpdater() throws {
+        // WHEN
+        let result: Result<PushPreference, Error> = try waitFor { done in
+            controller.setQuietHours(PushSchedule(quietHours: []), completion: done)
+        }
+
+        // THEN
+        XCTAssertTrue(result.error is ClientError.QuietHoursEmpty)
+        XCTAssertNil(env.currentUserUpdater?.setPushPreference_preference)
+    }
+
+    func test_setQuietHours_propagatesError() throws {
+        // GIVEN
+        let expectedError = TestError()
+
+        // WHEN
+        let result: Result<PushPreference, Error> = try waitFor { done in
+            controller.setQuietHours(PushSchedule(quietHours: [QuietHoursRule(start: "22:00", end: "07:00")]), completion: done)
+            env.currentUserUpdater?.setPushPreference_completion?(.failure(expectedError))
+        }
+
+        // THEN
+        XCTAssertEqual(result.error as? TestError, expectedError)
+    }
+
+    // MARK: - removeQuietHours
+
+    func test_removeQuietHours_callsUpdaterWithRemoveSchedule() {
+        // WHEN
+        controller.removeQuietHours()
+
+        // THEN
+        XCTAssertEqual(env.currentUserUpdater?.setPushPreference_preference, PushPreferenceInput(removeSchedule: true))
+    }
+
+    func test_removeQuietHours_propagatesSuccess() throws {
+        // GIVEN
+        let expectedPreference = PushPreference(level: .all)
+
+        // WHEN
+        let result: Result<PushPreference, Error> = try waitFor { done in
+            controller.removeQuietHours(completion: done)
+            env.currentUserUpdater?.setPushPreference_completion?(.success(expectedPreference))
+        }
+
+        // THEN
+        XCTAssertEqual(result.value, expectedPreference)
+    }
+
+    func test_removeQuietHours_propagatesError() throws {
+        // GIVEN
+        let expectedError = TestError()
+
+        // WHEN
+        let result: Result<PushPreference, Error> = try waitFor { done in
+            controller.removeQuietHours(completion: done)
+            env.currentUserUpdater?.setPushPreference_completion?(.failure(expectedError))
+        }
+
+        // THEN
+        XCTAssertEqual(result.error as? TestError, expectedError)
+    }
+
+    // MARK: - muteUsers
+
+    func test_muteUsers_callsUpdaterWithCorrectParameters() {
+        // GIVEN
+        let userIds: Set<UserId> = [.unique, .unique]
+
+        // WHEN
+        controller.muteUsers(userIds, expiration: 30) { _ in }
+
+        // THEN
+        XCTAssertEqual(env.currentUserUpdater?.muteUsers_userIds, userIds)
+        XCTAssertEqual(env.currentUserUpdater?.muteUsers_expiration, 30)
+    }
+
+    func test_muteUsers_propagatesSuccess() throws {
+        // GIVEN
+        let mutedUserId: UserId = .unique
+        let expectedMutedUsers = MuteUsersResponse(
+            mutes: [.init(createdAt: .unique, expires: nil, user: .mock(id: mutedUserId), updatedAt: .unique)],
+            nonExistingUsers: nil
+        )
+
+        // WHEN
+        let result: Result<MuteUsersResponse, Error> = try waitFor { done in
+            controller.muteUsers([mutedUserId], completion: done)
+            env.currentUserUpdater?.muteUsers_completion?(.success(expectedMutedUsers))
+        }
+
+        // THEN
+        XCTAssertEqual(result.value?.mutes?.map { $0.user?.id }, [mutedUserId])
+    }
+
+    func test_muteUsers_propagatesError() throws {
+        // GIVEN
+        let expectedError = TestError()
+
+        // WHEN
+        let result: Result<MuteUsersResponse, Error> = try waitFor { done in
+            controller.muteUsers([.unique], completion: done)
+            env.currentUserUpdater?.muteUsers_completion?(.failure(expectedError))
+        }
+
+        // THEN
+        XCTAssertEqual(result.error as? TestError, expectedError)
+    }
+
+    // MARK: - unmuteUsers
+
+    func test_unmuteUsers_callsUpdaterWithCorrectParameters() {
+        // GIVEN
+        let userIds: Set<UserId> = [.unique, .unique]
+
+        // WHEN
+        controller.unmuteUsers(userIds) { _ in }
+
+        // THEN
+        XCTAssertEqual(env.currentUserUpdater?.unmuteUsers_userIds, userIds)
+    }
+
+    func test_unmuteUsers_propagatesSuccess() throws {
+        // GIVEN
+        let nonExistingUserId: UserId = .unique
+
+        // WHEN
+        let result: Result<UnmuteUsersResponse, Error> = try waitFor { done in
+            controller.unmuteUsers([.unique], completion: done)
+            env.currentUserUpdater?.unmuteUsers_completion?(.success(.init(nonExistingUsers: [nonExistingUserId])))
+        }
+
+        // THEN
+        XCTAssertEqual(result.value?.nonExistingUsers, [nonExistingUserId])
+    }
+
+    func test_unmuteUsers_propagatesError() throws {
+        // GIVEN
+        let expectedError = TestError()
+
+        // WHEN
+        let result: Result<UnmuteUsersResponse, Error> = try waitFor { done in
+            controller.unmuteUsers([.unique], completion: done)
+            env.currentUserUpdater?.unmuteUsers_completion?(.failure(expectedError))
+        }
+
+        // THEN
+        XCTAssertEqual(result.error as? TestError, expectedError)
+    }
+
+    // MARK: - snoozePushNotifications
+
+    func test_snoozePushNotifications_callsUpdaterWithCorrectParameters() {
+        // GIVEN
+        let date = Date().addingTimeInterval(3600)
+        let expectedPreference = PushPreferenceInput(
+            chatLevel: .all,
+            disabledUntil: date
+        )
+
+        // WHEN
+        controller.snoozePushNotifications(until: date)
+
+        // THEN
+        XCTAssertEqual(env.currentUserUpdater?.setPushPreference_preference, expectedPreference)
+    }
+
+    func test_snoozePushNotifications_propagatesSuccess() {
+        // GIVEN
+        let date = Date().addingTimeInterval(3600)
+        let expectedPreference = PushPreference(
+            level: .all,
+            disabledUntil: date
+        )
+
+        // WHEN
+        nonisolated(unsafe) var completionResult: Result<PushPreference, Error>?
+        controller.snoozePushNotifications(until: date) { result in
+            completionResult = result
+        }
+
+        env.currentUserUpdater?.setPushPreference_completion_result = .success(expectedPreference)
+        env.currentUserUpdater?.setPushPreference_completion_result?.invoke(with: env.currentUserUpdater?.setPushPreference_completion)
+
+        // THEN
+        AssertAsync.willBeEqual(completionResult?.value, expectedPreference)
+    }
+
+    func test_snoozePushNotifications_propagatesError() {
+        // GIVEN
+        let date = Date().addingTimeInterval(3600)
+        let expectedError = TestError()
+
+        // WHEN
+        nonisolated(unsafe) var completionResult: Result<PushPreference, Error>?
+        controller.snoozePushNotifications(until: date) { result in
+            completionResult = result
+        }
+
+        env.currentUserUpdater?.setPushPreference_completion_result = .failure(expectedError)
+        env.currentUserUpdater?.setPushPreference_completion_result?.invoke(with: env.currentUserUpdater?.setPushPreference_completion)
+
+        // THEN
+        AssertAsync.willBeEqual(completionResult?.error as? TestError, expectedError)
     }
 }
 
 private class TestEnvironment {
-    var currentUserObserver: EntityDatabaseObserver_Mock<CurrentChatUser, CurrentUserDTO>!
+    var currentUserObserver: BackgroundEntityDatabaseObserver_Mock<CurrentChatUser, CurrentUserDTO>!
     var currentUserObserverItem: CurrentChatUser?
     var currentUserObserverStartUpdatingError: Error?
 
-    var chatClientUpdater: ChatClientUpdater_Mock!
     var currentUserUpdater: CurrentUserUpdater_Mock!
 
     lazy var currentUserControllerEnvironment: CurrentChatUserController
         .Environment = .init(currentUserObserverBuilder: { [unowned self] in
-            self.currentUserObserver = .init(context: $0, fetchRequest: $1, itemCreator: $2, fetchedResultsControllerType: $3)
+            self.currentUserObserver = .init(database: $0, fetchRequest: $1, itemCreator: $2, fetchedResultsControllerType: $3)
             self.currentUserObserver.synchronizeError = self.currentUserObserverStartUpdatingError
             self.currentUserObserver.item_mock = self.currentUserObserverItem
             return self.currentUserObserver!
         }, currentUserUpdaterBuilder: { [unowned self] db, client in
             self.currentUserUpdater = CurrentUserUpdater_Mock(database: db, apiClient: client)
             return self.currentUserUpdater!
-        }, chatClientUpdaterBuilder: { [unowned self] in
-            self.chatClientUpdater = ChatClientUpdater_Mock(client: $0)
-            return self.chatClientUpdater!
         })
 }

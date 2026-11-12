@@ -1,176 +1,24 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
 import Foundation
-
-public extension ChatClient {
-    /// Creates a new `ChatChannelController` for the channel with the provided id.
-    ///
-    /// - Parameters:
-    ///   - cid: The id of the channel this controller represents.
-    ///   - channelListQuery: The channel list query the channel this controller represents is part of.
-    ///   - messageOrdering: Describes the ordering the messages are presented.
-    ///
-    /// - Returns: A new instance of `ChatChannelController`.
-    ///
-    func channelController(
-        for cid: ChannelId,
-        channelListQuery: ChannelListQuery? = nil,
-        messageOrdering: MessageOrdering = .topToBottom
-    ) -> ChatChannelController {
-        .init(
-            channelQuery: .init(cid: cid),
-            channelListQuery: channelListQuery,
-            client: self,
-            messageOrdering: messageOrdering
-        )
-    }
-    
-    /// Creates a new `ChatChannelController` for the channel with the provided channel query.
-    ///
-    /// - Parameters:
-    ///   - channelQuery: The ChannelQuery this controller represents
-    ///   - channelListQuery: The channel list query the channel this controller represents is part of.
-    ///   - messageOrdering: Describes the ordering the messages are presented.
-    ///
-    /// - Returns: A new instance of `ChatChannelController`.
-    ///
-    func channelController(
-        for channelQuery: ChannelQuery,
-        channelListQuery: ChannelListQuery? = nil,
-        messageOrdering: MessageOrdering = .topToBottom
-    ) -> ChatChannelController {
-        .init(
-            channelQuery: channelQuery,
-            channelListQuery: channelListQuery,
-            client: self,
-            messageOrdering: messageOrdering
-        )
-    }
-    
-    /// Creates a `ChatChannelController` that will create a new channel, if the channel doesn't exist already.
-    ///
-    /// It's safe to call this method for already existing channels. However, if you queried the channel before and you're sure it exists locally,
-    /// it can be faster and more convenient to use `channelController(for cid: ChannelId)` to create a controller for it.
-    ///
-    /// - Parameters:
-    ///   - cid: The `ChannelId` for the new channel.
-    ///   - name: The new channel name.
-    ///   - imageURL: The new channel avatar URL.
-    ///   - team: Team for new channel.
-    ///   - members: Ds for the new channel members.
-    ///   - isCurrentUserMember: If set to `true` the current user will be included into the channel. Is `true` by default.
-    ///   - messageOrdering: Describes the ordering the messages are presented.
-    ///   - invites: IDs for the new channel invitees.
-    ///   - extraData: Extra data for the new channel.
-    ///   - channelListQuery: The channel list query the channel this controller represents is part of.
-    /// - Throws: `ClientError.CurrentUserDoesNotExist` if there is no currently logged-in user.
-    /// - Returns: A new instance of `ChatChannelController`.
-    func channelController(
-        createChannelWithId cid: ChannelId,
-        name: String? = nil,
-        imageURL: URL? = nil,
-        team: String? = nil,
-        members: Set<UserId> = [],
-        isCurrentUserMember: Bool = true,
-        messageOrdering: MessageOrdering = .topToBottom,
-        invites: Set<UserId> = [],
-        extraData: [String: RawJSON] = [:],
-        channelListQuery: ChannelListQuery? = nil
-    ) throws -> ChatChannelController {
-        guard let currentUserId = currentUserId else {
-            throw ClientError.CurrentUserDoesNotExist()
-        }
-
-        let payload = ChannelEditDetailPayload(
-            cid: cid,
-            name: name,
-            imageURL: imageURL,
-            team: team,
-            members: members.union(isCurrentUserMember ? [currentUserId] : []),
-            invites: invites,
-            extraData: extraData
-        )
-
-        return .init(
-            channelQuery: .init(channelPayload: payload),
-            channelListQuery: channelListQuery,
-            client: self,
-            isChannelAlreadyCreated: false,
-            messageOrdering: messageOrdering
-        )
-    }
-
-    /// Creates a `ChatChannelController` that will create a new channel with the provided members without having to specify
-    /// the channel id explicitly. This is great for direct message channels because the channel should be uniquely identified by
-    /// its members. If the channel for these members already exist, it will be reused.
-    ///
-    /// It's safe to call this method for already existing channels. However, if you queried the channel before and you're sure it exists locally,
-    /// it can be faster and more convenient to use `channelController(for cid: ChannelId)` to create a controller for it.
-    ///
-    /// - Parameters:
-    ///   - members: Members for the new channel. Must not be empty.
-    ///   - type: The type of the channel.
-    ///   - isCurrentUserMember: If set to `true` the current user will be included into the channel. Is `true` by default.
-    ///   - messageOrdering: Describes the ordering the messages are presented.
-    ///   - name: The new channel name.
-    ///   - imageURL: The new channel avatar URL.
-    ///   - team: Team for the new channel.
-    ///   - extraData: Extra data for the new channel.
-    ///   - channelListQuery: The channel list query the channel this controller represents is part of.
-    ///
-    /// - Throws:
-    ///     - `ClientError.ChannelEmptyMembers` if `members` is empty.
-    ///     - `ClientError.CurrentUserDoesNotExist` if there is no currently logged-in user.
-    /// - Returns: A new instance of `ChatChannelController`.
-    func channelController(
-        createDirectMessageChannelWith members: Set<UserId>,
-        type: ChannelType = .messaging,
-        isCurrentUserMember: Bool = true,
-        messageOrdering: MessageOrdering = .topToBottom,
-        name: String? = nil,
-        imageURL: URL? = nil,
-        team: String? = nil,
-        extraData: [String: RawJSON],
-        channelListQuery: ChannelListQuery? = nil
-    ) throws -> ChatChannelController {
-        guard let currentUserId = currentUserId else { throw ClientError.CurrentUserDoesNotExist() }
-        guard !members.isEmpty else { throw ClientError.ChannelEmptyMembers() }
-
-        let payload = ChannelEditDetailPayload(
-            type: type,
-            name: name,
-            imageURL: imageURL,
-            team: team,
-            members: members.union(isCurrentUserMember ? [currentUserId] : []),
-            invites: [],
-            extraData: extraData
-        )
-        return .init(
-            channelQuery: .init(channelPayload: payload),
-            channelListQuery: channelListQuery,
-            client: self,
-            isChannelAlreadyCreated: false,
-            messageOrdering: messageOrdering
-        )
-    }
-}
 
 /// `ChatChannelController` is a controller class which allows mutating and observing changes of a specific chat channel.
 ///
 /// `ChatChannelController` objects are lightweight, and they can be used for both, continuous data change observations (like
 /// getting new messages in the channel), and for quick channel mutations (like adding a member to a channel).
 ///
-public class ChatChannelController: DataController, DelegateCallable, DataStoreProvider {
+/// - Note: For an async-await alternative of the `ChatChannelController`, please check ``Chat`` in the async-await supported [state layer](https://getstream.io/chat/docs/sdk/ios/client/state-layer/state-layer-overview/).
+public class ChatChannelController: DataController, DelegateCallable, DataStoreProvider, @unchecked Sendable {
     /// The ChannelQuery this controller observes.
     @Atomic public private(set) var channelQuery: ChannelQuery
-    
+
     /// The channel list query the channel is related to.
     /// It's `nil` when this controller wasn't created by a `ChannelListController`
     public let channelListQuery: ChannelListQuery?
-    
+
     /// Flag indicating whether channel is created on backend. We need this flag to restrict channel modification requests
     /// before channel is created on backend.
     /// There are 2 ways of creating new channel:
@@ -182,17 +30,14 @@ public class ChatChannelController: DataController, DelegateCallable, DataStoreP
     /// That is why we need to check both flag and valid `cid` before modifications.
     private var isChannelAlreadyCreated: Bool
 
-    /// A Boolean value that returns wether the previous messages have all been loaded or not.
-    public private(set) var hasLoadedAllPreviousMessages: Bool = false
-
     /// The identifier of a channel this controller observes.
     /// Will be `nil` when we want to create direct message channel and `id`
     /// is not yet generated by backend.
     public var cid: ChannelId? { channelQuery.cid }
-    
+
     /// The `ChatClient` instance this controller belongs to.
     public let client: ChatClient
-    
+
     /// The channel the controller represents.
     ///
     /// To observe changes of the channel, set your class as a delegate of this controller or use the provided
@@ -204,41 +49,131 @@ public class ChatChannelController: DataController, DelegateCallable, DataStoreP
         }
         return channelObserver?.item
     }
-    
+
     /// The messages of the channel the controller represents.
     ///
     /// To observe changes of the messages, set your class as a delegate of this controller or use the provided
     /// `Combine` publishers.
     ///
-    public var messages: LazyCachedMapCollection<ChatMessage> {
+    public var messages: [ChatMessage] {
         if state == .initialized {
             setLocalStateBasedOnError(startDatabaseObservers())
         }
         return messagesObserver?.items ?? []
     }
-    
+
     /// Describes the ordering the messages are presented.
     public let messageOrdering: MessageOrdering
 
     /// The worker used to fetch the remote data and communicate with servers.
-    private lazy var updater: ChannelUpdater = self.environment.channelUpdaterBuilder(
-        client.databaseContainer,
-        client.apiClient
-    )
-    
+    private let updater: ChannelUpdater
+
+    /// The component responsible to update a channel member.
+    private let channelMemberUpdater: ChannelMemberUpdater
+
     private lazy var eventSender: TypingEventsSender = self.environment.eventSenderBuilder(
         client.databaseContainer,
         client.apiClient
     )
     
-    private var markingRead: Bool = false
+    private lazy var readStateHandler: ReadStateHandler = self.environment.readStateHandlerBuilder(
+        client.authenticationRepository,
+        updater,
+        client.messageRepository,
+        client.config
+    )
+
+    /// A Boolean value that returns whether the oldest messages have all been loaded or not.
+    public var hasLoadedAllPreviousMessages: Bool {
+        updater.paginationState.hasLoadedAllPreviousMessages
+    }
+
+    /// A Boolean value that returns whether the newest messages have all been loaded or not.
+    public var hasLoadedAllNextMessages: Bool {
+        updater.paginationState.hasLoadedAllNextMessages || messages.isEmpty
+    }
+
+    /// A Boolean value that returns whether the channel is currently loading previous (old) messages.
+    public var isLoadingPreviousMessages: Bool {
+        updater.paginationState.isLoadingPreviousMessages
+    }
+
+    /// A Boolean value that returns whether the channel is currently loading next (new) messages.
+    public var isLoadingNextMessages: Bool {
+        updater.paginationState.isLoadingNextMessages
+    }
+
+    /// A Boolean value that returns whether the channel is currently loading a page around a message.
+    public var isLoadingMiddleMessages: Bool {
+        updater.paginationState.isLoadingMiddleMessages
+    }
+
+    /// A Boolean value that returns whether the channel is currently in a mid-page.
+    /// The value is false if the channel has the first page loaded.
+    /// The value is true if the channel is in a mid fragment and didn't load the first page yet.
+    public var isJumpingToMessage: Bool {
+        updater.paginationState.isJumpingToMessage
+    }
+
+    /// The pagination cursor for loading previous (old) messages.
+    internal var lastOldestMessageId: MessageId? {
+        updater.paginationState.oldestFetchedMessage?.id
+    }
+
+    /// The id if the first unread message for the current user.
+    ///
+    /// *Warning*:
+    /// When no messages have been read, this value returns:
+    ///     - `nil` if not all the messages have been loaded locally. Paginate to get a valid value for it
+    ///     - The oldest valid message in the history when all the messages have been loaded.
+    ///
+    /// When there are unread messages, but we don't have all of them in memory, we return `nil` message id.
+    /// This is because we cannot calculate the accurate value until we have all he messages in memory.
+    /// Paginate to get the most accurate value.
+    public var firstUnreadMessageId: MessageId? {
+        channel.flatMap { getFirstUnreadMessageId(for: $0) }
+    }
+
+    /// The id of the message which the current user last read.
+    public var lastReadMessageId: MessageId? {
+        client.currentUserId.flatMap { channel?.lastReadMessageId(userId: $0) }
+    }
+
+    /// A boolean indicating if the user marked the channel as unread in the current session
+    public var isMarkedAsUnread: Bool {
+        readStateHandler.isMarkedAsUnread
+    }
+
+    internal var lastNewestMessageId: MessageId? {
+        updater.paginationState.newestFetchedMessage?.id
+    }
+
+    /// A boolean value indicating if it should send typing events.
+    /// It is `true` if the channel typing events are enabled as well as the user privacy settings.
+    func shouldSendTypingEvents(completion: @escaping @Sendable (Bool) -> Void) {
+        guard channel?.canSendTypingEvents ?? false else {
+            completion(false)
+            return
+        }
+        eventSender.database.read { session in
+            session.currentUser?.isTypingIndicatorsEnabled ?? true
+        } completion: { result in
+            completion(result.value ?? false)
+        }
+    }
+
+    /// Set the delegate of `ChannelController` to observe the changes in the system.
+    public var delegate: ChatChannelControllerDelegate? {
+        get { multicastDelegate.mainDelegate }
+        set { multicastDelegate.set(mainDelegate: newValue) }
+    }
 
     /// A type-erased delegate.
-    var multicastDelegate: MulticastDelegate<ChatChannelControllerDelegate> = .init() {
+    internal var multicastDelegate: MulticastDelegate<ChatChannelControllerDelegate> = .init() {
         didSet {
             stateMulticastDelegate.set(mainDelegate: multicastDelegate.mainDelegate)
             stateMulticastDelegate.set(additionalDelegates: multicastDelegate.additionalDelegates)
-            
+
             // After setting delegate local changes will be fetched and observed.
             setLocalStateBasedOnError(startDatabaseObservers())
         }
@@ -246,36 +181,20 @@ public class ChatChannelController: DataController, DelegateCallable, DataStoreP
 
     /// Database observers.
     /// Will be `nil` when observing channel with backend generated `id` is not yet created.
-    @Cached private var channelObserver: EntityDatabaseObserver<ChatChannel, ChannelDTO>?
-    @Cached private var messagesObserver: ListDatabaseObserver<ChatMessage, MessageDTO>?
-    
+    private var channelObserver: BackgroundEntityDatabaseObserver<ChatChannel, ChannelDTO>?
+    private var messagesObserver: BackgroundListDatabaseObserver<ChatMessage, MessageDTO>?
+
     private var eventObservers: [EventObserver] = []
     private let environment: Environment
     
-    /// This callback is called after channel is created on backend but before channel is saved to DB. When channel is created
-    /// we receive backend generated cid and setting up current `ChannelController` to observe this channel DB changes.
-    /// Completion will be called if DB fetch will fail after setting new `ChannelQuery`.
-    private func channelCreated(forwardErrorTo completion: ((_ error: Error?) -> Void)?) -> ((ChannelId) -> Void) {
-        return { [weak self] cid in
-            guard let self = self else { return }
-            self.isChannelAlreadyCreated = true
-            completion?(self.set(cid: cid))
-        }
-    }
-    
-    /// Helper for updating state after fetching local data.
-    private var setLocalStateBasedOnError: ((_ error: Error?) -> Void) {
-        return { [weak self] error in
-            // Update observing state
-            self?.state = error == nil ? .localDataFetched : .localDataFetchFailed(ClientError(with: error))
-        }
-    }
-    
+    private let pollsRepository: PollsRepository
+
+    private let draftsRepository: DraftMessagesRepository
+
     var _basePublishers: Any?
     /// An internal backing object for all publicly available Combine publishers. We use it to simplify the way we expose
     /// publishers. Instead of creating custom `Publisher` types, we use `CurrentValueSubject` and `PassthroughSubject` internally,
     /// and expose the published values by mapping them to a read-only `AnyPublisher` type.
-    @available(iOS 13, *)
     var basePublishers: BasePublishers {
         if let value = _basePublishers as? BasePublishers {
             return value
@@ -305,120 +224,2012 @@ public class ChatChannelController: DataController, DelegateCallable, DataStoreP
         self.environment = environment
         self.isChannelAlreadyCreated = isChannelAlreadyCreated
         self.messageOrdering = messageOrdering
+        updater = self.environment.channelUpdaterBuilder(
+            client.channelRepository,
+            client.messageRepository,
+            client.makeMessagesPaginationStateHandler(),
+            client.databaseContainer,
+            client.apiClient
+        )
+        channelMemberUpdater = self.environment.memberUpdaterBuilder(client.databaseContainer, client.apiClient)
+        pollsRepository = client.pollsRepository
+        draftsRepository = client.draftMessagesRepository
+
         super.init()
 
         setChannelObserver()
         setMessagesObserver()
-
-        client.trackChannelController(self)
-    }
-    
-    private func setChannelObserver() {
-        _channelObserver.computeValue = { [weak self] in
-            guard let self = self else {
-                log.warning("Callback called while self is nil")
-                return nil
-            }
-
-            guard let cid = self.cid else {
-                return nil
-            }
-            let observer = EntityDatabaseObserver(
-                context: self.client.databaseContainer.viewContext,
-                fetchRequest: ChannelDTO.fetchRequest(for: cid),
-                itemCreator: { try $0.asModel() as ChatChannel }
-            ).onChange { [weak self] change in
-                self?.delegateCallback { [weak self] in
-                    guard let self = self else {
-                        log.warning("Callback called while self is nil")
-                        return
-                    }
-                    $0.channelController(self, didUpdateChannel: change)
-                }
-            }
-            .onFieldChange(\.currentlyTypingUsers) { [weak self] change in
-                self?.delegateCallback { [weak self] in
-                    guard let self = self else {
-                        log.warning("Callback called while self is nil")
-                        return
-                    }
-                    $0.channelController(self, didChangeTypingUsers: change.item)
-                }
-            }
-
-            return observer
-        }
     }
 
-    private func setMessagesObserver() {
-        _messagesObserver.computeValue = { [weak self] in
-            guard let self = self else {
-                log.warning("Callback called while self is nil")
-                return nil
-            }
-            guard let cid = self.cid else { return nil }
-            let sortAscending = self.messageOrdering == .topToBottom ? false : true
-            var deletedMessageVisibility: ChatClientConfig.DeletedMessageVisibility?
-            var shouldShowShadowedMessages: Bool?
-            self.client.databaseContainer.viewContext.performAndWait { [weak self] in
-                guard let self = self else {
-                    log.warning("Callback called while self is nil")
-                    return
-                }
-                deletedMessageVisibility = self.client.databaseContainer.viewContext.deletedMessagesVisibility
-                shouldShowShadowedMessages = self.client.databaseContainer.viewContext.shouldShowShadowedMessages
-            }
-
-            let observer = ListDatabaseObserver(
-                context: self.client.databaseContainer.viewContext,
-                fetchRequest: MessageDTO.messagesFetchRequest(
-                    for: cid,
-                    sortAscending: sortAscending,
-                    deletedMessagesVisibility: deletedMessageVisibility ?? .visibleForCurrentUser,
-                    shouldShowShadowedMessages: shouldShowShadowedMessages ?? false
-                ),
-                itemCreator: { try $0.asModel() as ChatMessage }
-            )
-            observer.onChange = { [weak self] changes in
-                self?.delegateCallback { [weak self] in
-                    guard let self = self else {
-                        log.warning("Callback called while self is nil")
-                        return
-                    }
-                    log.debug("didUpdateMessages: \(changes.map(\.debugDescription))")
-                    $0.channelController(self, didUpdateMessages: changes)
-                }
-            }
-
-            return observer
-        }
-    }
-    
-    override public func synchronize(_ completion: ((_ error: Error?) -> Void)? = nil) {
+    override public func synchronize(_ completion: (@MainActor (_ error: Error?) -> Void)? = nil) {
+        client.syncRepository.startTrackingChannelController(self)
         synchronize(isInRecoveryMode: false, completion)
     }
 
-    private func synchronize(isInRecoveryMode: Bool, _ completion: ((_ error: Error?) -> Void)? = nil) {
+    // MARK: - Actions
+
+    /// Updates the channel with a full update, which replaces the channel data.
+    ///
+    /// - Warning: The name, image and extra data are replaced with the passed values, and values that are not passed are **removed**.
+    /// To change only specific fields and keep the rest, use ``partialChannelUpdate(name:imageURL:team:members:invites:filterTags:extraData:unsetProperties:completion:)``.
+    ///
+    /// - Parameters:
+    ///   - name: The name of the channel. Passing `nil` removes the current name.
+    ///   - imageURL: The channel avatar URL. Passing `nil` removes the current image.
+    ///   - team: Changing the team is not supported client-side and fails with an API error. Defaults to `nil`, which keeps the current team.
+    ///   - members: New members.
+    ///   - invites: New invites.
+    ///   - filterTags: A list of tags to add to the channel.
+    ///   - autoTranslationLanguages: The languages for automatically translating new messages. An empty set removes them.
+    ///     Takes effect when automatic translation is enabled. Defaults to `nil`, which keeps the current languages.
+    ///   - extraData: The extra data of the channel. Keys that are not passed are removed.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func updateChannel(
+        name: String?,
+        imageURL: URL?,
+        team: String? = nil,
+        members: Set<UserId> = [],
+        invites: Set<UserId> = [],
+        filterTags: Set<String> = [],
+        autoTranslationLanguages: Set<TranslationLanguage>? = nil,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.updateChannel(
+            cid: cid,
+            name: name,
+            imageURL: imageURL,
+            team: team,
+            members: members,
+            invites: invites,
+            filterTags: filterTags,
+            autoTranslationLanguages: autoTranslationLanguages,
+            extraData: extraData
+        ) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Updates only the passed channel fields and keeps the rest of the channel data.
+    ///
+    /// To replace all of the channel data instead, use ``updateChannel(name:imageURL:team:members:invites:filterTags:autoTranslationLanguages:extraData:completion:)``.
+    ///
+    /// - Parameters:
+    ///   - name: The name of the channel. Passing `nil` keeps the current name.
+    ///   - imageURL: The channel avatar URL. Passing `nil` keeps the current image.
+    ///   - team: Setting the team is not supported client-side and fails with an API error.
+    ///   - members: New members.
+    ///   - invites: New invites.
+    ///   - filterTags: Replaces the channel's filter tags when not empty.
+    ///   - extraData: Extra data keys to set. Other extra data keys are kept.
+    ///   - unsetProperties: Custom fields to remove from the channel, such as extra data keys, `name` or `image`.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func partialChannelUpdate(
+        name: String? = nil,
+        imageURL: URL? = nil,
+        team: String? = nil,
+        members: Set<UserId> = [],
+        invites: Set<UserId> = [],
+        filterTags: Set<String> = [],
+        extraData: [String: RawJSON] = [:],
+        unsetProperties: [String] = [],
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.partialChannelUpdate(
+            cid: cid,
+            name: name,
+            imageURL: imageURL,
+            team: team,
+            members: members,
+            invites: invites,
+            filterTags: filterTags,
+            extraData: extraData,
+            unsetProperties: unsetProperties
+        ) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Mutes the channel this controller manages.
+    ///
+    /// - Parameters:
+    ///   - expiration: Duration of mute in milliseconds.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func muteChannel(expiration: Int? = nil, completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.muteChannel(cid: cid, expiration: expiration) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Unmutes the channel this controller manages.
+    ///
+    /// - Parameters:
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func unmuteChannel(completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.unmuteChannel(cid: cid) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+    
+    /// Archives the channel with the specified scope.
+    ///
+    /// - Important: Only archiving the channel for me is supported.
+    /// - SeeAlso: You can retrieve the list of archived channels with ``FilterKey/archived`` filter.
+    ///
+    /// - Parameters:
+    ///   - scope: The scope of the archiving action. Default is archiving for the current user only.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    /// If request fails, the completion will be called with an error.
+    public func archive(scope: ChannelArchivingScope = .me, completion: (@MainActor (Error?) -> Void)? = nil) {
+        guard let cid, isChannelAlreadyCreated, let userId = client.currentUserId else {
+            channelModificationFailed(completion)
+            return
+        }
+        switch scope {
+        case .me:
+            channelMemberUpdater.archiveMemberChannel(true, userId: userId, cid: cid) { error in
+                self.callback {
+                    completion?(error)
+                }
+            }
+        }
+    }
+    
+    /// Unarchives the channel with the specified scope.
+    ///
+    /// - Parameters:
+    ///   - scope: The scope of the unarchiving action. The default scope is unarchived only for me.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    /// If request fails, the completion will be called with an error.
+    public func unarchive(scope: ChannelArchivingScope = .me, completion: (@MainActor (Error?) -> Void)? = nil) {
+        guard let cid, isChannelAlreadyCreated, let userId = client.currentUserId else {
+            channelModificationFailed(completion)
+            return
+        }
+        switch scope {
+        case .me:
+            channelMemberUpdater.archiveMemberChannel(false, userId: userId, cid: cid) { error in
+                self.callback {
+                    completion?(error)
+                }
+            }
+        }
+    }
+
+    /// Delete the channel this controller manages.
+    /// - Parameters:
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    public func deleteChannel(completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.deleteChannel(cid: cid) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Truncates the channel this controller manages.
+    ///
+    /// Removes all of the messages of the channel but doesn't affect the channel data or members.
+    ///
+    /// - Parameters:
+    ///   - skipPush: If true, skips sending push notification to channel members.
+    ///   - hardDelete: If true, messages are deleted instead of hiding.
+    ///   - systemMessage: A system message to be added via truncation.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    /// If request fails, the completion will be called with an error.
+    ///
+    public func truncateChannel(
+        skipPush: Bool = false,
+        hardDelete: Bool = true,
+        systemMessage: String? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        truncateChannel(
+            skipPush: skipPush,
+            hardDelete: hardDelete,
+            systemMessage: systemMessage.map { SystemMessage(text: $0) },
+            completion: completion
+        )
+    }
+
+    /// Truncates the channel this controller manages.
+    ///
+    /// Removes all of the messages of the channel but doesn't affect the channel data or members.
+    ///
+    /// - Parameters:
+    ///   - skipPush: If true, skips sending push notification to channel members.
+    ///   - hardDelete: If true, messages are deleted instead of hiding.
+    ///   - systemMessage: A system message to be added via truncation, supporting extra data.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    /// If request fails, the completion will be called with an error.
+    ///
+    public func truncateChannel(
+        skipPush: Bool = false,
+        hardDelete: Bool = true,
+        systemMessage: SystemMessage?,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.truncateChannel(
+            cid: cid,
+            skipPush: skipPush,
+            hardDelete: hardDelete,
+            systemMessage: systemMessage
+        ) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Hide the channel this controller manages from queryChannels for the user until a message is added.
+    ///
+    /// - Parameters:
+    ///   - clearHistory: Flag to remove channel history (**false** by default)
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func hideChannel(clearHistory: Bool = false, completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.hideChannel(cid: cid, clearHistory: clearHistory) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Removes hidden status for the channel this controller manages.
+    ///
+    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                         If request fails, the completion will be called with an error.
+    ///
+    public func showChannel(completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.showChannel(cid: cid) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Loads previous messages from backend.
+    ///
+    /// - Parameters:
+    ///   - messageId: ID of the last fetched message. You will get messages `older` than the provided ID.
+    ///   - limit: Limit for page size. By default it is 25.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func loadPreviousMessages(
+        before messageId: MessageId? = nil,
+        limit: Int? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard cid != nil, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        let lastLocalMessageId: () -> MessageId? = {
+            self.messages.last { !$0.isLocalOnly }?.id
+        }
+
+        guard let messageId = messageId ?? lastOldestMessageId ?? lastLocalMessageId() else {
+            log.error(ClientError.ChannelEmptyMessages().localizedDescription)
+            callback { completion?(ClientError.ChannelEmptyMessages()) }
+            return
+        }
+
+        guard !hasLoadedAllPreviousMessages && !isLoadingPreviousMessages else {
+            callback {
+                completion?(nil)
+            }
+            return
+        }
+
+        let limit = limit ?? channelQuery.pagination?.pageSize ?? .messagesPageSize
+        channelQuery.pagination = MessagesPagination(pageSize: limit, parameter: .lessThan(messageId))
+
+        updater.update(
+            channelQuery: channelQuery,
+            isInRecoveryMode: false,
+            completion: { result in
+                switch result {
+                case .success:
+                    self.callback { completion?(nil) }
+                case let .failure(error):
+                    self.callback { completion?(error) }
+                }
+            }
+        )
+    }
+
+    /// Loads next messages from backend.
+    ///
+    /// - Parameters:
+    ///   - messageId: ID of the current first message. You will get messages `newer` than the provided ID.
+    ///   - limit: Limit for page size. By default it is 25.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func loadNextMessages(
+        after messageId: MessageId? = nil,
+        limit: Int? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard cid != nil, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        guard let messageId = messageId ?? lastNewestMessageId ?? messages.first?.id else {
+            log.error(ClientError.ChannelEmptyMessages().localizedDescription)
+            callback { completion?(ClientError.ChannelEmptyMessages()) }
+            return
+        }
+
+        guard !hasLoadedAllNextMessages && !isLoadingNextMessages else {
+            callback { completion?(nil) }
+            return
+        }
+
+        let limit = limit ?? channelQuery.pagination?.pageSize ?? .messagesPageSize
+        channelQuery.pagination = MessagesPagination(pageSize: limit, parameter: .greaterThan(messageId))
+
+        updater.update(
+            channelQuery: channelQuery,
+            isInRecoveryMode: false,
+            completion: { result in
+                switch result {
+                case .success:
+                    self.callback { completion?(nil) }
+                case let .failure(error):
+                    self.callback { completion?(error) }
+                }
+            }
+        )
+    }
+
+    /// Load messages around the given message id. Useful to jump to a message which hasn't been loaded yet.
+    ///
+    /// Cleans the current messages of the channel and loads the message with the given id,
+    /// and the messages around it depending on the limit provided.
+    ///
+    /// Ex: If the limit is 25, it will load the message and 12 on top and 12 below it. (25 total)
+    ///
+    /// - Parameters:
+    ///   - messageId: The message id of the message to jump to.
+    ///   - limit: The number of messages to load in total, including the message to jump to.
+    ///   - completion: Callback when the API call is completed.
+    public func loadPageAroundMessageId(_ messageId: MessageId, limit: Int? = nil, completion: (@MainActor (Error?) -> Void)? = nil) {
+        guard isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        guard !isLoadingMiddleMessages else {
+            callback {
+                completion?(nil)
+            }
+            return
+        }
+
+        let limit = limit ?? channelQuery.pagination?.pageSize ?? .messagesPageSize
+        channelQuery.pagination = MessagesPagination(pageSize: limit, parameter: .around(messageId))
+        updater.update(
+            channelQuery: channelQuery,
+            isInRecoveryMode: false,
+            completion: { result in
+                switch result {
+                case .success:
+                    self.callback { completion?(nil) }
+                case let .failure(error):
+                    log.error("Not able to load message around messageId: \(messageId). Error: \(error)")
+                    self.callback { completion?(error) }
+                }
+            }
+        )
+    }
+
+    /// Cleans the current state and loads the first page again.
+    /// - Parameter completion: Callback when the API call is completed.
+    public func loadFirstPage(_ completion: (@MainActor (_ error: Error?) -> Void)? = nil) {
         channelQuery.pagination = .init(
             pageSize: channelQuery.pagination?.pageSize ?? .messagesPageSize,
             parameter: nil
         )
 
+        synchronize(isInRecoveryMode: false, completion)
+    }
+
+    /// Sends the start typing event and schedule a timer to send the stop typing event.
+    ///
+    /// This method is meant to be called every time the user presses a key. The method will manage requests and timer as needed.
+    ///
+    /// - Parameter completion: a completion block with an error if the request was failed.
+    ///
+    public func sendKeystrokeEvent(parentMessageId: MessageId? = nil, completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { completion?($0) }
+            return
+        }
+        /// Ignore if app-level typing events or user-level typing events are not enabled.
+        shouldSendTypingEvents { isEnabled in
+            guard isEnabled else {
+                self.callback { completion?(nil) }
+                return
+            }
+            self.eventSender.keystroke(in: cid, parentMessageId: parentMessageId) { error in
+                self.callback { completion?(error) }
+            }
+        }
+    }
+
+    /// Sends the start typing event.
+    ///
+    /// For the majority of cases, you don't need to call `sendStartTypingEvent` directly. Instead, use `sendKeystrokeEvent`
+    /// method and call it every time the user presses a key. The controller will manage
+    /// `sendStartTypingEvent`/`sendStopTypingEvent` calls automatically.
+    ///
+    /// - Parameter completion: a completion block with an error if the request was failed.
+    ///
+    public func sendStartTypingEvent(parentMessageId: MessageId? = nil, completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { completion?($0) }
+            return
+        }
+        
+        shouldSendTypingEvents { isEnabled in
+            guard isEnabled else {
+                self.channelFeatureDisabled(feature: "typing events", completion: completion)
+                return
+            }
+            self.eventSender.startTyping(in: cid, parentMessageId: parentMessageId) { error in
+                self.callback { completion?(error) }
+            }
+        }
+    }
+
+    /// Sends the stop typing event.
+    ///
+    /// For the majority of cases, you don't need to call `sendStopTypingEvent` directly. Instead, use `sendKeystrokeEvent`
+    /// method and call it every time the user presses a key. The controller will manage
+    /// `sendStartTypingEvent`/`sendStopTypingEvent` calls automatically.
+    ///
+    /// - Parameter completion: a completion block with an error if the request was failed.
+    ///
+    public func sendStopTypingEvent(parentMessageId: MessageId? = nil, completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { completion?($0) }
+            return
+        }
+        shouldSendTypingEvents { isEnabled in
+            guard isEnabled else {
+                self.channelFeatureDisabled(feature: "typing events", completion: completion)
+                return
+            }
+            self.eventSender.stopTyping(in: cid, parentMessageId: parentMessageId) { error in
+                self.callback { completion?(error) }
+            }
+        }
+    }
+
+    /// Creates a new message locally and schedules it for send.
+    ///
+    /// - Parameters:
+    ///   - messageId: The id for the sent message. By default, it is automatically generated by Stream..
+    ///   - text: Text of the message.
+    ///   - pinning: Pins the new message. `nil` if should not be pinned.
+    ///   - isSilent: A flag indicating whether the message is a silent message. Silent messages are special messages that don't increase the unread messages count nor mark a channel as unread.
+    ///   - attachments: An array of the attachments for the message.
+    ///     `Note`: can be built-in types, custom attachment types conforming to `AttachmentEnvelope` protocol
+    ///     and `ChatMessageAttachmentSeed`s.
+    ///   - quotedMessageId: An id of the message new message quotes. (inline reply)
+    ///   - skipPush: If true, skips sending push notification to channel members.
+    ///   - skipEnrichUrl: If true, the url preview won't be attached to the message.
+    ///   - restrictedVisibility: The list of user ids that should be able to see the message.
+    ///   - location: The new location information of the message.
+    ///   - extraData: Additional extra data of the message object.
+    ///   - completion: Called when saving the message to the local DB finishes.
+    ///
+    public func createNewMessage(
+        messageId: MessageId? = nil,
+        text: String,
+        pinning: MessagePinning? = nil,
+        isSilent: Bool = false,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
+        mentionedHere: Bool = false,
+        mentionedChannel: Bool = false,
+        mentionedGroupIds: [String] = [],
+        mentionedRoles: [String] = [],
+        quotedMessageId: MessageId? = nil,
+        skipPush: Bool = false,
+        skipEnrichUrl: Bool = false,
+        restrictedVisibility: [UserId] = [],
+        location: NewLocationInfo? = nil,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<MessageId, Error>) -> Void)? = nil
+    ) {
+        var transformableInfo = NewMessageTransformableInfo(
+            text: text,
+            attachments: attachments,
+            extraData: extraData
+        )
+        if let transformer = client.config.modelsTransformer {
+            transformableInfo = transformer.transform(newMessageInfo: transformableInfo)
+        }
+
+        createNewMessage(
+            messageId: messageId,
+            text: transformableInfo.text,
+            pinning: pinning,
+            isSilent: isSilent,
+            attachments: transformableInfo.attachments,
+            mentionedUserIds: mentionedUserIds,
+            mentionedHere: mentionedHere,
+            mentionedChannel: mentionedChannel,
+            mentionedGroupIds: mentionedGroupIds,
+            mentionedRoles: mentionedRoles,
+            quotedMessageId: quotedMessageId,
+            skipPush: skipPush,
+            skipEnrichUrl: skipEnrichUrl,
+            restrictedVisibility: restrictedVisibility,
+            location: location,
+            extraData: transformableInfo.extraData,
+            poll: nil,
+            completion: completion
+        )
+    }
+
+    /// Sends a system message to the channel.
+    ///
+    /// - Parameters:
+    ///  - text: The text of the system message.
+    ///  - messageId: The id for the sent message. By default, it is automatically generated by Stream.
+    ///  - restrictedVisibility: The list of user ids that can see the message.
+    ///  - extraData: The extra data for the message.
+    ///  - completion: Called when saving the message to the local DB finishes.
+    public func createSystemMessage(
+        text: String,
+        messageId: MessageId? = nil,
+        restrictedVisibility: [UserId] = [],
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<MessageId, Error>) -> Void)? = nil
+    ) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { error in
+                completion?(.failure(error ?? ClientError.Unknown()))
+            }
+            return
+        }
+
+        updater.createNewMessage(
+            in: cid,
+            messageId: messageId,
+            text: text,
+            pinning: nil,
+            isSilent: false,
+            isSystem: true,
+            command: nil,
+            arguments: nil,
+            attachments: [],
+            mentionedUserIds: [],
+            quotedMessageId: nil,
+            skipPush: false,
+            skipEnrichUrl: false,
+            restrictedVisibility: restrictedVisibility,
+            poll: nil,
+            extraData: extraData
+        ) { result in
+            if let newMessage = try? result.get() {
+                self.client.eventNotificationCenter.process(
+                    NewMessagePendingEvent(
+                        message: newMessage,
+                        cid: cid
+                    )
+                )
+            }
+            self.callback {
+                completion?(result.map(\.id))
+            }
+        }
+    }
+
+    /// Sends a static location message to the channel.
+    ///
+    /// - Parameters:
+    ///  - location: The location information.
+    ///  - text: The text of the message.
+    ///  - messageId: The id for the sent message. By default, it is automatically generated by Stream.
+    ///  - quotedMessageId: The id of the quoted message, in case the location is an inline reply.
+    ///  - extraData:  Additional extra data of the message object.
+    ///  - completion: Called when saving the message to the local DB finishes, not when the message reaches the server.
+    public func sendStaticLocation(
+        _ location: LocationInfo,
+        text: String? = nil,
+        messageId: MessageId? = nil,
+        quotedMessageId: MessageId? = nil,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<MessageId, Error>) -> Void)? = nil
+    ) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { error in
+                completion?(.failure(error ?? ClientError.Unknown()))
+            }
+            return
+        }
+
+        updater.createNewMessage(
+            in: cid,
+            messageId: messageId,
+            text: text ?? "",
+            pinning: nil,
+            isSilent: false,
+            isSystem: false,
+            command: nil,
+            arguments: nil,
+            attachments: [],
+            mentionedUserIds: [],
+            quotedMessageId: quotedMessageId,
+            skipPush: false,
+            skipEnrichUrl: false,
+            poll: nil,
+            location: .init(
+                latitude: location.latitude,
+                longitude: location.longitude,
+                endAt: nil
+            ),
+            extraData: extraData
+        ) { result in
+            if let newMessage = try? result.get() {
+                self.client.eventNotificationCenter.process(
+                    NewMessagePendingEvent(
+                        message: newMessage,
+                        cid: cid
+                    )
+                )
+            }
+            self.callback {
+                completion?(result.map(\.id))
+            }
+        }
+    }
+
+    /// Starts a live location sharing message in the channel.
+    ///
+    /// If there is already an active live location sharing message in the this channel,
+    /// it will fail with an error.
+    ///
+    /// - Parameters:
+    ///  - location: The location information.
+    ///  - endDate: The date when the location sharing ends.
+    ///  - text: The text of the message.
+    ///  - extraData: Additional extra data of the message object.
+    ///  - completion: Called when saving the message to the local DB finishes,
+    ///  not when the message reaches the server.
+    public func startLiveLocationSharing(
+        _ location: LocationInfo,
+        endDate: Date,
+        text: String? = nil,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<MessageId, Error>) -> Void)? = nil
+    ) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { error in
+                self.callback {
+                    completion?(.failure(error ?? ClientError.Unknown()))
+                }
+            }
+            return
+        }
+
+        // Stop existing live location sharing message if it exists.
+        // It is an optimistic update, since the backend will also stop the existing live location message.
+        client.messageRepository.getCurrentUserActiveLiveLocationMessages(for: cid) { [weak self] result in
+            if let message = try? result.get().first {
+                self?.client.databaseContainer.write { session in
+                    let existingLiveLocation = session.message(id: message.id)
+                    existingLiveLocation?.isActiveLiveLocation = false
+                    existingLiveLocation?.location?.endAt = DBDate()
+                }
+            }
+        }
+
+        updater.createNewMessage(
+            in: cid,
+            messageId: nil,
+            text: text ?? "",
+            pinning: nil,
+            isSilent: false,
+            isSystem: false,
+            command: nil,
+            arguments: nil,
+            attachments: [],
+            mentionedUserIds: [],
+            quotedMessageId: nil,
+            skipPush: false,
+            skipEnrichUrl: false,
+            poll: nil,
+            location: NewLocationInfo(
+                latitude: location.latitude,
+                longitude: location.longitude,
+                endAt: endDate
+            ),
+            extraData: extraData
+        ) { result in
+            if let newMessage = try? result.get() {
+                self.client.eventNotificationCenter.process(
+                    NewMessagePendingEvent(
+                        message: newMessage,
+                        cid: cid
+                    )
+                )
+            }
+            self.callback {
+                completion?(result.map(\.id))
+            }
+        }
+    }
+
+    /// Updates the draft message of this channel.
+    ///
+    /// If there is no draft message, a new draft message will be created.
+    /// - Parameters:
+    ///   - text: The text of the draft message.
+    ///   - isSilent: A flag indicating whether the message is a silent message.
+    ///   Silent messages are special messages that don't increase the unread messages count nor mark a channel as unread.
+    ///   - attachments: The attachments of the draft message.
+    ///   - mentionedUserIds: The mentioned user ids of the draft message.
+    ///   - quotedMessageId: The message that the draft message is quoting.
+    ///   - command: The command of the draft message.
+    ///   - extraData: The extra data of the draft message.
+    ///   - completion: Called when the draft message is saved to the server.
+    public func updateDraftMessage(
+        text: String,
+        isSilent: Bool = false,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
+        quotedMessageId: MessageId? = nil,
+        command: Command? = nil,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<DraftMessage, Error>) -> Void)? = nil
+    ) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { error in
+                completion?(.failure(error ?? ClientError.Unknown()))
+            }
+            return
+        }
+        
+        draftsRepository.updateDraft(
+            for: cid,
+            threadId: nil,
+            text: text,
+            isSilent: isSilent,
+            showReplyInChannel: false,
+            command: command?.name,
+            arguments: command?.args,
+            attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
+            quotedMessageId: quotedMessageId,
+            extraData: extraData
+        ) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Loads the draft message of this channel.
+    ///
+    /// It is not necessary to call this method if the channel list query was called before.
+    public func loadDraftMessage(
+        completion: (@MainActor (Result<DraftMessage?, Error>) -> Void)? = nil
+    ) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { error in
+                completion?(.failure(error ?? ClientError.Unknown()))
+            }
+            return
+        }
+
+        draftsRepository.getDraft(for: cid, threadId: nil) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Deletes the draft message of this channel.
+    public func deleteDraftMessage(completion: (@MainActor (Error?) -> Void)? = nil) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { error in
+                completion?(error)
+            }
+            return
+        }
+
+        draftsRepository.deleteDraft(for: cid, threadId: nil) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Creates a new poll.
+    ///
+    /// - Parameters:
+    ///   - name: The name of the poll.
+    ///   - allowAnswers: Whether to allow users to provide their own answers. Answers won't be allowed if `nil` is passed.
+    ///   - allowUserSuggestedOptions: Whether to allow users to suggest options. User suggested options won't be allowed if `nil` is passed.
+    ///   - description: Optional description for the poll.
+    ///   - enforceUniqueVote: Whether to enforce unique votes per user. Unique votes won't be allowed if `nil` is passed.
+    ///   - maxVotesAllowed: The maximum number of votes allowed per user. Up to 10 max votes if `nil` is passed.
+    ///   - votingVisibility: The visibility setting for the poll. Voting visibility would be public if `nil` is passed.
+    ///   - options: Optional array of predefined poll options.
+    ///   - custom: Optional dictionary for any custom data associated with the poll.
+    ///   - completion: A closure to be executed once the poll is created, returning either a `MessageId` on success or an `Error` on failure.
+    public func createPoll(
+        name: String,
+        allowAnswers: Bool? = nil,
+        allowUserSuggestedOptions: Bool? = nil,
+        description: String? = nil,
+        enforceUniqueVote: Bool? = nil,
+        maxVotesAllowed: Int? = nil,
+        votingVisibility: VotingVisibility? = nil,
+        options: [PollOption]? = nil,
+        extraData: [String: RawJSON]? = nil,
+        completion: (@MainActor (Result<MessageId, Error>) -> Void)?
+    ) {
+        pollsRepository.createPoll(
+            name: name,
+            allowAnswers: allowAnswers,
+            allowUserSuggestedOptions: allowUserSuggestedOptions,
+            description: description,
+            enforceUniqueVote: enforceUniqueVote,
+            maxVotesAllowed: maxVotesAllowed,
+            votingVisibility: votingVisibility,
+            options: options,
+            custom: extraData
+        ) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case let .success(poll):
+                self.createNewMessage(text: "", poll: poll, completion: { result in
+                    self.callback {
+                        completion?(result)
+                    }
+                })
+            case let .failure(error):
+                self.callback {
+                    completion?(.failure(error))
+                }
+            }
+        }
+    }
+    
+    /// Deletes the poll with the provided poll id.
+    /// - Parameters:
+    ///  - pollId: The id of the poll to be deleted.
+    ///  - completion: A closure to be executed once the poll is deleted, returning either an `Error` on failure or `nil` on success.
+    public func deletePoll(pollId: String, completion: (@MainActor (Error?) -> Void)? = nil) {
+        pollsRepository.deletePoll(pollId: pollId) { [weak self] error in
+            self?.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Add users to the channel as members with additional data.
+    ///
+    /// - Parameters:
+    ///   - members: An array of `MemberInfo` objects, each representing a member to be added to the channel.
+    ///   - hideHistory: Hide the history of the channel to the added member. By default, it is false.
+    ///   - hideHistoryBefore: Hide the history of the channel before this date. If both `hideHistoryBefore` and `hideHistory` are set, `hideHistoryBefore` takes precedence.
+    ///   - message: Optional system message sent when adding members.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func addMembers(
+        _ members: [MemberInfo],
+        hideHistory: Bool = false,
+        hideHistoryBefore: Date? = nil,
+        message: String? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        addMembers(
+            members,
+            hideHistory: hideHistory,
+            hideHistoryBefore: hideHistoryBefore,
+            systemMessage: message.map { SystemMessage(text: $0) },
+            completion: completion
+        )
+    }
+
+    /// Add users to the channel as members with additional data.
+    ///
+    /// - Parameters:
+    ///   - members: An array of `MemberInfo` objects, each representing a member to be added to the channel.
+    ///   - hideHistory: Hide the history of the channel to the added member. By default, it is false.
+    ///   - hideHistoryBefore: Hide the history of the channel before this date. If both `hideHistoryBefore` and `hideHistory` are set, `hideHistoryBefore` takes precedence.
+    ///   - systemMessage: Optional system message sent when adding members, supporting extra data.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func addMembers(
+        _ members: [MemberInfo],
+        hideHistory: Bool = false,
+        hideHistoryBefore: Date? = nil,
+        systemMessage: SystemMessage?,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.addMembers(
+            cid: cid,
+            members: members,
+            systemMessage: systemMessage,
+            hideHistory: hideHistory,
+            hideHistoryBefore: hideHistoryBefore
+        ) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Add users to the channel as members.
+    ///
+    /// - Parameters:
+    ///   - userIds: User ids that will be added to a channel.
+    ///   - hideHistory: Hide the history of the channel to the added member. By default, it is false.
+    ///   - hideHistoryBefore: Hide the history of the channel before this date. If both `hideHistoryBefore` and `hideHistory` are set, `hideHistoryBefore` takes precedence.
+    ///   - message: Optional system message sent when adding members.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    public func addMembers(
+        userIds: Set<UserId>,
+        hideHistory: Bool = false,
+        hideHistoryBefore: Date? = nil,
+        message: String? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        addMembers(
+            userIds.map { .init(userId: $0, extraData: nil) },
+            hideHistory: hideHistory,
+            hideHistoryBefore: hideHistoryBefore,
+            systemMessage: message.map { SystemMessage(text: $0) },
+            completion: completion
+        )
+    }
+
+    /// Add users to the channel as members.
+    ///
+    /// - Parameters:
+    ///   - userIds: User ids that will be added to a channel.
+    ///   - hideHistory: Hide the history of the channel to the added member. By default, it is false.
+    ///   - hideHistoryBefore: Hide the history of the channel before this date. If both `hideHistoryBefore` and `hideHistory` are set, `hideHistoryBefore` takes precedence.
+    ///   - systemMessage: Optional system message sent when adding members, supporting extra data.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    public func addMembers(
+        userIds: Set<UserId>,
+        hideHistory: Bool = false,
+        hideHistoryBefore: Date? = nil,
+        systemMessage: SystemMessage?,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        addMembers(
+            userIds.map { .init(userId: $0, extraData: nil) },
+            hideHistory: hideHistory,
+            hideHistoryBefore: hideHistoryBefore,
+            systemMessage: systemMessage,
+            completion: completion
+        )
+    }
+
+    /// Remove users to the channel as members.
+    ///
+    /// - Parameters:
+    ///   - userIds: User ids that will be removed from a channel.
+    ///   - message: Optional system message sent when removing members.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func removeMembers(
+        userIds: Set<UserId>,
+        message: String? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        removeMembers(
+            userIds: userIds,
+            systemMessage: message.map { SystemMessage(text: $0) },
+            completion: completion
+        )
+    }
+
+    /// Remove users to the channel as members.
+    ///
+    /// - Parameters:
+    ///   - userIds: User ids that will be removed from a channel.
+    ///   - systemMessage: Optional system message sent when removing members, supporting extra data.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func removeMembers(
+        userIds: Set<UserId>,
+        systemMessage: SystemMessage?,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.removeMembers(
+            cid: cid,
+            userIds: userIds,
+            systemMessage: systemMessage
+        ) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Invite members to a channel. They can then accept or decline the invitation
+    /// - Parameters:
+    ///   - userIds: Set of ids of users to be invited to the channel
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    public func inviteMembers(userIds: Set<UserId>, completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.inviteMembers(cid: cid, userIds: userIds) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Accept Request
+    /// - Parameters:
+    ///   - cid: The channel identifier.
+    ///   - userId: userId
+    ///   - message: message
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    public func acceptInvite(message: String? = nil, completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+        updater.acceptInvite(cid: cid, message: message) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Reject Request
+    /// - Parameters:
+    ///   - cid: The channel identifier.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    public func rejectInvite(completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.rejectInvite(cid: cid) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Queries the bans of the channel.
+    ///
+    /// Both regular and shadow bans are returned, and expired bans are included unless
+    /// ``BannedUserListQuery/excludeExpiredBans`` is set.
+    ///
+    /// - Parameters:
+    ///   - query: The query describing which of the channel's bans to return. The query is always scoped to
+    ///   the channel, therefore any filter it carries narrows down the channel's bans.
+    ///   - completion: The completion to be called on **callbackQueue** when the request is completed.
+    public func queryBannedUsers(
+        with query: BannedUserListQuery = .init(),
+        completion: @escaping @MainActor (Result<[BannedUser], Error>) -> Void
+    ) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { completion(.failure($0 ?? ClientError.ChannelNotCreatedYet())) }
+            return
+        }
+
+        channelMemberUpdater.queryBannedUsers(query: query.scoped(toChannel: cid)) { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+
+    /// Marks the channel as read.
+    ///
+    /// - Parameter completion: The completion will be called on a **callbackQueue** when the network request is finished.
+    ///                         If request fails, the completion will be called with an error.
+    ///
+    public func markRead(completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let channel = channel else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        let localReadEnabled = client.config.isLocalUnreadCountEnabled && !channel.config.readEventsEnabled
+        guard channel.canReceiveReadEvents || localReadEnabled else {
+            channelFeatureDisabled(feature: "read events", completion: completion)
+            return
+        }
+
+        readStateHandler.markRead(channel) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Marks a subset of the messages of the channel as unread. All the following messages, including the one that is
+    /// passed as parameter, will be marked as not read.
+    /// - Parameters:
+    ///   - messageId: The id of the first message id that will be marked as unread.
+    ///   - completion: The completion will be called on a **callbackQueue** when the network request is finished.
+    public func markUnread(from messageId: MessageId, completion: (@MainActor (Result<ChatChannel, Error>) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let channel = channel else {
+            let error = ClientError.ChannelNotCreatedYet()
+            log.error(error.localizedDescription)
+            callback {
+                completion?(.failure(error))
+            }
+            return
+        }
+
+        /// Read events are not enabled for this channel
+        guard channel.canReceiveReadEvents == true else {
+            let error = ClientError.ChannelFeatureDisabled("Channel feature: read events is disabled for this channel.")
+            log.error(error.localizedDescription)
+            callback {
+                completion?(.failure(error))
+            }
+            return
+        }
+
+        readStateHandler.markUnread(
+            from: .init(messageId: messageId),
+            in: channel
+        ) { [weak self] result in
+            self?.callback {
+                completion?(result)
+            }
+        }
+    }
+    
+    /// Marks all messages of the channel as unread that were created after the specified timestamp.
+    ///
+    /// This method finds the first message with a creation timestamp greater than to the provided timestamp,
+    /// and marks all messages from that point forward as unread. If no message is found after the timestamp,
+    /// the operation completes without error but no messages are marked as unread.
+    ///
+    /// - Parameters:
+    ///   - timestamp: The timestamp used to find the first message to mark as unread. All messages created after this timestamp will be marked as unread.
+    ///   - completion: The completion handler to be called after marking messages as unread. Called with a `Result` containing the updated `ChatChannel` on success, or an `Error` on failure.
+    public func markUnread(from timestamp: Date, completion: (@MainActor (Result<ChatChannel, Error>) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let channel = channel else {
+            let error = ClientError.ChannelNotCreatedYet()
+            log.error(error.localizedDescription)
+            callback {
+                completion?(.failure(error))
+            }
+            return
+        }
+
+        /// Read events are not enabled for this channel
+        guard channel.canReceiveReadEvents == true else {
+            let error = ClientError.ChannelFeatureDisabled("Channel feature: read events is disabled for this channel.")
+            log.error(error.localizedDescription)
+            callback {
+                completion?(.failure(error))
+            }
+            return
+        }
+
+        readStateHandler.markUnread(
+            from: .init(messageTimestamp: timestamp),
+            in: channel
+        ) { [weak self] result in
+            self?.callback {
+                completion?(result)
+            }
+        }
+    }
+    
+    /// Loads the given number of channel reads based on the pagination parameter.
+    ///
+    /// All the currently loaded channel reads are available in ``channel.reads``.
+    ///
+    /// - Parameters:
+    ///   - pagination: The pagination parameter. If `nil` is provided, the first page of channel reads are fetched.
+    ///   - completion: The completion to be called on **callbackQueue** when request is completed.
+    public func loadChannelReads(
+        pagination: Pagination? = nil,
+        completion: @escaping @MainActor (Error?) -> Void
+    ) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { completion($0 ?? ClientError.ChannelNotCreatedYet()) }
+            return
+        }
+        updater.loadMembersWithReads(
+            in: cid,
+            membersPagination: pagination ?? Pagination(pageSize: 100),
+            memberListSorting: []
+        ) { result in
+            self.callback {
+                completion(result.error)
+            }
+        }
+    }
+    
+    /// Loads more channel reads.
+    ///
+    /// All the currently loaded channel reads are available in ``channel.reads``.
+    ///
+    /// - Parameters:
+    ///   - limit: The number of channel reads to load. The default is 100.
+    ///   - completion: The completion to be called on **callbackQueue** when request is completed.
+    public func loadMoreChannelReads(limit: Int? = nil, completion: @escaping @MainActor (Error?) -> Void) {
+        let pagination = Pagination(pageSize: limit ?? 100, offset: channel?.reads.count ?? 0)
+        loadChannelReads(pagination: pagination, completion: completion)
+    }
+
+    /// Enables slow mode for the channel
+    ///
+    /// When slow mode is enabled, users can only send a message every `cooldownDuration` time interval.
+    /// `cooldownDuration` is specified in seconds, and should be between 1-120.
+    /// For more information, please check [documentation](https://getstream.io/chat/docs/javascript/slow_mode/?language=swift).
+    ///
+    /// - Parameters:
+    ///   - cooldownDuration: Duration of the time interval users have to wait between messages.
+    ///   Specified in seconds. Should be between 1-120.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    public func enableSlowMode(cooldownDuration: Int, completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+        updater.enableSlowMode(cid: cid, cooldownDuration: cooldownDuration) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Disables slow mode for the channel
+    ///
+    /// For more information, please check [documentation](https://getstream.io/chat/docs/javascript/slow_mode/?language=swift).
+    ///
+    /// - Parameters:
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    public func disableSlowMode(completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+        updater.disableSlowMode(cid: cid) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Start watching a channel
+    ///
+    /// Watching a channel is defined as observing notifications about this channel.
+    /// Usually you don't need to call this function since `ChannelController` watches channels
+    /// by default.
+    ///
+    /// Please check [documentation](https://getstream.io/chat/docs/android/watch_channel/?language=swift) for more information.
+    ///
+    ///
+    /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    public func startWatching(isInRecoveryMode: Bool, completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        client.syncRepository.startTrackingChannelController(self)
+
+        updater.startWatching(cid: cid, isInRecoveryMode: isInRecoveryMode) { error in
+            self.state = error.map { .remoteDataFetchFailed(ClientError(with: $0)) } ?? .remoteDataFetched
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Stop watching a channel
+    ///
+    /// Watching a channel is defined as observing notifications about this channel.
+    /// `ChannelController` watches the channel by default so if you want to create a `ChannelController`
+    ///  without watching the channel, either you can create it and call this function, or you can create it as:
+    /// ```
+    /// var query = ChannelQuery(cid: cid)
+    /// query.options = [] // by default, we pass `.watch` option here
+    /// let controller = client.channelController(for: query)
+    /// ```
+    ///
+    /// Please check [documentation](https://getstream.io/chat/docs/android/watch_channel/?language=swift) for more information.
+    ///
+    /// - Warning: If you're using `ChannelListController`, calling this function can disrupt `ChannelListController`'s functions,
+    /// such as updating channel data.
+    ///
+    /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    public func stopWatching(completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        client.syncRepository.stopTrackingChannelController(self)
+
+        updater.stopWatching(cid: cid) { error in
+            self.state = error.map { .remoteDataFetchFailed(ClientError(with: $0)) } ?? .localDataFetched
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Freezes the channel.
+    ///
+    /// Freezing a channel will disallow sending new messages and sending / deleting reactions.
+    /// For more information, see https://getstream.io/chat/docs/ios-swift/freezing_channels/?language=swift
+    ///
+    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func freezeChannel(completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.freezeChannel(true, cid: cid) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+
+    /// Unfreezes the channel.
+    ///
+    /// Freezing a channel will disallow sending new messages and sending / deleting reactions.
+    /// For more information, see https://getstream.io/chat/docs/ios-swift/freezing_channels/?language=swift
+    ///
+    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    ///                 If request fails, the completion will be called with an error.
+    ///
+    public func unfreezeChannel(completion: (@MainActor (Error?) -> Void)? = nil) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+
+        updater.freezeChannel(false, cid: cid) { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+    
+    /// Pins the channel with the specified scope.
+    ///
+    /// - Important: Only pinning the channel for me is supported.
+    /// - SeeAlso: You can retrieve the list of pinned channels with ``FilterKey/pinned`` filter and sort by ``ChannelListSortingKey/pinnedAt`` key.
+    ///
+    /// - Parameters:
+    ///   - scope: The scope of the pinning action. Default is pinning for the current user only.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    /// If request fails, the completion will be called with an error.
+    public func pin(scope: ChannelPinningScope = .me, completion: (@MainActor (Error?) -> Void)? = nil) {
+        guard let cid, isChannelAlreadyCreated, let userId = client.currentUserId else {
+            channelModificationFailed(completion)
+            return
+        }
+        switch scope {
+        case .me:
+            channelMemberUpdater.pinMemberChannel(true, userId: userId, cid: cid) { error in
+                self.callback {
+                    completion?(error)
+                }
+            }
+        }
+    }
+    
+    /// Unpins the channel with the specified scope.
+    ///
+    /// - Parameters:
+    ///   - scope: The scope of the unpinning action. The default scope is unpinned only for me.
+    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
+    /// If request fails, the completion will be called with an error.
+    public func unpin(scope: ChannelPinningScope = .me, completion: (@MainActor (Error?) -> Void)? = nil) {
+        guard let cid, isChannelAlreadyCreated, let userId = client.currentUserId else {
+            channelModificationFailed(completion)
+            return
+        }
+        switch scope {
+        case .me:
+            channelMemberUpdater.pinMemberChannel(false, userId: userId, cid: cid) { error in
+                self.callback {
+                    completion?(error)
+                }
+            }
+        }
+    }
+
+    /// Uploads the given file to CDN and returns an attachment and the remote url.
+    /// - Parameters:
+    ///   - localFileURL: Local URL of the file.
+    ///   - type: The attachment type.
+    ///   - progress: Upload progress callback.
+    ///   - completion: Returns an uploaded attachment containing the remote url and the attachment metadata.
+    public func uploadAttachment(
+        localFileURL: URL,
+        type: AttachmentType,
+        progress: (@Sendable (Double) -> Void)? = nil,
+        completion: @escaping @MainActor (Result<UploadedAttachment, Error>) -> Void
+    ) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { error in
+                completion(.failure(error ?? ClientError.ChannelNotCreatedYet()))
+            }
+            return
+        }
+
+        updater.uploadFile(type: type, localFileURL: localFileURL, cid: cid, progress: progress) { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+
+    /// Get the link attachment preview data from the provided url.
+    ///
+    /// This will return the data present in the OG Metadata.
+    public func enrichUrl(_ url: URL, completion: @escaping @MainActor (Result<LinkAttachmentPayload, Error>) -> Void) {
+        updater.enrichUrl(url) { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+
+    /// Loads the given number of pinned messages based on pagination parameter in the current channel.
+    ///
+    /// - Parameters:
+    ///   - pageSize: The number of pinned messages to load. Equals to `25` by default.
+    ///   - sorting: The sorting options. By default, results are sorted descending by `pinned_at` field.
+    ///   - pagination: The pagination parameter. If `nil` is provided, most recently pinned messages are fetched.
+    ///   - completion: The completion to be called on **callbackQueue** when request is completed.
+    public func loadPinnedMessages(
+        pageSize: Int = .messagesPageSize,
+        sorting: [Sorting<PinnedMessagesSortingKey>] = [],
+        pagination: PinnedMessagesPagination? = nil,
+        completion: @escaping @MainActor (Result<[ChatMessage], Error>) -> Void
+    ) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { completion(.failure($0 ?? ClientError.ChannelNotCreatedYet())) }
+            return
+        }
+
+        let query = PinnedMessagesQuery(
+            pageSize: pageSize,
+            sorting: sorting,
+            pagination: pagination
+        )
+
+        updater.loadPinnedMessages(in: cid, query: query) {
+            switch $0 {
+            case let .success(messages):
+                self.callback {
+                    completion(.success(messages))
+                }
+            case let .failure(error):
+                self.callback {
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    /// Returns the current cooldown time for the channel. Returns 0 in case there is no cooldown active.
+    public func currentCooldownTime() -> Int {
+        guard let cooldownDuration = channel?.cooldownDuration, cooldownDuration > 0,
+              let currentUserLastMessage = channel?.lastMessageFromCurrentUser,
+              channel?.ownCapabilities.contains(.skipSlowMode) == false else {
+            return 0
+        }
+
+        let currentTime = Date().timeIntervalSince(currentUserLastMessage.createdAt)
+
+        return max(0, cooldownDuration - Int(currentTime))
+    }
+    
+    /// Deletes a file associated with the given URL in the channel.
+    /// - Parameters:
+    ///   - url: The URL of the file to be deleted.
+    ///   - completion: An optional closure to be called when the delete operation is complete.
+    ///                 If an error occurs during deletion, the error will be passed to this closure.
+    public func deleteFile(url: String, completion: (@MainActor (Error?) -> Void)? = nil) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+        
+        updater.deleteFile(in: cid, url: url, completion: { error in
+            self.callback {
+                completion?(error)
+            }
+        })
+    }
+    
+    /// Deletes an image associated with the given URL in the channel.
+    /// - Parameters:
+    ///   - url: The URL of the image to be deleted.
+    ///   - completion: An optional closure to be called when the delete operation is complete.
+    ///                 If an error occurs during deletion, the error will be passed to this closure.
+    public func deleteImage(url: String, completion: (@MainActor (Error?) -> Void)? = nil) {
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed(completion)
+            return
+        }
+        
+        updater.deleteImage(in: cid, url: url, completion: { error in
+            self.callback {
+                completion?(error)
+            }
+        })
+    }
+
+    public func getFirstUnreadMessageId(for channel: ChatChannel) -> MessageId? {
+        UnreadMessageLookup.firstUnreadMessageId(
+            in: channel,
+            messages: messages,
+            hasLoadedAllPreviousMessages: hasLoadedAllPreviousMessages,
+            currentUserId: client.currentUserId
+        )
+    }
+
+    /// Set the push preferences for this channel.
+    /// - Parameters:
+    ///   - level: The scope level of the push notifications.
+    ///   - completion: The completion call once the request is finished.
+    public func setPushPreference(
+        level: PushPreferenceLevel,
+        completion: (@MainActor (Result<PushPreference, Error>) -> Void)? = nil
+    ) {
+        guard let channelId = cid else {
+            callback {
+                completion?(.failure(ClientError.ChannelNotCreatedYet()))
+            }
+            return
+        }
+
+        let channelPreference = PushPreferenceInput(
+            channelCid: channelId.rawValue,
+            chatLevel: level,
+            removeDisable: true
+        )
+
+        updater.setPushPreference(channelPreference, cid: channelId) { [weak self] result in
+            self?.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Temporarily disables the push notifications for this channel.
+    /// - Parameters:
+    ///   - date: The date until when the push notifications will be enabled back.
+    ///   - completion: The completion call once the request is finished.
+    public func snoozePushNotifications(
+        until date: Date,
+        completion: (@MainActor (Result<PushPreference, Error>) -> Void)? = nil
+    ) {
+        guard let channelId = cid else {
+            callback {
+                completion?(.failure(ClientError.ChannelNotCreatedYet()))
+            }
+            return
+        }
+
+        let channelPreference = PushPreferenceInput(
+            channelCid: channelId.rawValue,
+            chatLevel: .all,
+            disabledUntil: date
+        )
+
+        updater.setPushPreference(channelPreference, cid: channelId) { [weak self] result in
+            self?.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    // MARK: - Scheduled Messages
+
+    /// Schedules a new message to be sent to the channel at a later date.
+    ///
+    /// The message is not added to the channel until it is sent. Local attachments are uploaded when scheduling.
+    ///
+    /// - Parameters:
+    ///   - messageId: The id of the scheduled message. Scheduling twice with the same id returns the existing scheduled message.
+    ///   - text: Text of the message.
+    ///   - attachments: An array of the attachments for the message.
+    ///   - mentionedUserIds: An array of the users mentioned in the message.
+    ///   - quotedMessageId: An id of the message the new message quotes.
+    ///   - scheduledAt: When to send the message, at most 120 days from now. The server rounds it up to the next whole minute,
+    ///   at least 1 minute from now. A date in the past sends the message right away.
+    ///   - extraData: Additional extra data of the message object.
+    ///   - completion: Called when the message is saved locally, with the scheduled message or an error saving it locally.
+    ///   It is sent to the server once its attachments are uploaded. The server answers later, on the scheduled message: a
+    ///   rejection sets `ScheduledMessage.status` to `.failed`, and `ScheduledMessage.failure` says why.
+    public func scheduleMessage(
+        messageId: MessageId? = nil,
+        text: String,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
+        quotedMessageId: MessageId? = nil,
+        scheduledAt: Date,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<ScheduledMessage, Error>) -> Void)? = nil
+    ) {
+        guard let cid else {
+            callback { completion?(.failure(ClientError.ChannelNotCreatedYet())) }
+            return
+        }
+        let content = ScheduledMessageContent(
+            text: text,
+            attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
+            quotedMessageId: quotedMessageId,
+            parentId: nil,
+            showReplyInChannel: false,
+            extraData: extraData
+        )
+        client.scheduledMessagesRepository.schedule(
+            id: messageId ?? .newUniqueId,
+            cid: cid,
+            content: content,
+            scheduledAt: scheduledAt
+        ) { result in
+            self.callback { completion?(result) }
+        }
+    }
+
+    /// Updates the content of a scheduled message, and optionally when it is sent.
+    ///
+    /// A failed scheduled message can not be changed: delete it and schedule a new one.
+    ///
+    /// - Parameters:
+    ///   - id: The id of the scheduled message.
+    ///   - text: The new text of the message.
+    ///   - attachments: The new attachments of the message.
+    ///   - mentionedUserIds: The new mentioned users of the message.
+    ///   - quotedMessageId: The new quoted message of the message.
+    ///   - scheduledAt: When to send the message, not in the past. The server rounds it up to the next whole minute.
+    ///   `nil` keeps the current date.
+    ///   - extraData: The new extra data of the message.
+    ///   - completion: Called when the message is updated locally, with the scheduled message or an error updating it
+    ///   locally. The changes are sent to the server once its attachments are uploaded. The server answers later, on the
+    ///   scheduled message: a rejection sets `ScheduledMessage.status` to `.failed`, and `ScheduledMessage.failure` says
+    ///   why.
+    public func updateScheduledMessage(
+        id: String,
+        text: String,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
+        quotedMessageId: MessageId? = nil,
+        scheduledAt: Date? = nil,
+        extraData: [String: RawJSON] = [:],
+        completion: (@MainActor (Result<ScheduledMessage, Error>) -> Void)? = nil
+    ) {
+        let content = ScheduledMessageContent(
+            text: text,
+            attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
+            quotedMessageId: quotedMessageId,
+            parentId: nil,
+            showReplyInChannel: false,
+            extraData: extraData
+        )
+        client.scheduledMessagesRepository.update(id: id, content: content, scheduledAt: scheduledAt) { result in
+            self.callback { completion?(result) }
+        }
+    }
+
+    /// Changes when a scheduled message is sent. A failed scheduled message can not be changed: delete it and schedule a new one.
+    ///
+    /// - Parameters:
+    ///   - id: The id of the scheduled message.
+    ///   - scheduledAt: When to send the message, at most 120 days from now and not in the past. The server rounds it up to the
+    ///   next whole minute, at least 1 minute from now.
+    ///   - completion: Called when the message is rescheduled locally, with the scheduled message or an error rescheduling
+    ///   it locally. The new date is sent to the server right after. The server answers later, on the scheduled message: a
+    ///   rejection sets `ScheduledMessage.status` to `.failed`, and `ScheduledMessage.failure` says why.
+    public func rescheduleMessage(
+        id: String,
+        scheduledAt: Date,
+        completion: (@MainActor (Result<ScheduledMessage, Error>) -> Void)? = nil
+    ) {
+        client.scheduledMessagesRepository.reschedule(id: id, scheduledAt: scheduledAt) { result in
+            self.callback { completion?(result) }
+        }
+    }
+
+    /// Deletes a scheduled message, so it is never sent.
+    ///
+    /// - Parameters:
+    ///   - id: The id of the scheduled message.
+    ///   - completion: Called when the message is deleted, with an error if it failed.
+    public func deleteScheduledMessage(id: String, completion: (@MainActor (Error?) -> Void)? = nil) {
+        client.scheduledMessagesRepository.delete(id: id) { error in
+            self.callback { completion?(error) }
+        }
+    }
+
+    /// Sends a scheduled message right away.
+    ///
+    /// It is marked locally and sent once its local changes and attachments are on the server, so it is never sent
+    /// with older content. The message is added to the channel when it is sent, which is reported by the
+    /// `ScheduledMessageSentEvent`.
+    ///
+    /// - Parameters:
+    ///   - id: The id of the scheduled message.
+    ///   - completion: Called when the message is marked locally, with an error if it can't be sent, for example when
+    ///   its quoted message was deleted. A rejection of the server sets `ScheduledMessage.status` to `.failed`, with the
+    ///   reason in `ScheduledMessage.failure`.
+    public func sendScheduledMessageNow(id: String, completion: (@MainActor (Error?) -> Void)? = nil) {
+        client.scheduledMessagesRepository.sendNow(id: id) { error in
+            self.callback { completion?(error) }
+        }
+    }
+
+    // MARK: - Internal
+
+    func recoverWatchedChannel(recovery: Bool, completion: @escaping @MainActor (Error?) -> Void) {
+        if cid != nil, isChannelAlreadyCreated {
+            startWatching(isInRecoveryMode: recovery, completion: completion)
+        } else {
+            synchronize(isInRecoveryMode: recovery, completion)
+        }
+    }
+    
+    func createNewMessage(
+        messageId: MessageId? = nil,
+        text: String,
+        pinning: MessagePinning? = nil,
+        isSilent: Bool = false,
+        attachments: [AnyAttachmentPayload] = [],
+        mentionedUserIds: [UserId] = [],
+        mentionedHere: Bool = false,
+        mentionedChannel: Bool = false,
+        mentionedGroupIds: [String] = [],
+        mentionedRoles: [String] = [],
+        quotedMessageId: MessageId? = nil,
+        skipPush: Bool = false,
+        skipEnrichUrl: Bool = false,
+        restrictedVisibility: [UserId] = [],
+        location: NewLocationInfo? = nil,
+        extraData: [String: RawJSON] = [:],
+        poll: PollPayload?,
+        completion: (@MainActor (Result<MessageId, Error>) -> Void)? = nil
+    ) {
+        /// Perform action only if channel is already created on backend side and have a valid `cid`.
+        guard let cid = cid, isChannelAlreadyCreated else {
+            channelModificationFailed { error in
+                completion?(.failure(error ?? ClientError.Unknown()))
+            }
+            return
+        }
+
+        eventSender.stopTypingIfNeeded()
+
+        updater.createNewMessage(
+            in: cid,
+            messageId: messageId,
+            text: text,
+            pinning: pinning,
+            isSilent: isSilent,
+            isSystem: false,
+            command: nil,
+            arguments: nil,
+            attachments: attachments,
+            mentionedUserIds: mentionedUserIds,
+            mentionedHere: mentionedHere,
+            mentionedChannel: mentionedChannel,
+            mentionedGroupIds: mentionedGroupIds,
+            mentionedRoles: mentionedRoles,
+            quotedMessageId: quotedMessageId,
+            skipPush: skipPush,
+            skipEnrichUrl: skipEnrichUrl,
+            restrictedVisibility: restrictedVisibility,
+            poll: poll,
+            location: location,
+            extraData: extraData
+        ) { result in
+            if let newMessage = try? result.get() {
+                self.client.eventNotificationCenter.process(
+                    NewMessagePendingEvent(
+                        message: newMessage,
+                        cid: cid
+                    )
+                )
+            }
+            self.callback {
+                completion?(result.map(\.id))
+            }
+        }
+    }
+}
+
+// MARK: - Environment
+
+extension ChatChannelController {
+    struct Environment {
+        var channelUpdaterBuilder: (
+            _ channelRepository: ChannelRepository,
+            _ messageRepository: MessageRepository,
+            _ paginationStateHandler: MessagesPaginationStateHandling,
+            _ database: DatabaseContainer,
+            _ apiClient: APIClient
+        ) -> ChannelUpdater = ChannelUpdater.init
+
+        var memberUpdaterBuilder: (
+            _ database: DatabaseContainer,
+            _ apiClient: APIClient
+        ) -> ChannelMemberUpdater = ChannelMemberUpdater.init
+
+        var eventSenderBuilder: (
+            _ database: DatabaseContainer,
+            _ apiClient: APIClient
+        ) -> TypingEventsSender = TypingEventsSender.init
+        
+        var readStateHandlerBuilder: (
+            _ authenticationRepository: AuthenticationRepository,
+            _ channelUpdater: ChannelUpdater,
+            _ messageRepository: MessageRepository,
+            _ config: ChatClientConfig
+        ) -> ReadStateHandler = ReadStateHandler.init
+    }
+}
+
+/// Describes the flow of the messages in the list
+public enum MessageOrdering: Sendable {
+    /// New messages appears on the top of the list.
+    case topToBottom
+
+    /// New messages appear on the bottom of the list.
+    case bottomToTop
+}
+
+// MARK: - Helpers
+
+private extension ChatChannelController {
+    func synchronize(
+        isInRecoveryMode: Bool,
+        _ completion: (@MainActor (_ error: Error?) -> Void)? = nil
+    ) {
         let channelCreatedCallback = isChannelAlreadyCreated ? nil : channelCreated(forwardErrorTo: setLocalStateBasedOnError)
         updater.update(
             channelQuery: channelQuery,
             isInRecoveryMode: isInRecoveryMode,
-            channelCreatedCallback: channelCreatedCallback
-        ) { result in
-            switch result {
-            case .success:
-                self.state = .remoteDataFetched
-                self.callback { completion?(nil) }
-            case let .failure(error):
-                self.state = .remoteDataFetchFailed(ClientError(with: error))
-                self.callback { completion?(error) }
+            onChannelCreated: channelCreatedCallback,
+            completion: { result in
+                switch result {
+                case .success:
+                    self.state = .remoteDataFetched
+                    self.callback { completion?(nil) }
+                case let .failure(error):
+                    self.state = .remoteDataFetchFailed(ClientError(with: error))
+                    self.callback { completion?(error) }
+                }
             }
-        }
+        )
 
         /// Setup observers if we know the channel `cid` (if it's missing, it'll be set in `set(cid:)`
         /// Otherwise they will be set up after channel creation, in `set(cid:)`.
@@ -440,17 +2251,17 @@ public class ChatChannelController: DataController, DelegateCallable, DataStoreP
     /// - Returns: Error if it occurs while setting up database observers.
     private func set(cid: ChannelId) -> Error? {
         guard self.cid != cid else { return nil }
-        
+
         channelQuery = ChannelQuery(cid: cid, channelQuery: channelQuery)
         setupEventObservers(for: cid)
-        
+
         let error = startDatabaseObservers()
         guard error == nil else { return error }
-        
+
         // If there's a channel already in the database, we must
         // simulate the existing data callbacks.
         // Otherwise, the changes will be reported when DB write is completed.
-        
+
         // The reason is, when we don't have the cid, the initial fetches return empty/nil entities
         // and only following updates are reported, hence initial values are ignored.
         guard let channel = channel else { return nil }
@@ -468,10 +2279,10 @@ public class ChatChannelController: DataController, DelegateCallable, DataStoreP
     private func startDatabaseObservers() -> Error? {
         startChannelObserver() ?? startMessagesObserver()
     }
-    
+
     private func startChannelObserver() -> Error? {
-        _channelObserver.reset()
-        
+        setChannelObserver()
+
         do {
             try channelObserver?.startObserving()
             return nil
@@ -480,10 +2291,10 @@ public class ChatChannelController: DataController, DelegateCallable, DataStoreP
             return ClientError.FetchFailed()
         }
     }
-    
+
     private func startMessagesObserver() -> Error? {
-        _messagesObserver.reset()
-        
+        setMessagesObserver()
+
         do {
             try messagesObserver?.startObserving()
             return nil
@@ -511,428 +2322,88 @@ public class ChatChannelController: DataController, DelegateCallable, DataStoreP
         ]
     }
 
-    func recoverWatchedChannel(completion: @escaping (Error?) -> Void) {
-        if cid != nil, isChannelAlreadyCreated {
-            startWatching(isInRecoveryMode: true, completion: completion)
-        } else {
-            synchronize(isInRecoveryMode: true, completion)
-        }
-    }
-}
-
-// MARK: - Channel features
-
-public extension ChatChannelController {
-    /// `true` if the channel has typing events enabled. Defaults to `false` if the channel doesn't exist yet.
-    var areTypingEventsEnabled: Bool { channel?.config.typingEventsEnabled == true }
-    
-    /// `true` if the channel has reactions enabled. Defaults to `false` if the channel doesn't exist yet.
-    var areReactionsEnabled: Bool { channel?.config.reactionsEnabled == true }
-    
-    /// `true` if the channel has replies enabled. Defaults to `false` if the channel doesn't exist yet.
-    var areRepliesEnabled: Bool { channel?.config.repliesEnabled == true }
-    
-    /// `true` if the channel has quotes enabled. Defaults to `false` if the channel doesn't exist yet.
-    var areQuotesEnabled: Bool { channel?.config.quotesEnabled == true }
-    
-    /// `true` if the channel has read events enabled. Defaults to `false` if the channel doesn't exist yet.
-    var areReadEventsEnabled: Bool { channel?.config.readEventsEnabled == true }
-    
-    /// `true` if the channel supports uploading files/images. Defaults to `false` if the channel doesn't exist yet.
-    var areUploadsEnabled: Bool { channel?.config.uploadsEnabled == true }
-}
-
-// MARK: - Channel actions
-
-public extension ChatChannelController {
-    /// Updated channel with new data.
-    ///
-    /// - Parameters:
-    ///   - team: New team.
-    ///   - members: New members.
-    ///   - invites: New invites.
-    ///   - extraData: New `ExtraData`.
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func updateChannel(
-        name: String?,
-        imageURL: URL?,
-        team: String?,
-        members: Set<UserId> = [],
-        invites: Set<UserId> = [],
-        extraData: [String: RawJSON] = [:],
-        completion: ((Error?) -> Void)? = nil
-    ) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-
-        let payload: ChannelEditDetailPayload = .init(
-            cid: cid,
-            name: name,
-            imageURL: imageURL,
-            team: team,
-            members: members,
-            invites: invites,
-            extraData: extraData
-        )
-        
-        updater.updateChannel(channelPayload: payload) { error in
-            self.callback {
-                completion?(error)
+    private func setChannelObserver() {
+        channelObserver = { [weak self] in
+            guard let self = self else {
+                log.warning("Callback called while self is nil")
+                return nil
             }
-        }
-    }
-    
-    /// Mutes the channel this controller manages.
-    ///
-    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                         If request fails, the completion will be called with an error.
-    ///
-    func muteChannel(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.muteChannel(cid: cid, mute: true) { error in
-            self.callback {
-                completion?(error)
+
+            guard let cid = self.cid else {
+                return nil
             }
-        }
-    }
-    
-    /// Unmutes the channel this controller manages.
-    ///
-    /// - Parameters:
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func unmuteChannel(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.muteChannel(cid: cid, mute: false) { error in
-            self.callback {
-                completion?(error)
+
+            let observer = BackgroundEntityDatabaseObserver(
+                database: self.client.databaseContainer,
+                fetchRequest: ChannelDTO.fetchRequest(for: cid),
+                itemCreator: {
+                    try $0.asModel() as ChatChannel
+                },
+                itemReuseKeyPaths: (\ChatChannel.cid.rawValue, \ChannelDTO.cid)
+            ).onChange { [weak self] change in
+                self?.delegateCallback { [weak self] in
+                    guard let self = self else {
+                        log.warning("Callback called while self is nil")
+                        return
+                    }
+                    $0.channelController(self, didUpdateChannel: change)
+                }
             }
-        }
-    }
-    
-    /// Delete the channel this controller manages.
-    /// - Parameters:
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    func deleteChannel(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.deleteChannel(cid: cid) { error in
-            self.callback {
-                completion?(error)
+            .onFieldChange(\.typingUsers) { [weak self] change in
+                self?.delegateCallback { [weak self] in
+                    guard let self = self else {
+                        log.warning("Callback called while self is nil")
+                        return
+                    }
+                    $0.channelController(self, didChangeTypingUsers: change.item)
+                    $0.channelController(self, didChangeTypingUsers: change.item.chatUsers)
+                }
             }
-        }
+
+            return observer
+        }()
     }
 
-    /// Truncates the channel this controller manages.
-    ///
-    /// Removes all of the messages of the channel but doesn't affect the channel data or members.
-    ///
-    /// - Parameters:
-    ///   - skipPush: If true, skips sending push notification to channel members.
-    ///   - hardDelete: If true, messages are deleted instead of hiding.
-    ///   - systemMessage: A system message to be added via truncation.
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    /// If request fails, the completion will be called with an error.
-    ///
-    func truncateChannel(
-        skipPush: Bool = false,
-        hardDelete: Bool = true,
-        systemMessage: String? = nil,
-        completion: ((Error?) -> Void)? = nil
-    ) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
+    private func setMessagesObserver() {
+        messagesObserver = { [weak self] in
+            guard let self = self else {
+                log.warning("Callback called while self is nil")
+                return nil
+            }
+            guard let cid = self.cid else { return nil }
+            let sortAscending = self.messageOrdering == .topToBottom ? false : true
+            let shouldShowShadowedMessages = client.config.shouldShowShadowedMessages
+            let pageSize = channelQuery.pagination?.pageSize ?? .messagesPageSize
+            let observer = BackgroundListDatabaseObserver(
+                database: client.databaseContainer,
+                fetchRequest: MessageDTO.messagesFetchRequest(
+                    for: cid,
+                    pageSize: pageSize,
+                    sortAscending: sortAscending,
+                    shouldShowShadowedMessages: shouldShowShadowedMessages
+                ),
+                itemCreator: {
+                    try $0.asModel() as ChatMessage
+                },
+                itemReuseKeyPaths: (\ChatMessage.id, \MessageDTO.id)
+            )
+            observer.onDidChange = { [weak self] changes in
+                self?.delegateCallback { [weak self] in
+                    guard let self = self else { return }
+                    log.debug("didUpdateMessages: \(changes.map(\.debugDescription))")
 
-        updater.truncateChannel(
-            cid: cid,
-            skipPush: skipPush,
-            hardDelete: hardDelete,
-            systemMessage: systemMessage
-        ) { error in
-            self.callback {
-                completion?(error)
+                    $0.channelController(self, didUpdateMessages: changes)
+                }
             }
-        }
-    }
-    
-    /// Hide the channel this controller manages from queryChannels for the user until a message is added.
-    ///
-    /// - Parameters:
-    ///   - clearHistory: Flag to remove channel history (**false** by default)
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func hideChannel(clearHistory: Bool = false, completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.hideChannel(cid: cid, clearHistory: clearHistory) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Removes hidden status for the channel this controller manages.
-    ///
-    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                         If request fails, the completion will be called with an error.
-    ///
-    func showChannel(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.showChannel(cid: cid) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Loads previous messages from backend.
-    ///
-    /// - Parameters:
-    ///   - messageId: ID of the last fetched message. You will get messages `older` than the provided ID.
-    ///   - limit: Limit for page size.
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func loadPreviousMessages(
-        before messageId: MessageId? = nil,
-        limit: Int = 25,
-        completion: ((Error?) -> Void)? = nil
-    ) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard cid != nil, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        guard let messageId = messageId ?? messages.last?.id else {
-            log.error(ClientError.ChannelEmptyMessages().localizedDescription)
-            callback { completion?(ClientError.ChannelEmptyMessages()) }
-            return
-        }
-
-        guard !hasLoadedAllPreviousMessages else {
-            completion?(nil)
-            return
-        }
-        channelQuery.pagination = MessagesPagination(pageSize: limit, parameter: .lessThan(messageId))
-        updater.update(channelQuery: channelQuery, isInRecoveryMode: false, completion: { result in
-            switch result {
-            case let .success(payload):
-                self.hasLoadedAllPreviousMessages = payload.messages.count < limit
-                self.callback { completion?(nil) }
-            case let .failure(error):
-                self.callback { completion?(error) }
-            }
-        })
-    }
-    
-    /// Loads next messages from backend.
-    ///
-    /// - Parameters:
-    ///   - messageId: ID of the current first message. You will get messages `newer` than the provided ID.
-    ///   - limit: Limit for page size.
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func loadNextMessages(
-        after messageId: MessageId? = nil,
-        limit: Int = 25,
-        completion: ((Error?) -> Void)? = nil
-    ) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard cid != nil, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        guard let messageId = messageId ?? messages.first?.id else {
-            log.error(ClientError.ChannelEmptyMessages().localizedDescription)
-            callback { completion?(ClientError.ChannelEmptyMessages()) }
-            return
-        }
-        
-        channelQuery.pagination = MessagesPagination(pageSize: limit, parameter: .greaterThan(messageId))
-        
-        updater.update(channelQuery: channelQuery, isInRecoveryMode: false, completion: { result in
-            self.callback { completion?(result.error) }
-        })
-    }
-     
-    /// Sends the start typing event and schedule a timer to send the stop typing event.
-    ///
-    /// This method is meant to be called every time the user presses a key. The method will manage requests and timer as needed.
-    ///
-    /// - Parameter completion: a completion block with an error if the request was failed.
-    ///
-    func sendKeystrokeEvent(parentMessageId: MessageId? = nil, completion: ((Error?) -> Void)? = nil) {
-        /// Ignore if typing events are not enabled
-        guard areTypingEventsEnabled else {
-            callback {
-                completion?(nil)
-            }
-            return
-        }
-
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed { completion?($0) }
-            return
-        }
-        
-        eventSender.keystroke(in: cid, parentMessageId: parentMessageId) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Sends the start typing event.
-    ///
-    /// For the majority of cases, you don't need to call `sendStartTypingEvent` directly. Instead, use `sendKeystrokeEvent`
-    /// method and call it every time the user presses a key. The controller will manage
-    /// `sendStartTypingEvent`/`sendStopTypingEvent` calls automatically.
-    ///
-    /// - Parameter completion: a completion block with an error if the request was failed.
-    ///
-    func sendStartTypingEvent(parentMessageId: MessageId? = nil, completion: ((Error?) -> Void)? = nil) {
-        /// Ignore if typing events are not enabled
-        guard areTypingEventsEnabled else {
-            channelFeatureDisabled(feature: "typing events", completion: completion)
-            return
-        }
-
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed { completion?($0) }
-            return
-        }
-        
-        eventSender.startTyping(in: cid, parentMessageId: parentMessageId) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Sends the stop typing event.
-    ///
-    /// For the majority of cases, you don't need to call `sendStopTypingEvent` directly. Instead, use `sendKeystrokeEvent`
-    /// method and call it every time the user presses a key. The controller will manage
-    /// `sendStartTypingEvent`/`sendStopTypingEvent` calls automatically.
-    ///
-    /// - Parameter completion: a completion block with an error if the request was failed.
-    ///
-    func sendStopTypingEvent(parentMessageId: MessageId? = nil, completion: ((Error?) -> Void)? = nil) {
-        /// Ignore if typing events are not enabled
-        guard areTypingEventsEnabled else {
-            channelFeatureDisabled(feature: "typing events", completion: completion)
-            return
-        }
-
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed { completion?($0) }
-            return
-        }
-        
-        eventSender.stopTyping(in: cid, parentMessageId: parentMessageId) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Creates a new message locally and schedules it for send.
-    ///
-    /// - Parameters:
-    ///   - text: Text of the message.
-    ///   - pinning: Pins the new message. `nil` if should not be pinned.
-    ///   - isSilent: A flag indicating whether the message is a silent message. Silent messages are special messages that don't increase the unread messages count nor mark a channel as unread.
-    ///   - attachments: An array of the attachments for the message.
-    ///     `Note`: can be built-in types, custom attachment types conforming to `AttachmentEnvelope` protocol
-    ///     and `ChatMessageAttachmentSeed`s.
-    ///   - quotedMessageId: An id of the message new message quotes. (inline reply)
-    ///   - extraData: Additional extra data of the message object.
-    ///   - completion: Called when saving the message to the local DB finishes.
-    ///
-    func createNewMessage(
-        text: String,
-        pinning: MessagePinning? = nil,
-        isSilent: Bool = false,
-        attachments: [AnyAttachmentPayload] = [],
-        mentionedUserIds: [UserId] = [],
-        quotedMessageId: MessageId? = nil,
-        extraData: [String: RawJSON] = [:],
-        completion: ((Result<MessageId, Error>) -> Void)? = nil
-    ) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed { error in
-                completion?(.failure(error ?? ClientError.Unknown()))
-            }
-            return
-        }
-        
-        /// Send stop typing event.
-        eventSender.stopTyping(in: cid, parentMessageId: nil)
-        
-        updater.createNewMessage(
-            in: cid,
-            text: text,
-            pinning: pinning,
-            isSilent: isSilent,
-            command: nil,
-            arguments: nil,
-            attachments: attachments,
-            mentionedUserIds: mentionedUserIds,
-            quotedMessageId: quotedMessageId,
-            extraData: extraData
-        ) { result in
-            self.callback {
-                completion?(result)
-            }
-        }
+            return observer
+        }()
     }
 
     /// A convenience method that invokes the completion? with a ChannelFeatureDisabled error
     /// ie. VCs should use the `are{FEATURE_NAME}Enabled` props (ie. `areReadEventsEnabled`) before using any feature
-    private func channelFeatureDisabled(feature: String, completion: ((Error?) -> Void)?) {
+    private func channelFeatureDisabled(feature: String, completion: (@MainActor (Error?) -> Void)?) {
         let error = ClientError.ChannelFeatureDisabled("Channel feature: \(feature) is disabled for this channel.")
-        log.error(error.localizedDescription)
+        log.warning(error.localizedDescription)
         callback {
             completion?(error)
         }
@@ -940,500 +2411,74 @@ public extension ChatChannelController {
 
     // It's impossible to perform any channel modification before it's creation on backend.
     // So before any modification attempt we need to check if channel is already created and call this function if not.
-    private func channelModificationFailed(_ completion: ((Error?) -> Void)?) {
+    private func channelModificationFailed(_ completion: (@MainActor (Error?) -> Void)?) {
         let error = ClientError.ChannelNotCreatedYet()
         log.error(error.localizedDescription)
         callback {
             completion?(error)
         }
     }
-    
-    /// Add users to the channel as members.
-    ///
-    /// - Parameters:
-    ///   - users: Users Id to add to a channel.
-    ///   - hideHistory: Hide the history of the channel to the added member. By default, it is false.
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func addMembers(userIds: Set<UserId>, hideHistory: Bool = false, completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.addMembers(cid: cid, userIds: userIds, hideHistory: hideHistory) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Remove users to the channel as members.
-    ///
-    /// - Parameters:
-    ///   - users: Users Id to add to a channel.
-    ///   - completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func removeMembers(userIds: Set<UserId>, completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.removeMembers(cid: cid, userIds: userIds) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Invite members to a channel. They can then accept or decline the invitation
-    /// - Parameters:
-    ///   - userIds: Set of ids of users to be invited to the channel
-    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
-    func inviteMembers(userIds: Set<UserId>, completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.inviteMembers(cid: cid, userIds: userIds) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Accept Request
-    /// - Parameters:
-    ///   - cid: The channel identifier.
-    ///   - userId: userId
-    ///   - message: message
-    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
-    func acceptInvite(message: String? = nil, completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        updater.acceptInvite(cid: cid, message: message) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Reject Request
-    /// - Parameters:
-    ///   - cid: The channel identifier.
-    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
-    func rejectInvite(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.rejectInvite(cid: cid) { error in
-            self.callback {
-                completion?(error)
-            }
+
+    /// This callback is called after channel is created on backend but before channel is saved to DB. When channel is created
+    /// we receive backend generated cid and setting up current `ChannelController` to observe this channel DB changes.
+    /// Completion will be called if DB fetch will fail after setting new `ChannelQuery`.
+    private func channelCreated(forwardErrorTo completion: (@Sendable (_ error: Error?) -> Void)?) -> (@Sendable (ChannelId) -> Void) {
+        return { [weak self] cid in
+            guard let self = self else { return }
+            self.isChannelAlreadyCreated = true
+            completion?(self.set(cid: cid))
         }
     }
 
-    /// Marks the channel as read.
-    ///
-    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                         If request fails, the completion will be called with an error.
-    ///
-    func markRead(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let channel = channel else {
-            channelModificationFailed(completion)
-            return
-        }
-
-        /// Read events are not enabled for this channel
-        guard areReadEventsEnabled else {
-            channelFeatureDisabled(feature: "read events", completion: completion)
-            return
-        }
-
-        guard
-            let currentUserId = client.currentUserId,
-            let currentUserRead = channel.reads.first(where: { $0.user.id == currentUserId }),
-            let lastMessageAt = channel.lastMessageAt,
-            currentUserRead.lastReadAt < lastMessageAt
-        else {
-            callback {
-                completion?(nil)
-            }
-            return
-        }
-
-        guard !markingRead else {
-            return
-        }
-
-        markingRead = true
-
-        updater.markRead(cid: channel.cid, userId: currentUserId) { error in
-            self.callback {
-                self.markingRead = false
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Enables slow mode for the channel
-    ///
-    /// When slow mode is enabled, users can only send a message every `cooldownDuration` time interval.
-    /// `cooldownDuration` is specified in seconds, and should be between 1-120.
-    /// For more information, please check [documentation](https://getstream.io/chat/docs/javascript/slow_mode/?language=swift).
-    ///
-    /// - Parameters:
-    ///   - cooldownDuration: Duration of the time interval users have to wait between messages.
-    ///   Specified in seconds. Should be between 1-120.
-    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
-    func enableSlowMode(cooldownDuration: Int, completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        guard cooldownDuration >= 1, cooldownDuration <= 120 else {
-            callback {
-                completion?(ClientError.InvalidCooldownDuration())
-            }
-            return
-        }
-        updater.enableSlowMode(cid: cid, cooldownDuration: cooldownDuration) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Disables slow mode for the channel
-    ///
-    /// For more information, please check [documentation](https://getstream.io/chat/docs/javascript/slow_mode/?language=swift).
-    ///
-    /// - Parameters:
-    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
-    func disableSlowMode(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        updater.enableSlowMode(cid: cid, cooldownDuration: 0) { error in
-            self.callback {
-                completion?(error)
-            }
+    /// Helper for updating state after fetching local data.
+    private var setLocalStateBasedOnError: (@Sendable (_ error: Error?) -> Void) {
+        return { [weak self] error in
+            // Update observing state
+            self?.state = error == nil ? .localDataFetched : .localDataFetchFailed(ClientError(with: error))
         }
     }
 
-    /// Start watching a channel
-    ///
-    /// Watching a channel is defined as observing notifications about this channel.
-    /// Usually you don't need to call this function since `ChannelController` watches channels
-    /// by default.
-    ///
-    /// Please check [documentation](https://getstream.io/chat/docs/android/watch_channel/?language=swift) for more information.
-    ///
-    ///
-    /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
-    func startWatching(isInRecoveryMode: Bool, completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        updater.startWatching(cid: cid, isInRecoveryMode: isInRecoveryMode) { error in
-            self.state = error.map { .remoteDataFetchFailed(ClientError(with: $0)) } ?? .remoteDataFetched
-            self.callback {
-                completion?(error)
-            }
-        }
+    private func getLastReadMessageId(firstUnreadMessageId: MessageId) -> MessageId? {
+        guard let messageIndex = messages.firstIndex(where: { $0.id == firstUnreadMessageId }) else { return nil }
+
+        let newLastReadMessageIndex = messages.index(after: messageIndex)
+        return messageId(at: newLastReadMessageIndex)
     }
-    
-    /// Stop watching a channel
-    ///
-    /// Watching a channel is defined as observing notifications about this channel.
-    /// `ChannelController` watches the channel by default so if you want to create a `ChannelController`
-    ///  without watching the channel, either you can create it and call this function, or you can create it as:
-    /// ```
-    /// var query = ChannelQuery(cid: cid)
-    /// query.options = [] // by default, we pass `.watch` option here
-    /// let controller = client.channelController(for: query)
-    /// ```
-    ///
-    /// Please check [documentation](https://getstream.io/chat/docs/android/watch_channel/?language=swift) for more information.
-    ///
-    /// - Warning: If you're using `ChannelListController`, calling this function can disrupt `ChannelListController`'s functions,
-    /// such as updating channel data.
-    ///
-    /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
-    func stopWatching(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
+
+    private func message(at index: Int) -> ChatMessage? {
+        if !messages.indices.contains(index) {
+            return nil
         }
-        updater.stopWatching(cid: cid) { error in
-            self.state = error.map { .remoteDataFetchFailed(ClientError(with: $0)) } ?? .localDataFetched
-            self.callback {
-                completion?(error)
-            }
-        }
+        return messages[index]
     }
-    
-    /// Freezes the channel.
-    ///
-    /// Freezing a channel will disallow sending new messages and sending / deleting reactions.
-    /// For more information, see https://getstream.io/chat/docs/ios-swift/freezing_channels/?language=swift
-    ///
-    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func freezeChannel(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.freezeChannel(true, cid: cid) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Unfreezes the channel.
-    ///
-    /// Freezing a channel will disallow sending new messages and sending / deleting reactions.
-    /// For more information, see https://getstream.io/chat/docs/ios-swift/freezing_channels/?language=swift
-    ///
-    /// - Parameter completion: The completion. Will be called on a **callbackQueue** when the network request is finished.
-    ///                 If request fails, the completion will be called with an error.
-    ///
-    func unfreezeChannel(completion: ((Error?) -> Void)? = nil) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed(completion)
-            return
-        }
-        
-        updater.freezeChannel(false, cid: cid) { error in
-            self.callback {
-                completion?(error)
-            }
-        }
-    }
-    
-    /// Uploads the given file to CDN and returns the file URL.
-    /// - Parameters:
-    ///   - localFileURL: Local URL of the file.
-    ///   - progress: Upload progress callback
-    ///   - completion: Completion to be called when upload finishes, or errors.  Will be called on a **callbackQueue** when the network request is finished.
-    func uploadFile(
-        localFileURL: URL,
-        progress: ((Double) -> Void)? = nil,
-        completion: @escaping ((Result<URL, Error>) -> Void)
-    ) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed { error in
-                completion(.failure(error ?? ClientError.ChannelNotCreatedYet()))
-            }
-            return
-        }
-        
-        updater.uploadFile(type: .file, localFileURL: localFileURL, cid: cid, progress: progress) { result in
-            self.callback {
-                completion(result)
-            }
-        }
-    }
-    
-    /// Uploads the given image to CDN and returns the file URL.
-    /// - Parameters:
-    ///   - localFileURL: Local URL of the image.
-    ///   - progress: Upload progress callback
-    ///   - completion: Completion to be called when upload finishes, or errors.  Will be called on a **callbackQueue** when the network request is finished.
-    func uploadImage(
-        localFileURL: URL,
-        progress: ((Double) -> Void)? = nil,
-        completion: @escaping ((Result<URL, Error>) -> Void)
-    ) {
-        /// Perform action only if channel is already created on backend side and have a valid `cid`.
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed { error in
-                completion(.failure(error ?? ClientError.ChannelNotCreatedYet()))
-            }
-            return
-        }
-        
-        updater.uploadFile(type: .image, localFileURL: localFileURL, cid: cid, progress: progress) { result in
-            self.callback {
-                completion(result)
-            }
-        }
-    }
-    
-    /// Loads the given number of pinned messages based on pagination parameter in the current channel.
-    ///
-    /// - Parameters:
-    ///   - pageSize: The number of pinned messages to load. Equals to `25` by default.
-    ///   - sorting: The sorting options. By default, results are sorted descending by `pinned_at` field.
-    ///   - pagination: The pagination parameter. If `nil` is provided, most recently pinned messages are fetched.
-    ///   - completion: The completion to be called on **callbackQueue** when request is completed.
-    func loadPinnedMessages(
-        pageSize: Int = .messagesPageSize,
-        sorting: [Sorting<PinnedMessagesSortingKey>] = [],
-        pagination: PinnedMessagesPagination? = nil,
-        completion: @escaping (Result<[ChatMessage], Error>) -> Void
-    ) {
-        guard let cid = cid, isChannelAlreadyCreated else {
-            channelModificationFailed { completion(.failure($0 ?? ClientError.ChannelNotCreatedYet())) }
-            return
-        }
-        
-        let query = PinnedMessagesQuery(
-            pageSize: pageSize,
-            sorting: sorting,
-            pagination: pagination
-        )
-        
-        updater.loadPinnedMessages(in: cid, query: query) {
-            switch $0 {
-            case let .success(messages):
-                self.callback {
-                    completion(.success(messages))
-                }
-            case let .failure(error):
-                self.callback {
-                    completion(.failure(error))
-                }
-            }
-        }
-    }
-    
-    /// Returns the current cooldown time for the channel. Returns 0 in case there is no cooldown active.
-    func currentCooldownTime() -> Int {
-        guard let cooldownDuration = channel?.cooldownDuration,
-              let currentUserLastMessage = channel?.lastMessageFromCurrentUser else {
-            return 0
-        }
-        
-        let currentTime = Date().timeIntervalSince(currentUserLastMessage.createdAt)
-        
-        return max(0, cooldownDuration - Int(currentTime))
+
+    private func messageId(at index: Int) -> MessageId? {
+        message(at: index)?.id
     }
 }
 
-extension ChatChannelController {
-    struct Environment {
-        var channelUpdaterBuilder: (
-            _ database: DatabaseContainer,
-            _ apiClient: APIClient
-        ) -> ChannelUpdater = ChannelUpdater.init
-        
-        var eventSenderBuilder: (
-            _ database: DatabaseContainer,
-            _ apiClient: APIClient
-        ) -> TypingEventsSender = TypingEventsSender.init
-    }
-}
+// MARK: - Errors
 
-public extension ChatChannelController {
-    /// Set the delegate of `ChannelController` to observe the changes in the system.
-    var delegate: ChatChannelControllerDelegate? {
-        get { multicastDelegate.mainDelegate }
-        set { multicastDelegate.set(mainDelegate: newValue) }
-    }
-}
-
-/// Describes the flow of the messages in the list
-public enum MessageOrdering {
-    /// New messages appears on the top of the list.
-    case topToBottom
-    
-    /// New messages appear on the bottom of the list.
-    case bottomToTop
-}
-
-// MARK: - Delegates
-
-/// `ChatChannelController` uses this protocol to communicate changes to its delegate.
-public protocol ChatChannelControllerDelegate: DataControllerStateDelegate {
-    /// The controller observed a change in the `Channel` entity.
-    func channelController(
-        _ channelController: ChatChannelController,
-        didUpdateChannel channel: EntityChange<ChatChannel>
-    )
-    
-    /// The controller observed changes in the `Messages` of the observed channel.
-    func channelController(
-        _ channelController: ChatChannelController,
-        didUpdateMessages changes: [ListChange<ChatMessage>]
-    )
-
-    /// The controller received a `MemberEvent` related to the channel it observes.
-    func channelController(_ channelController: ChatChannelController, didReceiveMemberEvent: MemberEvent)
-    
-    /// The controller received a change related to users typing in the channel it observes.
-    func channelController(
-        _ channelController: ChatChannelController,
-        didChangeTypingUsers typingUsers: Set<ChatUser>
-    )
-}
-
-public extension ChatChannelControllerDelegate {
-    func channelController(
-        _ channelController: ChatChannelController,
-        didUpdateChannel channel: EntityChange<ChatChannel>
-    ) {}
-    
-    func channelController(
-        _ channelController: ChatChannelController,
-        didUpdateMessages changes: [ListChange<ChatMessage>]
-    ) {}
-
-    func channelController(_ channelController: ChatChannelController, didReceiveMemberEvent: MemberEvent) {}
-    
-    func channelController(
-        _ channelController: ChatChannelController,
-        didChangeTypingUsers: Set<ChatUser>
-    ) {}
-}
-
-extension ClientError {
-    class ChannelNotCreatedYet: ClientError {
+public extension ClientError {
+    final class ChannelNotCreatedYet: ClientError, @unchecked Sendable {
         override public var localizedDescription: String {
             "You can't modify the channel because the channel hasn't been created yet. Call `synchronize()` to create the channel and wait for the completion block to finish. Alternatively, you can observe the `state` changes of the controller and wait for the `remoteDataFetched` state."
         }
     }
 
-    class ChannelEmptyMembers: ClientError {
+    final class ChannelEmptyMembers: ClientError, @unchecked Sendable {
         override public var localizedDescription: String {
             "You can't create direct messaging channel with empty members."
         }
     }
 
-    class ChannelEmptyMessages: ClientError {
+    final class ChannelEmptyMessages: ClientError, @unchecked Sendable {
         override public var localizedDescription: String {
             "You can't load new messages when there is no messages in the channel."
         }
     }
 
-    class InvalidCooldownDuration: ClientError {
+    final class InvalidCooldownDuration: ClientError, @unchecked Sendable {
         override public var localizedDescription: String {
             "You can't specify a value outside the range 1-120 for cooldown duration."
         }
@@ -1441,5 +2486,21 @@ extension ClientError {
 }
 
 extension ClientError {
-    class ChannelFeatureDisabled: ClientError {}
+    final class ChannelFeatureDisabled: ClientError, @unchecked Sendable {}
+}
+
+public extension ChatChannel {
+    func lastReadMessageId(userId: UserId) -> MessageId? {
+        guard let currentUserRead = reads.first(where: {
+            $0.user.id == userId
+        }) else {
+            return nil
+        }
+
+        guard let lastReadMessageId = currentUserRead.lastReadMessageId else {
+            return nil
+        }
+
+        return lastReadMessageId
+    }
 }

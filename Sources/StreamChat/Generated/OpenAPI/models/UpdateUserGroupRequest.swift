@@ -1,0 +1,27 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+/// Request body for updating a user group
+final class UpdateUserGroupRequest: Sendable, Encodable, JSONEncodable {
+    /// The new description for the group
+    let description: String?
+    /// The new name of the user group
+    let name: String?
+    let teamId: String?
+
+    init(description: String? = nil, name: String? = nil, teamId: String? = nil) {
+        self.description = description
+        self.name = name
+        self.teamId = teamId
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+        try container.encodeIfPresent(description, forKey: .description)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(teamId, forKey: .teamId)
+    }
+}

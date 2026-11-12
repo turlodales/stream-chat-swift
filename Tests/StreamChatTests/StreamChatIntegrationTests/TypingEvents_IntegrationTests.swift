@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -31,7 +31,8 @@ final class TypingEvents_IntegrationTests: XCTestCase {
 
     func test_UserStartTypingEventPayload_isHandled() throws {
         let json = XCTestCase.mockData(fromJSONFile: "UserStartTyping")
-        let event = try eventDecoder.decode(from: json) as? TypingEventDTO
+        let event = try eventDecoder.decode(from: json) as? WSEvent
+        XCTAssertTrue(event?.rawValue is TypingEventDTO)
 
         let channelId: ChannelId = ChannelId(type: .messaging, id: "general")
         try client.databaseContainer.createChannel(cid: channelId, withMessages: false, withQuery: false)
@@ -52,7 +53,8 @@ final class TypingEvents_IntegrationTests: XCTestCase {
 
     func test_UserStopTypingEventPayload_isHandled() throws {
         let json = XCTestCase.mockData(fromJSONFile: "UserStopTyping")
-        let event = try eventDecoder.decode(from: json) as? TypingEventDTO
+        let event = try eventDecoder.decode(from: json) as? WSEvent
+        XCTAssertTrue(event?.rawValue is TypingEventDTO)
 
         let channelId: ChannelId = ChannelId(type: .messaging, id: "general")
         try client.databaseContainer.createChannel(

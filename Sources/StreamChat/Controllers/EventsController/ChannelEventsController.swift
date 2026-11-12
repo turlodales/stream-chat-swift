@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -38,16 +38,16 @@ public extension ChatChannelController {
 
 /// `ChannelEventsController` is a controller class which allows to observe channel
 /// events and send custom events.
-public class ChannelEventsController: EventsController {
+public class ChannelEventsController: EventsController, @unchecked Sendable {
     // A channel identifier provider.
     private let cidProvider: () -> ChannelId?
-    
+
     // A channel identifier. Returns `nil` if channel has not yet created.
     public var cid: ChannelId? { cidProvider() }
-    
+
     // An event sender.
     private let eventSender: EventSender
-    
+
     /// Creates a instance of `ChannelEventsController` type.
     /// - Parameters:
     ///   - cid: A channel identifier.
@@ -60,7 +60,7 @@ public class ChannelEventsController: EventsController {
     ) {
         self.cidProvider = cidProvider
         self.eventSender = eventSender
-        
+
         super.init(notificationCenter: notificationCenter)
     }
 
@@ -69,23 +69,23 @@ public class ChannelEventsController: EventsController {
     /// - Parameters:
     ///   - payload: A custom event payload to be sent.
     ///   - completion: A completion.
-    public func sendEvent<T: CustomEventPayload>(_ payload: T, completion: ((Error?) -> Void)? = nil) {
+    public func sendEvent<T: CustomEventPayload>(_ payload: T, completion: (@Sendable (Error?) -> Void)? = nil) {
         guard let cid = cid else {
             callback { completion?(ClientError.ChannelNotCreatedYet()) }
             return
         }
-        
+
         eventSender.sendEvent(payload, to: cid) { error in
             self.callback { completion?(error) }
         }
     }
-    
+
     override func shouldProcessEvent(_ event: Event) -> Bool {
         guard let cid = cid else { return false }
-        
+
         let channelEvent = event as? ChannelSpecificEvent
         let unknownEvent = event as? UnknownChannelEvent
-        
+
         return channelEvent?.cid == cid || unknownEvent?.cid == cid
     }
 }

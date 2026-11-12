@@ -1,14 +1,15 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
-import StreamChatTestTools
+@testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import SwiftUI
 import XCTest
 
-final class ConfirmButton_Tests: XCTestCase {
+@MainActor final class ConfirmButton_Tests: XCTestCase {
     private lazy var container = UIView().withoutAutoresizingMaskConstraints
 
     override func setUp() {
@@ -28,9 +29,9 @@ final class ConfirmButton_Tests: XCTestCase {
     }
 
     func test_appearanceCustomization_usingAppearance() {
-        var appearance = Appearance()
+        let appearance = Appearance()
         appearance.images.confirmCheckmark = TestImages.vader.image.tinted(with: .systemPink)!
-        appearance.colorPalette.inactiveTint = .black
+        appearance.colorPalette.accentNeutral = .black
 
         let view = ConfirmButton().withoutAutoresizingMaskConstraints
         view.appearance = appearance

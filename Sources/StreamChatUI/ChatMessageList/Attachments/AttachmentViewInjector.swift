@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -10,11 +10,11 @@ import StreamChat
 ///
 /// - Important: This is an abstract superclass meant to be subclassed.
 ///
-open class AttachmentViewInjector {
+@MainActor open class AttachmentViewInjector {
     /// Says whether a message content should start filling all available width.
     /// Is `true` by default.
     open var fillAllAvailableWidth: Bool = true
-    
+
     /// Called after `contentView.prepareForReuse` is called.
     open func contentViewDidPrepareForReuse() {}
 

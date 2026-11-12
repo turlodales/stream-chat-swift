@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -13,6 +13,8 @@ open class InputChatMessageView: _View, ComponentsProvider, AppearanceProvider {
         var quotingMessage: ChatMessage?
         /// The command that the message produces.
         var command: Command?
+        /// The channel which the new message will belong to.
+        var channel: ChatChannel?
     }
 
     /// The content of the view
@@ -66,15 +68,15 @@ open class InputChatMessageView: _View, ComponentsProvider, AppearanceProvider {
         super.setUpAppearance()
 
         let closeTransparentImage = appearance.images.closeCircleTransparent
-            .tinted(with: appearance.colorPalette.inactiveTint)
+            .tinted(with: appearance.colorPalette.inputTextIcon)
         clearButton.setImage(closeTransparentImage, for: .normal)
 
         container.clipsToBounds = true
         container.layer.cornerRadius = 19
         container.layer.borderWidth = 1
-        container.layer.borderColor = appearance.colorPalette.border.cgColor
+        container.layer.borderColor = appearance.colorPalette.borderCoreDefault.cgColor
     }
-    
+
     override open func setUpLayout() {
         addSubview(container)
         container.pin(to: layoutMarginsGuide)
@@ -118,7 +120,8 @@ open class InputChatMessageView: _View, ComponentsProvider, AppearanceProvider {
         if let quotingMessage = content.quotingMessage {
             quotedMessageView.content = .init(
                 message: quotingMessage,
-                avatarAlignment: .leading
+                avatarAlignment: quotingMessage.isSentByCurrentUser ? .trailing : .leading,
+                channel: content.channel
             )
         }
 

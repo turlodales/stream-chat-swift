@@ -1,15 +1,13 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
 extension Bundle {
-
     private final class StreamChatTestMockServer {}
 
     static let bundleName = "StreamChat_StreamChatTestMockServer"
-    static let resourcesJSONs = "Fixtures/JSONs/"
 
     /// Returns the resource bundle associated with the current Swift module.
     static let testTools: Bundle = {
@@ -34,6 +32,6 @@ extension Bundle {
     }()
 
     var pathToJSONsFolder: String {
-        Self.testTools.bundlePath.contains(Self.bundleName) ? Self.resourcesJSONs : ""
+        ""
     }
 }

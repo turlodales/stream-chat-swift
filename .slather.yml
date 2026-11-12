@@ -1,6 +1,10 @@
 coverage_service: sonarqube_xml
 xcodeproj: StreamChat.xcodeproj
 scheme: StreamChat
+binary_basename:
+  - StreamChat
+  - StreamChatLogsUI
+build_directory: derived_data/
 source_directory: Sources/
 output_directory: reports
 ignore:
@@ -8,7 +12,6 @@ ignore:
   - "**/*_Vendor.swift"
   - "**/Generated/*.swift"
   - "Sources/StreamChat/StreamStarscream"
-  - "Sources/StreamChatUI/StreamNuke"
   - "Sources/StreamChatUI/StreamSwiftyGif"
   - "StreamChatUITestsApp"
   - "StreamChatUITestsAppUITests"

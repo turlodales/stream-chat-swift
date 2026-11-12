@@ -1,8 +1,9 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
+import StreamChatCommonUI
 import UIKit
 
 /// A UIControl subclass that is designed to show the avatar of the currently logged in user.
@@ -19,28 +20,32 @@ open class CurrentChatUserAvatarView: _Control, ThemeProvider {
             updateContentIfNeeded()
         }
     }
-    
+
     /// The view that shows the current user's avatar.
-    open private(set) lazy var avatarView: ChatAvatarView = components
-        .avatarView.init()
-        .withoutAutoresizingMaskConstraints
-    
+    open private(set) lazy var avatarView: ChatUserAvatarView = {
+        let view = components
+            .userAvatarView.init()
+            .withoutAutoresizingMaskConstraints
+        view.shouldShowOnlineIndicator = false
+        return view
+    }()
+
     override open func setUpAppearance() {
         super.setUpAppearance()
         backgroundColor = .clear
-        avatarView.imageView.backgroundColor = appearance.colorPalette.background
+        avatarView.presenceAvatarView.avatarView.imageView.backgroundColor = appearance.colorPalette.backgroundCoreApp
     }
 
     override open var isEnabled: Bool {
         get { super.isEnabled }
         set { super.isEnabled = newValue; updateContentIfNeeded() }
     }
-    
+
     override open var isHighlighted: Bool {
         get { super.isHighlighted }
         set { super.isHighlighted = newValue; updateContentIfNeeded() }
     }
-    
+
     override open var isSelected: Bool {
         get { super.isSelected }
         set { super.isSelected = newValue; updateContentIfNeeded() }
@@ -61,18 +66,14 @@ open class CurrentChatUserAvatarView: _Control, ThemeProvider {
         avatarView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         avatarView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
     }
-    
+
     @objc override open func updateContent() {
-        let currentUserImageUrl = controller?.currentUser?.imageURL
-        let placeholderImage = appearance.images.userAvatarPlaceholder1
-        components.imageLoader.loadImage(
-            into: avatarView.imageView,
-            url: currentUserImageUrl,
-            imageCDN: components.imageCDN,
-            placeholder: placeholderImage,
-            preferredSize: .avatarThumbnailSize
-        )
-        
+        if let currentUser = controller?.currentUser {
+            avatarView.content = currentUser
+        } else {
+            avatarView.content = nil
+        }
+
         alpha = state == .normal ? 1 : 0.5
     }
 }

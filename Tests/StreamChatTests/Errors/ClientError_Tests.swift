@@ -1,71 +1,54 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
 @testable import StreamChatTestTools
+@testable import StreamCore
 import XCTest
 
 final class ClientError_Tests: XCTestCase {
-    func test_isInvalidTokenError_whenUnderlayingErrorIsInvalidToken_returnsTrue() {
-        // Create error code withing `ErrorPayload.tokenInvalidErrorCodes` range
-        let error = ErrorPayload(
-            code: .random(in: ClosedRange.tokenInvalidErrorCodes),
+    func test_rateLimitError_isNotEphemeralError() {
+        let errorPayload = APIError(
+            code: 9,
             message: .unique,
-            statusCode: .unique,
-            details: []
+            statusCode: 429
         )
-        
-        // Assert `isInvalidTokenError` returns true
-        XCTAssertTrue(error.isInvalidTokenError)
-        
-        // Create client error wrapping the error
-        let clientError = ClientError(with: error)
-        
-        // Assert `isInvalidTokenError` returns true
-        XCTAssertTrue(clientError.isInvalidTokenError)
+
+        let error = ClientError(with: errorPayload)
+
+        XCTAssertTrue(error.isRateLimitError)
+        XCTAssertFalse(ClientError.isEphemeral(error: error))
     }
-    
-    func test_isInvalidTokenError_whenUnderlayingErrorIsNotInvalidToken_returnsFalse() {
-        // Create error code outside `ErrorPayload.tokenInvalidErrorCodes` range
-        let error = ErrorPayload(
-            code: ClosedRange.tokenInvalidErrorCodes.lowerBound - 1,
-            message: .unique,
-            statusCode: .unique,
-            details: []
-        )
-        
-        // Assert `isInvalidTokenError` returns false
-        XCTAssertFalse(error.isInvalidTokenError)
-        
-        // Create client error wrapping the error
-        let clientError = ClientError(with: error)
-        
-        // Assert `isInvalidTokenError` returns false
-        XCTAssertFalse(clientError.isInvalidTokenError)
+
+    func test_temporaryErrors_areEphemeralError() {
+        [
+            NSURLErrorCancelled,
+            NSURLErrorNetworkConnectionLost,
+            NSURLErrorTimedOut,
+            NSURLErrorCannotFindHost,
+            NSURLErrorCannotConnectToHost,
+            NSURLErrorNetworkConnectionLost,
+            NSURLErrorDNSLookupFailed,
+            NSURLErrorNotConnectedToInternet,
+            NSURLErrorBadServerResponse,
+            NSURLErrorUserCancelledAuthentication,
+            NSURLErrorCannotLoadFromNetwork,
+            NSURLErrorDataNotAllowed
+        ].forEach {
+            let error = NSError(domain: NSURLErrorDomain, code: $0)
+            XCTAssertTrue(ClientError.isEphemeral(error: error))
+        }
     }
-    
-    func test_isBouncedMessageError_whenUnderlayingErrorIsAccurate_returnsTrue() {
-        let error = ErrorPayload(
-            code: 73,
-            message: .unique,
-            statusCode: .unique,
-            details: []
-        )
-        
-        // Assert `isBouncedMessageError` returns true
-        XCTAssertTrue(error.isBouncedMessageError)
-    }
-    
-    func test_isBouncedMessageError_whenUnderlayingErrorIsNotAccurate_returnsFalse() {
-        let error = ErrorPayload(
-            code: 72,
-            message: .unique,
-            statusCode: .unique,
-            details: []
-        )
-        
-        // Assert `isBouncedMessageError` returns false
-        XCTAssertFalse(error.isBouncedMessageError)
+
+    func test_otherNSURLErrors_areNotEphemeralError() {
+        [
+            NSURLErrorUnknown,
+            NSURLErrorUnsupportedURL,
+            NSURLErrorCannotParseResponse
+        ].forEach {
+            let error = NSError(domain: NSURLErrorDomain, code: $0)
+            XCTAssertFalse(ClientError.isEphemeral(error: error))
+        }
     }
 }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -52,5 +52,15 @@ extension DBDate {
 extension Date {
     var bridgeDate: DBDate {
         DBDate(timeIntervalSince1970: timeIntervalSince1970)
+    }
+
+    // The server stores dates in microseconds, but one instant can decode a few hundred nanoseconds apart
+    // when one copy arrived as an ISO string and the other as integer nanoseconds.
+    func isLaterAtServerPrecision(than other: Date) -> Bool {
+        microsecondTick > other.microsecondTick
+    }
+
+    private var microsecondTick: Double {
+        (timeIntervalSince1970 * 1_000_000).rounded()
     }
 }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -13,150 +13,211 @@ final class ChannelDTO_Tests: XCTestCase {
         super.setUp()
         database = DatabaseContainer_Spy()
     }
-    
+
     override func tearDown() {
         AssertAsync.canBeReleased(&database)
         database = nil
         super.tearDown()
     }
-    
-    func test_saveChannel_whenThereIsNoPreview_updatesPreview() throws {
+
+    func test_saveChannel_latestMessagesFirstReturnsNewestMessage() throws {
         // GIVEN
-        let cid: ChannelId = .unique
-        let emptyChannelPayload: ChannelPayload = .dummy(channel: .dummy(cid: cid))
-        
-        try database.writeSynchronously { session in
-            try session.saveChannel(payload: emptyChannelPayload)
-        }
-        
-        var channelDTO = try XCTUnwrap(database.viewContext.channel(cid: cid))
-        XCTAssertNil(channelDTO.previewMessage)
-        
-        // WHEN
-        let previewMessage: MessagePayload = .dummy(
+        let olderMessage: MessagePayload = .dummy(
             type: .regular,
             messageId: .unique,
-            authorUserId: .unique
+            authorUserId: .unique,
+            createdAt: Date(timeIntervalSince1970: 1000)
         )
-        
+        let newerMessage: MessagePayload = .dummy(
+            type: .regular,
+            messageId: .unique,
+            authorUserId: .unique,
+            createdAt: Date(timeIntervalSince1970: 2000)
+        )
+
         let channelPayload: ChannelPayload = .dummy(
-            channel: emptyChannelPayload.channel,
-            messages: [previewMessage]
+            channel: .dummy(),
+            messages: [olderMessage, newerMessage]
         )
-        
+
+        // WHEN
         try database.writeSynchronously { session in
             try session.saveChannel(payload: channelPayload)
         }
-        
+
         // THEN
-        channelDTO = try XCTUnwrap(database.viewContext.channel(cid: cid))
-        XCTAssertEqual(channelDTO.previewMessage?.id, previewMessage.id)
+        let channel = try XCTUnwrap(
+            database.viewContext.channel(cid: channelPayload.channel.cid)?.asModel()
+        )
+        XCTAssertEqual(channel.latestMessages.first?.id, newerMessage.id)
     }
 
-    func test_saveChannel_whenPayloadHasMessagesNewerThePreview_updatesPreview() throws {
+    func test_saveChannel_latestMessagesExcludesHardDeletedMessages() throws {
         // GIVEN
-        let previewMessage: MessagePayload = .dummy(
-            type: .regular,
-            messageId: .unique,
-            authorUserId: .unique
-        )
-        
-        let channelPayload: ChannelPayload = .dummy(
-            channel: .dummy(),
-            messages: [previewMessage]
-        )
-        
-        try database.writeSynchronously { session in
-            try session.saveChannel(payload: channelPayload)
-        }
-                
-        // WHEN
-        let newPreviewMessage: MessagePayload = .dummy(
+        let previousMessage: MessagePayload = .dummy(
             type: .regular,
             messageId: .unique,
             authorUserId: .unique,
-            createdAt: previewMessage.createdAt.addingTimeInterval(10)
+            createdAt: Date(timeIntervalSince1970: 1000)
         )
-        
-        let channelPayloadWithNewPreview: ChannelPayload = .dummy(
-            channel: channelPayload.channel,
-            messages: [newPreviewMessage]
-        )
-        
-        try database.writeSynchronously { session in
-            try session.saveChannel(payload: channelPayloadWithNewPreview)
-        }
-        
-        // THEN
-        let channelDTO = try XCTUnwrap(database.viewContext.channel(cid: channelPayload.channel.cid))
-        XCTAssertEqual(channelDTO.previewMessage?.id, newPreviewMessage.id)
-    }
-    
-    func test_saveChannel_whenPayloadDoesNotHaveMessagesNewerThePreview_doesNotUpdatePreview() throws {
-        // GIVEN
-        let previewMessage: MessagePayload = .dummy(
-            type: .regular,
-            messageId: .unique,
-            authorUserId: .unique
-        )
-        
-        let channelPayload: ChannelPayload = .dummy(
-            channel: .dummy(),
-            messages: [previewMessage]
-        )
-        
-        try database.writeSynchronously { session in
-            try session.saveChannel(payload: channelPayload)
-        }
-                
-        // WHEN
-        let message: MessagePayload = .dummy(
+        let hardDeletedMessage: MessagePayload = .dummy(
             type: .regular,
             messageId: .unique,
             authorUserId: .unique,
-            createdAt: previewMessage.createdAt.addingTimeInterval(-10)
+            createdAt: Date(timeIntervalSince1970: 2000),
+            deletedAt: Date(timeIntervalSince1970: 2500)
         )
-        
-        let channelPayloadWithoutNewPreview: ChannelPayload = .dummy(
-            channel: channelPayload.channel,
-            messages: [message]
+
+        let channelPayload: ChannelPayload = .dummy(
+            channel: .dummy(),
+            messages: [previousMessage, hardDeletedMessage]
         )
-        
+
         try database.writeSynchronously { session in
-            try session.saveChannel(payload: channelPayloadWithoutNewPreview)
+            try session.saveChannel(payload: channelPayload)
+            session.message(id: hardDeletedMessage.id)?.isHardDeleted = true
         }
-        
+
         // THEN
-        let channelDTO = try XCTUnwrap(database.viewContext.channel(cid: channelPayload.channel.cid))
-        XCTAssertEqual(channelDTO.previewMessage?.id, previewMessage.id)
+        let channel = try XCTUnwrap(
+            database.viewContext.channel(cid: channelPayload.channel.cid)?.asModel()
+        )
+        XCTAssertEqual(channel.latestMessages.map(\.id), [previousMessage.id])
     }
-    
+
+    func test_saveChannel_latestMessagesEmpty_whenOnlyMessageIsHardDeleted() throws {
+        // GIVEN
+        let hardDeletedMessage: MessagePayload = .dummy(
+            type: .regular,
+            messageId: .unique,
+            authorUserId: .unique,
+            createdAt: Date(timeIntervalSince1970: 2000),
+            deletedAt: Date(timeIntervalSince1970: 2500)
+        )
+
+        let channelPayload: ChannelPayload = .dummy(
+            channel: .dummy(),
+            messages: [hardDeletedMessage]
+        )
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: channelPayload)
+            session.message(id: hardDeletedMessage.id)?.isHardDeleted = true
+        }
+
+        // THEN
+        let channel = try XCTUnwrap(
+            database.viewContext.channel(cid: channelPayload.channel.cid)?.asModel()
+        )
+        XCTAssertTrue(channel.latestMessages.isEmpty)
+    }
+
+    func test_saveChannel_latestMessagesFirstIncludesDeletedMessages() throws {
+        // GIVEN
+        let regularMessage: MessagePayload = .dummy(
+            type: .regular,
+            messageId: .unique,
+            authorUserId: .unique,
+            createdAt: Date(timeIntervalSince1970: 1000)
+        )
+        let deletedMessage: MessagePayload = .dummy(
+            type: .regular,
+            messageId: .unique,
+            authorUserId: .unique,
+            createdAt: Date(timeIntervalSince1970: 2000),
+            deletedAt: Date(timeIntervalSince1970: 2500)
+        )
+
+        let channelPayload: ChannelPayload = .dummy(
+            channel: .dummy(),
+            messages: [regularMessage, deletedMessage]
+        )
+
+        // WHEN
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        // THEN
+        let channel = try XCTUnwrap(
+            database.viewContext.channel(cid: channelPayload.channel.cid)?.asModel()
+        )
+        XCTAssertEqual(channel.latestMessages.first?.id, deletedMessage.id)
+        XCTAssertNotNil(channel.latestMessages.first?.deletedAt)
+    }
+
+    func test_saveChannel_latestMessagesExcludesThreadReplies() throws {
+        // GIVEN
+        let channelMessage: MessagePayload = .dummy(
+            type: .regular,
+            messageId: .unique,
+            authorUserId: .unique,
+            createdAt: Date(timeIntervalSince1970: 1000)
+        )
+        let threadReply: MessagePayload = .dummy(
+            type: .regular,
+            messageId: .unique,
+            parentId: .unique,
+            showReplyInChannel: false,
+            authorUserId: .unique,
+            createdAt: Date(timeIntervalSince1970: 2000)
+        )
+        let replyShownInChannel: MessagePayload = .dummy(
+            type: .regular,
+            messageId: .unique,
+            parentId: .unique,
+            showReplyInChannel: true,
+            authorUserId: .unique,
+            createdAt: Date(timeIntervalSince1970: 3000)
+        )
+
+        let channelPayload: ChannelPayload = .dummy(
+            channel: .dummy(),
+            messages: [channelMessage, threadReply, replyShownInChannel]
+        )
+
+        // WHEN
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        // THEN
+        let channel = try XCTUnwrap(
+            database.viewContext.channel(cid: channelPayload.channel.cid)?.asModel()
+        )
+        XCTAssertEqual(channel.latestMessages.count, 2)
+        XCTAssertEqual(channel.latestMessages.first?.id, replyShownInChannel.id)
+        XCTAssertEqual(channel.latestMessages.last?.id, channelMessage.id)
+        XCTAssertFalse(channel.latestMessages.contains(where: { $0.id == threadReply.id }))
+    }
+
     func test_saveChannel_channelReadsAreSavedBeforeMessages() throws {
         // GIVEN
         let currentUser: CurrentUserPayload = .dummy(userId: .unique, role: .user)
-        let currentUserMember: MemberPayload = .dummy(user: currentUser)
-        
+        let currentUserMember: MemberPayload = .dummy(user: .dummy(userId: currentUser.id))
+
         let anotherMember: MemberPayload = .dummy(user: .dummy(userId: .unique))
         let anotherMemberRead: ChannelReadPayload = .init(
-            user: anotherMember.user,
+            user: anotherMember.user!,
             lastReadAt: .init(),
+            lastReadMessageId: .unique,
             unreadMessagesCount: 0
         )
-        
+
         let ownMessage: MessagePayload = .dummy(
             messageId: .unique,
             authorUserId: currentUser.id,
-            createdAt: anotherMemberRead.lastReadAt.addingTimeInterval(-10)
+            createdAt: anotherMemberRead.lastRead.addingTimeInterval(-10)
         )
-        
+
         let ownPinnedMessage: MessagePayload = .dummy(
             messageId: .unique,
             authorUserId: currentUser.id,
-            createdAt: anotherMemberRead.lastReadAt.addingTimeInterval(-20),
+            createdAt: anotherMemberRead.lastRead.addingTimeInterval(-20),
             pinned: true,
-            pinnedByUserId: anotherMember.user.id
+            pinnedByUserId: anotherMember.user!.id
         )
-        
+
         let channelPayload: ChannelPayload = .dummy(
             channel: .dummy(),
             members: [currentUserMember, anotherMember],
@@ -171,7 +232,7 @@ final class ChannelDTO_Tests: XCTestCase {
             try session.saveCurrentUser(payload: currentUser)
             try session.saveChannel(payload: channelPayload)
         }
-        
+
         let channel = try XCTUnwrap(
             database.viewContext.channel(cid: channelPayload.channel.cid)?.asModel()
         )
@@ -181,64 +242,71 @@ final class ChannelDTO_Tests: XCTestCase {
         let loadedOwnPinnedMessage = try XCTUnwrap(
             channel.pinnedMessages.first { $0.id == ownPinnedMessage.id }
         )
-        
+
         // THEN
         //
         // Messages have reads.
-        XCTAssertTrue(loadedOwnMessage.readBy.contains { $0.id == anotherMember.user.id })
-        XCTAssertTrue(loadedOwnPinnedMessage.readBy.contains { $0.id == anotherMember.user.id })
+        XCTAssertTrue(loadedOwnMessage.readBy.contains { $0.id == anotherMember.user!.id })
+        XCTAssertTrue(loadedOwnPinnedMessage.readBy.contains { $0.id == anotherMember.user!.id })
     }
-    
-    func test_saveChannel_removesReadsNotPresentInPayload() throws {
+
+    func test_saveChannel_updatesExistingMessageReadBy() throws {
         // GIVEN
+        let currentUserId = UserId.unique
+        let message1Timestamp = Date.unique
+        let message2Timestamp = message1Timestamp.addingTimeInterval(1.0)
+        let message1 = MessagePayload.dummy(
+            authorUserId: currentUserId,
+            createdAt: message1Timestamp
+        )
         let read1 = ChannelReadPayload(
             user: .dummy(userId: .unique),
-            lastReadAt: .init(),
+            lastReadAt: message1Timestamp,
+            lastReadMessageId: message1.id,
             unreadMessagesCount: 0
         )
-        
-        var channelPayload: ChannelPayload = .dummy(
+
+        nonisolated(unsafe) var channelPayload: ChannelPayload = .dummy(
             channel: .dummy(),
+            messages: [message1],
             channelReads: [read1]
         )
-        
+        try database.createCurrentUser(id: currentUserId)
         try database.writeSynchronously { session in
             try session.saveChannel(payload: channelPayload)
         }
-        
+
         // WHEN
+        let message2 = MessagePayload.dummy(
+            authorUserId: currentUserId,
+            createdAt: message2Timestamp
+        )
         let read2 = ChannelReadPayload(
             user: .dummy(userId: .unique),
-            lastReadAt: .init(),
+            lastReadAt: message2Timestamp,
+            lastReadMessageId: message2.id,
             unreadMessagesCount: 0
         )
-        
+
         channelPayload = .dummy(
             channel: channelPayload.channel,
+            messages: [message2],
             channelReads: [read2]
         )
-        
+
         try database.writeSynchronously { session in
             try session.saveChannel(payload: channelPayload)
         }
-        
+
         // THEN
-        let channel = try XCTUnwrap(
-            database.viewContext.channel(cid: channelPayload.channel.cid)
-        )
-        let readToBeRemoved = database.viewContext.loadChannelRead(
-            cid: channelPayload.channel.cid,
-            userId: read1.user.id
-        )
-        let readToBeSaved = try XCTUnwrap(
-            database.viewContext.loadChannelRead(
-                cid: channelPayload.channel.cid,
-                userId: read2.user.id
-            )
-        )
-        
-        XCTAssertEqual(channel.reads, [readToBeSaved])
-        XCTAssertNil(readToBeRemoved)
+        try database.readAndWait { session in
+            let channelDTO = try XCTUnwrap(session.channel(cid: channelPayload.channel.cid))
+            XCTAssertEqual(2, channelDTO.reads.count)
+            let message1DTO = try XCTUnwrap(session.message(id: message1.id))
+            XCTAssertEqual(2, message1DTO.reads.count, "Message reads should be updated for existing messages")
+            let message2DTO = try XCTUnwrap(session.message(id: message2.id))
+            XCTAssertEqual(1, message2DTO.reads.count, "Only read by one user")
+        }
     }
 
     func test_saveChannel_updatesTruncatedAt_whenExistingIsNil() throws {
@@ -282,6 +350,106 @@ final class ChannelDTO_Tests: XCTestCase {
         XCTAssertEqual(database.viewContext.channel(cid: channelId)?.truncatedAt, newTruncatedAt.bridgeDate)
     }
 
+    func test_saveChannel_appliesUpdate_whenPayloadUpdatedAtIsOlder() throws {
+        let channelId: ChannelId = .unique
+        let newerUpdatedAt = Date(timeIntervalSince1970: 2000)
+        let olderUpdatedAt = Date(timeIntervalSince1970: 1940)
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(
+                payload: .dummy(
+                    cid: channelId,
+                    name: "Conversation",
+                    updatedAt: newerUpdatedAt,
+                    ownCapabilities: []
+                ),
+                query: nil,
+                cache: nil
+            )
+        }
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(
+                payload: .dummy(
+                    cid: channelId,
+                    name: "Initiated",
+                    updatedAt: olderUpdatedAt,
+                    ownCapabilities: [ChannelCapability.sendMessage.rawValue]
+                ),
+                query: nil,
+                cache: nil
+            )
+        }
+
+        let channel = try XCTUnwrap(database.viewContext.channel(cid: channelId)?.asModel())
+        XCTAssertEqual(channel.name, "Initiated")
+        XCTAssertEqual(channel.updatedAt, olderUpdatedAt)
+        XCTAssertEqual(channel.ownCapabilities, [.sendMessage])
+    }
+
+    func test_saveChannelSnapshot_skipsUpdate_whenPayloadUpdatedAtIsOlder() throws {
+        let channelId: ChannelId = .unique
+        let newerUpdatedAt = Date(timeIntervalSince1970: 2000)
+        let olderUpdatedAt = Date(timeIntervalSince1970: 1940)
+        let newerLastMessageAt = Date(timeIntervalSince1970: 1990)
+        let newerExtraData: [String: RawJSON] = ["state": .string("conversation"), "revision": .number(2)]
+        let olderExtraData: [String: RawJSON] = ["state": .string("initiated"), "revision": .number(1)]
+
+        try database.writeSynchronously { session in
+            try session.saveChannelSnapshot(
+                payload: .dummy(
+                    cid: channelId,
+                    name: "Conversation",
+                    extraData: newerExtraData,
+                    lastMessageAt: newerLastMessageAt,
+                    updatedAt: newerUpdatedAt,
+                    isFrozen: true,
+                    memberCount: 1,
+                    messageCount: 1
+                )
+            )
+        }
+
+        try database.writeSynchronously { session in
+            try session.saveChannelSnapshot(
+                payload: .dummy(
+                    cid: channelId,
+                    name: "Initiated",
+                    extraData: olderExtraData,
+                    lastMessageAt: newerUpdatedAt,
+                    updatedAt: olderUpdatedAt,
+                    isFrozen: false,
+                    memberCount: 2,
+                    messageCount: 2
+                )
+            )
+        }
+
+        let channel = try XCTUnwrap(database.viewContext.channel(cid: channelId)?.asModel())
+        XCTAssertEqual(channel.name, "Conversation")
+        XCTAssertEqual(channel.extraData, newerExtraData)
+        XCTAssertEqual(channel.updatedAt, newerUpdatedAt)
+        XCTAssertEqual(channel.lastMessageAt, newerLastMessageAt)
+        XCTAssertEqual(channel.memberCount, 1)
+        XCTAssertEqual(channel.messageCount, 1)
+        XCTAssertTrue(channel.isFrozen)
+    }
+
+    func test_saveChannelSnapshot_appliesUpdate_whenPayloadIsSameInstantDecodedEarlier() throws {
+        let channelId: ChannelId = .unique
+        let updatedAt = Date(timeIntervalSince1970: 1_791_995_869.351_796)
+
+        try database.writeSynchronously { session in
+            try session.saveChannelSnapshot(payload: .dummy(cid: channelId, name: "Stored", updatedAt: updatedAt.addingTimeInterval(0.000_000_238)))
+        }
+        try database.writeSynchronously { session in
+            try session.saveChannelSnapshot(payload: .dummy(cid: channelId, name: "Snapshot", updatedAt: updatedAt))
+        }
+
+        let channel = try XCTUnwrap(database.viewContext.channel(cid: channelId)?.asModel())
+        XCTAssertEqual(channel.name, "Snapshot")
+    }
+
     func test_saveChannel_doesNotUpdateTruncatedAt_whenItsEarlierThanExisting() throws {
         let channelId: ChannelId = .unique
         let originalTruncatedAt = Date().addingTimeInterval(1200)
@@ -303,50 +471,312 @@ final class ChannelDTO_Tests: XCTestCase {
         XCTAssertEqual(database.viewContext.channel(cid: channelId)?.truncatedAt, originalTruncatedAt.bridgeDate)
     }
 
+    func test_saveChannel_whenChannelTruncated_shouldEraseNewestMessageAt() throws {
+        let channelId: ChannelId = .unique
+        let originalPayload = ChannelDetailPayload.dummy(cid: channelId, truncatedAt: nil)
+        try database.writeSynchronously { session in
+            let channel = try session.saveChannel(payload: originalPayload, query: nil, cache: nil)
+            channel.newestMessageAt = .unique
+        }
+        var channelDTO: ChannelDTO? {
+            database.viewContext.channel(cid: channelId)
+        }
+
+        XCTAssertNotNil(channelDTO?.newestMessageAt)
+
+        let newTruncatedAt = Date().addingTimeInterval(1200)
+        let newPayload = ChannelDetailPayload.dummy(cid: channelId, truncatedAt: newTruncatedAt)
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: newPayload, query: nil, cache: nil)
+        }
+
+        XCTAssertNil(channelDTO?.newestMessageAt)
+        XCTAssertNotNil(channelDTO)
+    }
+
+    func test_saveChannel_storesTruncatedBy() throws {
+        let channelId: ChannelId = .unique
+        let truncatedBy = UserPayload.dummy(userId: .unique)
+        let payload = ChannelDetailPayload.dummy(cid: channelId, truncatedAt: .unique, truncatedBy: truncatedBy)
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: payload, query: nil, cache: nil)
+        }
+
+        let loadedChannel = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: channelId)?.asModel())
+        }
+        XCTAssertEqual(loadedChannel.truncatedBy?.id, truncatedBy.id)
+    }
+
+    // MARK: - Scheduled messages
+
+    func test_saveChannel_savesTheScheduledMessages_pendingFirst() throws {
+        let cid: ChannelId = .unique
+        let laterAt = Date().addingTimeInterval(7200)
+        let soonerAt = Date().addingTimeInterval(3600)
+        try database.createCurrentUser()
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid), scheduledMessages: [
+                .dummy(id: "failed", cid: cid, scheduledAt: soonerAt, status: .failed),
+                .dummy(id: "later", cid: cid, scheduledAt: laterAt),
+                .dummy(id: "sooner", cid: cid, scheduledAt: soonerAt)
+            ]))
+        }
+
+        let channel = try loadChannel(cid: cid)
+        XCTAssertEqual(channel.scheduledMessages.map(\.id), ["sooner", "later", "failed"])
+        XCTAssertEqual(channel.scheduledMessages.first?.message.text, "Hello")
+    }
+
+    func test_saveChannel_withScheduledMessages_deletesTheMissingOnesOfTheChannel() throws {
+        let cid: ChannelId = .unique
+        let otherCid: ChannelId = .unique
+        try database.createCurrentUser()
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid)))
+            try session.saveScheduledMessage(payload: .dummy(id: "sent", cid: cid))
+            try session.saveScheduledMessage(payload: .dummy(id: "other-channel", cid: otherCid))
+            try session.createNewScheduledMessage(
+                id: "local-only",
+                cid: cid,
+                content: ScheduledMessageContent(
+                    text: "Local",
+                    attachments: [],
+                    mentionedUserIds: [],
+                    quotedMessageId: nil,
+                    parentId: nil,
+                    showReplyInChannel: false,
+                    extraData: [:]
+                ),
+                scheduledAt: Date().addingTimeInterval(3600)
+            )
+        }
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid), scheduledMessages: [.dummy(id: "kept", cid: cid)]))
+        }
+
+        let channel = try loadChannel(cid: cid)
+        XCTAssertEqual(Set(channel.scheduledMessages.map(\.id)), ["kept", "local-only"])
+        XCTAssertFalse(try database.readSynchronously { $0.scheduledMessage(id: "sent") != nil })
+        XCTAssertTrue(try database.readSynchronously { $0.scheduledMessage(id: "other-channel") != nil })
+    }
+
+    func test_saveChannel_withoutScheduledMessages_keepsTheLocalOnes() throws {
+        let cid: ChannelId = .unique
+        try database.createCurrentUser()
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid), scheduledMessages: [.dummy(id: "scheduled", cid: cid)]))
+        }
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid)))
+        }
+
+        let channel = try loadChannel(cid: cid)
+        XCTAssertEqual(channel.scheduledMessages.map(\.id), ["scheduled"])
+    }
+
+    func test_updatingAScheduledMessage_updatesTheChannel_andKeepsItsMessages() throws {
+        // Uniqueness constraints are only enforced by SQLite.
+        database = DatabaseContainer_Spy(kind: .onDisk(databaseFileURL: .newTemporaryFileURL()))
+        let cid: ChannelId = .unique
+        let messageId: MessageId = .unique
+        try database.createCurrentUser()
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(
+                channel: .dummy(cid: cid),
+                messages: [.dummy(messageId: messageId, cid: cid)],
+                scheduledMessages: [.dummy(id: "scheduled", cid: cid, message: .dummy(text: "Old"))]
+            ))
+        }
+
+        try database.writeSynchronously { session in
+            try session.saveScheduledMessage(payload: .dummy(id: "scheduled", cid: cid, message: .dummy(text: "New")))
+        }
+
+        let channel = try loadChannel(cid: cid)
+        XCTAssertEqual(channel.scheduledMessages.first?.message.text, "New")
+        XCTAssertEqual(channel.latestMessages.map(\.id), [messageId])
+        XCTAssertEqual(try database.readSynchronously { $0.message(id: messageId)?.channel?.cid }, cid.rawValue)
+    }
+
+    func test_deleteScheduledMessage_removesItFromTheChannel() throws {
+        let cid: ChannelId = .unique
+        try database.createCurrentUser()
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid), scheduledMessages: [.dummy(id: "scheduled", cid: cid)]))
+        }
+
+        try database.writeSynchronously { session in
+            session.deleteScheduledMessage(id: "scheduled")
+        }
+
+        let channel = try loadChannel(cid: cid)
+        XCTAssertEqual(channel.scheduledMessages, [])
+    }
+
+    private func loadChannel(cid: ChannelId) throws -> ChatChannel {
+        try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: cid)?.asModel())
+        }
+    }
+
+    func test_saveChannel_keepsUnrecognizedOwnCapability() throws {
+        let channelId: ChannelId = .unique
+        let payload = ChannelDetailPayload.dummy(
+            cid: channelId,
+            ownCapabilities: [ChannelCapability.sendMessage.rawValue, "future-capability"]
+        )
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: payload, query: nil, cache: nil)
+        }
+
+        let loadedChannel = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: channelId)?.asModel())
+        }
+        XCTAssertEqual(loadedChannel.ownCapabilities, [.sendMessage, ChannelCapability(rawValue: "future-capability")])
+    }
+
+    func test_saveChannel_storesAutoTranslation() throws {
+        let channelId: ChannelId = .unique
+        let payload = ChannelDetailPayload.dummy(
+            cid: channelId,
+            autoTranslationEnabled: true,
+            autoTranslationLanguage: "fr, de"
+        )
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: payload, query: nil, cache: nil)
+        }
+
+        let loadedChannel = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: channelId)?.asModel())
+        }
+        XCTAssertEqual(loadedChannel.isAutoTranslationEnabled, true)
+        XCTAssertEqual(loadedChannel.autoTranslationLanguages, [.french, .german])
+    }
+
+    func test_saveChannel_disablesAutoTranslation_whenPayloadDoesNotContainIt() throws {
+        let channelId: ChannelId = .unique
+        let enabledPayload = ChannelDetailPayload.dummy(
+            cid: channelId,
+            autoTranslationEnabled: true,
+            autoTranslationLanguage: "fr"
+        )
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: enabledPayload, query: nil, cache: nil)
+        }
+
+        let enabledChannel = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: channelId)?.asModel())
+        }
+        XCTAssertEqual(enabledChannel.isAutoTranslationEnabled, true)
+
+        let disabledPayload = ChannelDetailPayload.dummy(cid: channelId)
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: disabledPayload, query: nil, cache: nil)
+        }
+
+        let loadedChannel = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: channelId)?.asModel())
+        }
+        XCTAssertEqual(loadedChannel.isAutoTranslationEnabled, false)
+        XCTAssertEqual(loadedChannel.autoTranslationLanguages, [])
+    }
+
+    func test_saveChannel_storesActiveMemberCount() throws {
+        let channelId: ChannelId = .unique
+        let payload = ChannelDetailPayload.dummy(cid: channelId, memberCount: 12, activeMemberCount: 10)
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: payload, query: nil, cache: nil)
+        }
+
+        let loadedChannel = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: channelId)?.asModel())
+        }
+        XCTAssertEqual(loadedChannel.memberCount, 12)
+        XCTAssertEqual(loadedChannel.activeMemberCount, 10)
+    }
+
+    func test_saveChannel_keepsActiveMemberCount_whenPayloadDoesNotContainIt() throws {
+        let channelId: ChannelId = .unique
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: channelId, activeMemberCount: 10), query: nil, cache: nil)
+        }
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: channelId), query: nil, cache: nil)
+        }
+
+        let loadedChannel = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: channelId)?.asModel())
+        }
+        XCTAssertEqual(loadedChannel.activeMemberCount, 10)
+    }
+
     func test_channelPayload_isStoredAndLoadedFromDB() throws {
         let channelId: ChannelId = .unique
-    
+
         let messageCreatedAt: Date = .unique
         let message = dummyMessagePayload(createdAt: messageCreatedAt)
-        
+
         // Pinned message should be older than `message` to ensure it's not returned first in `latestMessages`
         let pinnedMessage = dummyPinnedMessagePayload(createdAt: .unique(before: messageCreatedAt))
-        
-        let payload = dummyPayload(with: channelId, messages: [message], pinnedMessages: [pinnedMessage])
-        
+
+        // Same of pending messages
+        let pendingMessage = dummyMessagePayload(createdAt: .unique(before: messageCreatedAt))
+
+        let payload = dummyPayload(
+            with: channelId,
+            messages: [message],
+            pendingMessages: [pendingMessage],
+            pinnedMessages: [pinnedMessage],
+            ownCapabilities: ["join-channel", "delete-channel"],
+            pushPreference: .init(level: "mentions", disabledUntil: .unique)
+        )
+
         // Asynchronously save the payload to the db
         try database.writeSynchronously { session in
             try session.saveChannel(payload: payload)
         }
-        
+
         // Load the channel from the db and check the fields are correct
         let loadedChannel: ChatChannel = try XCTUnwrap(
             database.viewContext.channel(cid: channelId)?.asModel()
         )
-        
+
         AssertAsync {
             // Channel details
             Assert.willBeEqual(channelId, loadedChannel.cid)
-            
-            Assert.willBeEqual(payload.isHidden, loadedChannel.isHidden)
+
+            Assert.willBeEqual(payload.hidden, loadedChannel.isHidden)
             Assert.willBeEqual(payload.watcherCount, loadedChannel.watcherCount)
             Assert.willBeEqual(Set(payload.watchers?.map(\.id) ?? []), Set(loadedChannel.lastActiveWatchers.map(\.id)))
             Assert.willBeEqual(payload.channel.name, loadedChannel.name)
             Assert.willBeEqual(payload.channel.imageURL, loadedChannel.imageURL)
             Assert.willBeEqual(payload.channel.memberCount, loadedChannel.memberCount)
             Assert.willBeEqual(payload.channel.extraData, loadedChannel.extraData)
-            Assert.willBeEqual(payload.channel.typeRawValue, loadedChannel.type.rawValue)
+            Assert.willBeEqual(payload.channel.type, loadedChannel.type.rawValue)
             Assert.willBeEqual(payload.channel.lastMessageAt, loadedChannel.lastMessageAt)
             Assert.willBeEqual(payload.channel.createdAt, loadedChannel.createdAt)
             Assert.willBeEqual(payload.channel.updatedAt, loadedChannel.updatedAt)
             Assert.willBeEqual(payload.channel.deletedAt, loadedChannel.deletedAt)
-            Assert.willBeEqual(payload.channel.cooldownDuration, loadedChannel.cooldownDuration)
+            Assert.willBeEqual(payload.channel.cooldown, loadedChannel.cooldownDuration)
             Assert.willBeEqual(payload.channel.team!, loadedChannel.team)
-            
+            Assert.willBeEqual(payload.channel.disabled, loadedChannel.isDisabled)
+
             // Config
             Assert.willBeEqual(payload.channel.config.reactionsEnabled, loadedChannel.config.reactionsEnabled)
             Assert.willBeEqual(payload.channel.config.typingEventsEnabled, loadedChannel.config.typingEventsEnabled)
             Assert.willBeEqual(payload.channel.config.readEventsEnabled, loadedChannel.config.readEventsEnabled)
+            Assert.willBeEqual(payload.channel.config.deliveryEventsEnabled, loadedChannel.config.deliveryEventsEnabled)
             Assert.willBeEqual(payload.channel.config.connectEventsEnabled, loadedChannel.config.connectEventsEnabled)
             Assert.willBeEqual(payload.channel.config.uploadsEnabled, loadedChannel.config.uploadsEnabled)
             Assert.willBeEqual(payload.channel.config.repliesEnabled, loadedChannel.config.repliesEnabled)
@@ -359,7 +789,16 @@ final class ChannelDTO_Tests: XCTestCase {
             Assert.willBeEqual(payload.channel.config.commands, loadedChannel.config.commands)
             Assert.willBeEqual(payload.channel.config.createdAt, loadedChannel.config.createdAt)
             Assert.willBeEqual(payload.channel.config.updatedAt, loadedChannel.config.updatedAt)
-            
+            Assert.willBeEqual(payload.channel.config.messageRemindersEnabled, loadedChannel.config.messageRemindersEnabled)
+            Assert.willBeEqual(payload.channel.config.sharedLocationsEnabled, loadedChannel.config.sharedLocationsEnabled)
+            Assert.willBeEqual(payload.channel.config.scheduledMessagesMaxPerChannel, loadedChannel.config.scheduledMessagesMaxPerChannel)
+            Assert.willBeEqual(payload.channel.config.scheduledMessagesMaxPerUser, loadedChannel.config.scheduledMessagesMaxPerUser)
+            Assert.willBeEqual(payload.channel.config.scheduledMessagesMaxLeadTime, loadedChannel.config.scheduledMessagesMaxLeadTime)
+            Assert.willBeEqual(payload.channel.config.scheduledMessagesMinLeadTime, loadedChannel.config.scheduledMessagesMinLeadTime)
+
+            // Own Capabilities
+            Assert.willBeEqual(payload.channel.ownCapabilities, [.joinChannel, .deleteChannel])
+
             // Creator
             Assert.willBeEqual(payload.channel.createdBy!.id, loadedChannel.createdBy?.id)
             Assert.willBeEqual(payload.channel.createdBy!.createdAt, loadedChannel.createdBy?.userCreatedAt)
@@ -367,41 +806,43 @@ final class ChannelDTO_Tests: XCTestCase {
             Assert.willBeEqual(payload.channel.createdBy!.lastActiveAt, loadedChannel.createdBy?.lastActiveAt)
             Assert.willBeEqual(payload.channel.createdBy!.isOnline, loadedChannel.createdBy?.isOnline)
             Assert.willBeEqual(payload.channel.createdBy!.isBanned, loadedChannel.createdBy?.isBanned)
-            Assert.willBeEqual(payload.channel.createdBy!.role, loadedChannel.createdBy?.userRole)
+            Assert.willBeEqual(payload.channel.createdBy!.role, loadedChannel.createdBy?.userRole.rawValue)
             Assert.willBeEqual(payload.channel.createdBy!.extraData, loadedChannel.createdBy?.extraData)
-            
+
             // Members
-            Assert.willBeEqual(payload.members[0].role, loadedChannel.lastActiveMembers.first?.memberRole)
+            Assert.willBeEqual(
+                MemberRole(rawChannelValue: payload.members[0].channelRole),
+                loadedChannel.lastActiveMembers.first?.memberRole
+            )
             Assert.willBeEqual(payload.members[0].createdAt, loadedChannel.lastActiveMembers.first?.memberCreatedAt)
             Assert.willBeEqual(payload.members[0].updatedAt, loadedChannel.lastActiveMembers.first?.memberUpdatedAt)
-            
-            Assert.willBeEqual(payload.members[0].user.id, loadedChannel.lastActiveMembers.first?.id)
-            Assert.willBeEqual(payload.members[0].user.createdAt, loadedChannel.lastActiveMembers.first?.userCreatedAt)
-            Assert.willBeEqual(payload.members[0].user.updatedAt, loadedChannel.lastActiveMembers.first?.userUpdatedAt)
-            Assert.willBeEqual(payload.members[0].user.lastActiveAt, loadedChannel.lastActiveMembers.first?.lastActiveAt)
-            Assert.willBeEqual(payload.members[0].user.isOnline, loadedChannel.lastActiveMembers.first?.isOnline)
-            Assert.willBeEqual(payload.members[0].user.isBanned, loadedChannel.lastActiveMembers.first?.isBanned)
-            Assert.willBeEqual(payload.members[0].user.role, loadedChannel.lastActiveMembers.first?.userRole)
-            Assert.willBeEqual(payload.members[0].user.extraData, loadedChannel.lastActiveMembers.first?.extraData)
+
+            Assert.willBeEqual(payload.members[0].user!.id, loadedChannel.lastActiveMembers.first?.id)
+            Assert.willBeEqual(payload.members[0].user!.createdAt, loadedChannel.lastActiveMembers.first?.userCreatedAt)
+            Assert.willBeEqual(payload.members[0].user!.updatedAt, loadedChannel.lastActiveMembers.first?.userUpdatedAt)
+            Assert.willBeEqual(payload.members[0].user!.lastActiveAt, loadedChannel.lastActiveMembers.first?.lastActiveAt)
+            Assert.willBeEqual(payload.members[0].user!.isOnline, loadedChannel.lastActiveMembers.first?.isOnline)
+            Assert.willBeEqual(payload.members[0].user!.isBanned, loadedChannel.lastActiveMembers.first?.isBanned)
+            Assert.willBeEqual(payload.members[0].user!.role, loadedChannel.lastActiveMembers.first?.userRole.rawValue)
+            Assert.willBeEqual(payload.members[0].user!.extraData, loadedChannel.lastActiveMembers.first?.extraData)
 
             // Membership
-            Assert.willBeEqual(payload.membership!.user.id, loadedChannel.membership?.id)
+            Assert.willBeEqual(payload.membership!.user!.id, loadedChannel.membership?.id)
 
             // Messages
             Assert.willBeEqual(payload.messages[0].id, loadedChannel.latestMessages.first?.id)
-            Assert.willBeEqual(payload.messages[0].type.rawValue, loadedChannel.latestMessages.first?.type.rawValue)
+            Assert.willBeEqual(payload.messages[0].type, loadedChannel.latestMessages.first?.type.rawValue)
             Assert.willBeEqual(payload.messages[0].text, loadedChannel.latestMessages.first?.text)
             Assert.willBeEqual(payload.messages[0].updatedAt, loadedChannel.latestMessages.first?.updatedAt)
             Assert.willBeEqual(payload.messages[0].createdAt, loadedChannel.latestMessages.first?.createdAt)
             Assert.willBeEqual(payload.messages[0].deletedAt, loadedChannel.latestMessages.first?.deletedAt)
-            Assert.willBeEqual(payload.messages[0].args, loadedChannel.latestMessages.first?.arguments)
             Assert.willBeEqual(payload.messages[0].command, loadedChannel.latestMessages.first?.command)
-            Assert.willBeEqual(payload.messages[0].extraData, loadedChannel.latestMessages.first?.extraData)
-            Assert.willBeEqual(payload.messages[0].isSilent, loadedChannel.latestMessages.first?.isSilent)
+            Assert.willBeEqual(payload.messages[0].custom, loadedChannel.latestMessages.first?.extraData)
+            Assert.willBeEqual(payload.messages[0].silent, loadedChannel.latestMessages.first?.isSilent)
             Assert.willBeEqual(payload.messages[0].mentionedUsers.count, loadedChannel.latestMessages.first?.mentionedUsers.count)
             Assert.willBeEqual(payload.messages[0].parentId, loadedChannel.latestMessages.first?.parentMessageId)
-            Assert.willBeEqual(payload.messages[0].reactionScores, loadedChannel.latestMessages.first?.reactionScores)
-            Assert.willBeEqual(payload.messages[0].reactionCounts, loadedChannel.latestMessages.first?.reactionCounts)
+            Assert.willBeEqual(payload.messages[0].reactionScores, loadedChannel.latestMessages.first?.reactionScores.mapKeys(\.rawValue))
+            Assert.willBeEqual(payload.messages[0].reactionCounts, loadedChannel.latestMessages.first?.reactionCounts.mapKeys(\.rawValue))
             Assert.willBeEqual(payload.messages[0].replyCount, loadedChannel.latestMessages.first?.replyCount)
 
             // Pinned Messages
@@ -411,6 +852,10 @@ final class ChannelDTO_Tests: XCTestCase {
             Assert.willBeEqual(payload.pinnedMessages[0].pinExpires, loadedChannel.pinnedMessages[0].pinDetails?.expiresAt)
             Assert.willBeEqual(payload.pinnedMessages[0].pinnedBy?.id, loadedChannel.pinnedMessages[0].pinDetails?.pinnedBy.id)
             
+            // Pending Messages
+            Assert.willBeEqual(payload.pendingMessages?[0].message?.id, loadedChannel.pendingMessages[0].id)
+            Assert.willBeEqual(payload.pendingMessages?[0].message?.text, loadedChannel.pendingMessages[0].text)
+            
             // Message user
             Assert.willBeEqual(payload.messages[0].user.id, loadedChannel.latestMessages.first?.author.id)
             Assert.willBeEqual(payload.messages[0].user.createdAt, loadedChannel.latestMessages.first?.author.userCreatedAt)
@@ -418,34 +863,217 @@ final class ChannelDTO_Tests: XCTestCase {
             Assert.willBeEqual(payload.messages[0].user.lastActiveAt, loadedChannel.latestMessages.first?.author.lastActiveAt)
             Assert.willBeEqual(payload.messages[0].user.isOnline, loadedChannel.latestMessages.first?.author.isOnline)
             Assert.willBeEqual(payload.messages[0].user.isBanned, loadedChannel.latestMessages.first?.author.isBanned)
-            Assert.willBeEqual(payload.messages[0].user.role, loadedChannel.latestMessages.first?.author.userRole)
+            Assert.willBeEqual(payload.messages[0].user.role, loadedChannel.latestMessages.first?.author.userRole.rawValue)
             Assert.willBeEqual(payload.messages[0].user.extraData, loadedChannel.latestMessages.first?.author.extraData)
-            
+
             // Read
-            Assert.willBeEqual(payload.channelReads[0].lastReadAt, loadedChannel.reads.first?.lastReadAt)
-            Assert.willBeEqual(payload.channelReads[0].unreadMessagesCount, loadedChannel.reads.first?.unreadMessagesCount)
-            Assert.willBeEqual(payload.channelReads[0].user.id, loadedChannel.reads.first?.user.id)
-            
+            Assert.willBeEqual(payload.read?[0].lastRead, loadedChannel.reads.first?.lastReadAt)
+            Assert.willBeEqual(payload.read?[0].unreadMessages, loadedChannel.reads.first?.unreadMessagesCount)
+            Assert.willBeEqual(payload.read?[0].user.id, loadedChannel.reads.first?.user.id)
+
             // Truncated
             Assert.willBeEqual(payload.channel.truncatedAt, loadedChannel.truncatedAt)
+            
+            // Push Preference
+            Assert.willNotBeNil(payload.pushPreferences)
+            Assert.willBeEqual(payload.pushPreferences?.level, loadedChannel.pushPreference?.level)
+            Assert.willBeEqual(
+                payload.pushPreferences?.disabledUntil?.timeIntervalSince1970,
+                loadedChannel.pushPreference?.disabledUntil?.timeIntervalSince1970
+            )
         }
     }
 
-    func test_defaultSortingAt_updates_whenLastMessageAtChanges() throws {
+    func test_defaultSortingAt_shouldBeEqualToLastMessageAt() throws {
         let channelId: ChannelId = .unique
-        
         try database.createChannel(cid: channelId)
-        
         try database.writeSynchronously {
             let channel = try XCTUnwrap($0.channel(cid: channelId))
-            channel.lastMessageAt = .unique(after: channel.lastMessageAt ?? channel.createdAt)
+            channel.lastMessageAt = .unique
         }
-        
+
         let channel = try XCTUnwrap(database.viewContext.channel(cid: channelId))
-        XCTAssertEqual(channel.lastMessageAt, channel.defaultSortingAt)
+        XCTAssertEqual(channel.defaultSortingAt, channel.lastMessageAt)
+    }
+
+    func test_defaultSortingAt_whenMissingLastMessageAt_shouldBeEqualToCreatedAt() throws {
+        let channelId: ChannelId = .unique
+        try database.createChannel(cid: channelId)
+        try database.writeSynchronously {
+            let channel = try XCTUnwrap($0.channel(cid: channelId))
+            channel.createdAt = .unique
+            channel.lastMessageAt = nil
+        }
+
+        let channel = try XCTUnwrap(database.viewContext.channel(cid: channelId))
+        XCTAssertEqual(channel.defaultSortingAt, channel.createdAt)
+    }
+
+    func test_defaultSortingAt_whenLastMessageAtEqualDistantPast_shouldBeEqualToCreatedAt() throws {
+        let channelId: ChannelId = .unique
+        try database.createChannel(cid: channelId)
+        try database.writeSynchronously {
+            let channel = try XCTUnwrap($0.channel(cid: channelId))
+            channel.createdAt = .unique
+            channel.lastMessageAt = .distantPast.bridgeDate
+        }
+
+        let channel = try XCTUnwrap(database.viewContext.channel(cid: channelId))
+        XCTAssertEqual(channel.defaultSortingAt, channel.createdAt)
+    }
+
+    func test_queryTimestamp_isLatestOfActivityAndTouchedAt() throws {
+        let lastMessageAt = Date(timeIntervalSince1970: 1_760_000_000)
+        let newerCid = ChannelId.unique
+        let olderCid = ChannelId.unique
+
+        try database.writeSynchronously { session in
+            for (cid, touchedAt) in [(newerCid, "2025-10-09T09:53:20Z"), (olderCid, "2025-10-09T07:53:20Z")] {
+                try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid, extraData: [GroupedChannelKey.touchedAt: .string(touchedAt)], lastMessageAt: lastMessageAt)))
+            }
+        }
+
+        let queryTimestamps = try database.readSynchronously { session in
+            [newerCid, olderCid].map { session.channel(cid: $0)?.queryTimestamp.bridgeDate }
+        }
+        XCTAssertEqual([lastMessageAt.addingTimeInterval(3600), lastMessageAt], queryTimestamps)
+    }
+
+    func test_saveChannel_touchedAt_acceptsOnlyRFC3339Strings() throws {
+        let cases: [(RawJSON?, TimeInterval?)] = [
+            (.string("2025-10-09T08:53:20Z"), 1_760_000_000),
+            (.string("2025-10-09T10:53:20+02:00"), 1_760_000_000),
+            (.string("2025-10-09T08:53:20.123Z"), 1_760_000_000.123),
+            (.string("2025-10-09T08:53:20.123456Z"), 1_760_000_000.123456),
+            (.string("2025-10-09T08:53:20.123456789Z"), 1_760_000_000.123456789),
+            (.string("2025-10-09T10:53:20.123456+02:00"), 1_760_000_000.123456),
+            (nil, nil),
+            (.string("invalid"), nil),
+            (.number(1_760_000_000_000_000_000), nil),
+            (.bool(true), nil),
+            (RawJSON.nil, nil),
+            (.array([]), nil),
+            (.dictionary([:]), nil)
+        ]
+
+        for (value, expectedTimestamp) in cases {
+            let cid = ChannelId.unique
+            try database.writeSynchronously { session in
+                try session.saveChannel(payload: .dummy(channel: .dummy(
+                    cid: cid,
+                    extraData: [GroupedChannelKey.touchedAt: .string("2025-10-09T08:53:20Z")]
+                )))
+            }
+            let previousTouchedAt = try database.readSynchronously { session in
+                try XCTUnwrap(session.channel(cid: cid)).touchedAt?.bridgeDate
+            }
+            XCTAssertEqual(previousTouchedAt, Date(timeIntervalSince1970: 1_760_000_000))
+
+            var custom: [String: RawJSON] = [:]
+            custom[GroupedChannelKey.touchedAt] = value
+            try database.writeSynchronously { session in
+                try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid, extraData: custom)))
+            }
+
+            let touchedAt = try database.readSynchronously { session in
+                try XCTUnwrap(session.channel(cid: cid)).touchedAt?.bridgeDate
+            }
+            if let expectedTimestamp {
+                XCTAssertEqual(try XCTUnwrap(touchedAt).timeIntervalSince1970, expectedTimestamp, accuracy: 0.000001)
+            } else {
+                XCTAssertNil(touchedAt, "Unexpected touched_at for \(String(describing: value))")
+            }
+        }
+    }
+
+    func test_savePartialChannel_touchedAt_acceptsOnlyRFC3339Strings() throws {
+        let cases: [(RawJSON?, TimeInterval?)] = [
+            (.string("2025-10-09T08:53:20Z"), 1_760_000_000),
+            (.string("2025-10-09T10:53:20+02:00"), 1_760_000_000),
+            (.string("2025-10-09T08:53:20.123Z"), 1_760_000_000.123),
+            (.string("2025-10-09T08:53:20.123456Z"), 1_760_000_000.123456),
+            (.string("2025-10-09T08:53:20.123456789Z"), 1_760_000_000.123456789),
+            (.string("2025-10-09T10:53:20.123456+02:00"), 1_760_000_000.123456),
+            (nil, nil),
+            (.string("invalid"), nil),
+            (.number(1_760_000_000_000_000_000), nil),
+            (.bool(true), nil),
+            (RawJSON.nil, nil),
+            (.array([]), nil),
+            (.dictionary([:]), nil)
+        ]
+
+        for (value, expectedTimestamp) in cases {
+            let cid = ChannelId.unique
+            try database.writeSynchronously { session in
+                try session.saveChannel(payload: .dummy(channel: .dummy(
+                    cid: cid,
+                    extraData: [GroupedChannelKey.touchedAt: .string("2025-10-09T08:53:20Z")]
+                )))
+            }
+            let previousTouchedAt = try database.readSynchronously { session in
+                try XCTUnwrap(session.channel(cid: cid)).touchedAt?.bridgeDate
+            }
+            XCTAssertEqual(previousTouchedAt, Date(timeIntervalSince1970: 1_760_000_000))
+
+            var custom: [String: RawJSON] = [:]
+            custom[GroupedChannelKey.touchedAt] = value
+            try database.writeSynchronously { session in
+                try XCTUnwrap(session.channel(cid: cid)).savePartialChannel(
+                    payload: ChannelPartialUpdateResponse(cid: cid, createdAt: .unique, custom: custom, disabled: false, frozen: false, updatedAt: .unique)
+                )
+            }
+
+            let touchedAt = try database.readSynchronously { session in
+                try XCTUnwrap(session.channel(cid: cid)).touchedAt?.bridgeDate
+            }
+            if let expectedTimestamp {
+                XCTAssertEqual(try XCTUnwrap(touchedAt).timeIntervalSince1970, expectedTimestamp, accuracy: 0.000001)
+            } else {
+                XCTAssertNil(touchedAt, "Unexpected touched_at for \(String(describing: value))")
+            }
+        }
+    }
+
+    func test_savePartialChannel_mergesCarriedFields() throws {
+        let cid = ChannelId.unique
+        let updatedAt = Date(timeIntervalSince1970: 1_760_000_000)
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(channel: .dummy(cid: cid, extraData: [GroupedChannelKey.group: .string("old")])))
+        }
+
+        let partialPayload = ChannelPartialUpdateResponse(
+            cid: cid,
+            createdAt: .unique,
+            custom: [GroupedChannelKey.group: .string("new")],
+            disabled: true,
+            frozen: true,
+            lastMessageAt: updatedAt,
+            team: "team",
+            updatedAt: updatedAt
+        )
+        try database.writeSynchronously { session in
+            session.channel(cid: cid)?.savePartialChannel(payload: partialPayload)
+        }
+
+        let (channel, group) = try database.readSynchronously { session in
+            let channelDTO = try XCTUnwrap(session.channel(cid: cid))
+            return (try channelDTO.asModel(), channelDTO.group)
+        }
+        XCTAssertEqual("new", group)
+        XCTAssertEqual(true, channel.isDisabled)
+        XCTAssertEqual(true, channel.isFrozen)
+        XCTAssertEqual("team", channel.team)
+        XCTAssertEqual(updatedAt, channel.updatedAt)
+        XCTAssertEqual(updatedAt, channel.lastMessageAt)
     }
 
     func test_channelPayload_nilMembershipRemovesExistingMembership() throws {
+        try XCTSkipIf(
+            ProcessInfo().operatingSystemVersion.majorVersion < 15,
+            "https://github.com/GetStream/ios-issues-tracking/issues/515"
+        )
+        
         // Save a channel payload with 100 messages
         let channelId: ChannelId = .unique
         let payload = dummyPayload(with: channelId, numberOfMessages: 100)
@@ -468,7 +1096,32 @@ final class ChannelDTO_Tests: XCTestCase {
         XCTAssertNil(channel?.membership)
     }
 
+    func test_channelDetailPayload_withoutMembers_keepsStoredMembers() throws {
+        let cid: ChannelId = .unique
+        let members: [MemberPayload] = [.dummy(), .dummy()]
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: cid, members: members), query: nil, cache: nil)
+        }
+
+        // Event protocol v3 leaves the members out of the events of channels with more than 100 members
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: cid, members: nil, memberCount: 150), query: nil, cache: nil)
+        }
+
+        let channel = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: cid)?.asModel())
+        }
+        XCTAssertEqual(Set(channel.lastActiveMembers.map(\.id)), Set(members.map(\.userId)))
+        XCTAssertEqual(channel.memberCount, 150)
+    }
+
     func test_channelPayload_latestMessagesArePopulated() throws {
+        try XCTSkipIf(
+            ProcessInfo().operatingSystemVersion.majorVersion < 15,
+            "https://github.com/GetStream/ios-issues-tracking/issues/515"
+        )
+        
         // Save a channel payload with 100 messages
         let channelId: ChannelId = .unique
         let payload = dummyPayload(with: channelId, numberOfMessages: 100)
@@ -479,10 +1132,15 @@ final class ChannelDTO_Tests: XCTestCase {
 
         // Assert only 25 messages is serialized in the model
         let channel: ChatChannel? = try? database.viewContext.channel(cid: channelId)?.asModel()
-        XCTAssertEqual(channel?.latestMessages.count, 25)
+        XCTAssertEqual(channel?.latestMessages.count, database.chatClientConfig.localCaching.chatChannel.latestMessagesLimit)
     }
 
     func test_channelPayload_pinnedMessagesArePopulated() throws {
+        try XCTSkipIf(
+            ProcessInfo().operatingSystemVersion.majorVersion < 15,
+            "https://github.com/GetStream/ios-issues-tracking/issues/515"
+        )
+        
         let channelId: ChannelId = .unique
         let pinnedMessages: [MessagePayload] = [
             .dummy(messageId: .unique, authorUserId: .unique, pinned: true),
@@ -539,6 +1197,11 @@ final class ChannelDTO_Tests: XCTestCase {
     }
     
     func test_channelPayload_truncatedMessagesAreIgnored() throws {
+        try XCTSkipIf(
+            ProcessInfo().operatingSystemVersion.majorVersion < 15,
+            "https://github.com/GetStream/ios-issues-tracking/issues/515"
+        )
+        
         // Save a channel payload with 100 messages
         let channelId: ChannelId = .unique
         let payload = dummyPayload(with: channelId, numberOfMessages: 100)
@@ -559,10 +1222,15 @@ final class ChannelDTO_Tests: XCTestCase {
 
         // Assert only the 10 newest messages is serialized
         let channel: ChatChannel? = try? database.viewContext.channel(cid: channelId)?.asModel()
-        XCTAssertEqual(channel?.latestMessages.count, 10)
+        XCTAssertEqual(channel?.latestMessages.count, database.chatClientConfig.localCaching.chatChannel.latestMessagesLimit)
     }
 
     func test_channelPayload_pinnedMessagesOlderThanOldestMessageAtAreIgnored() throws {
+        try XCTSkipIf(
+            ProcessInfo().operatingSystemVersion.majorVersion < 15,
+            "https://github.com/GetStream/ios-issues-tracking/issues/515"
+        )
+        
         let channelId: ChannelId = .unique
         let oldPinnedMessage: MessagePayload = MessagePayload(
             id: .unique,
@@ -629,16 +1297,21 @@ final class ChannelDTO_Tests: XCTestCase {
         let channel: ChatChannel? = try? database.viewContext.channel(cid: channelId)?.asModel()
         XCTAssertEqual(channel?.latestMessages.count, 2)
     }
-    
+
     func test_channelPayload_localCachingDefaults() throws {
+        try XCTSkipIf(
+            ProcessInfo().operatingSystemVersion.majorVersion < 15,
+            "https://github.com/GetStream/ios-issues-tracking/issues/515"
+        )
+        
         // This is just a temp fix. The CI tends to fail if there are multiple Database instance alive at the same time.
         // -> CIS-756
         AssertAsync.canBeReleased(&database)
-        
+
         let memberLimit = Int.random(in: 1..<50)
         let watcherLimit = Int.random(in: 1..<50)
         let messagesLimit = Int.random(in: 1..<50)
-        
+
         // Set `lastActiveMembersLimit` to the limit
         var caching = ChatClientConfig.LocalCaching()
         caching.chatChannel.lastActiveWatchersLimit = watcherLimit
@@ -646,22 +1319,22 @@ final class ChannelDTO_Tests: XCTestCase {
         caching.chatChannel.latestMessagesLimit = messagesLimit
 
         let cid: ChannelId = .unique
-        
+
         database = DatabaseContainer_Spy(localCachingSettings: caching)
-        
+
         // Create more entities than the limits
         let allMembers: [MemberPayload] = (0..<memberLimit * 2).map { _ in .dummy() }
         let allWatchers: [UserPayload] = (0..<watcherLimit * 2).map { _ in .dummy(userId: .unique) }
         let allMessages: [MessagePayload] = (0..<messagesLimit * 2)
             .map { _ in .dummy(messageId: .unique, authorUserId: .unique) }
         let payload = dummyPayload(with: cid, members: allMembers, watchers: allWatchers, messages: allMessages)
-                
+
         try database.writeSynchronously { session in
             try session.saveChannel(payload: payload)
         }
 
         let channel: ChatChannel = try XCTUnwrap(database.viewContext.channel(cid: cid)?.asModel())
-        
+
         XCTAssertEqual(
             channel.lastActiveWatchers.map(\.id),
             allWatchers.sorted { $0.lastActiveAt! > $1.lastActiveAt! }
@@ -671,12 +1344,12 @@ final class ChannelDTO_Tests: XCTestCase {
 
         XCTAssertEqual(
             channel.lastActiveMembers.map(\.id),
-            allMembers.sorted { $0.user.lastActiveAt! > $1.user.lastActiveAt! }
+            allMembers.sorted { $0.user!.lastActiveAt! > $1.user!.lastActiveAt! }
                 .prefix(memberLimit)
-                .map(\.user.id)
+                .map(\.user!.id)
         )
     }
-    
+
     func test_lastMessageFromCurrentUser() throws {
         let user: UserPayload = dummyCurrentUser
         let channelId: ChannelId = .unique
@@ -686,38 +1359,68 @@ final class ChannelDTO_Tests: XCTestCase {
             authorUserId: user.id,
             createdAt: Date.distantPast
         )
-        
+
         let message2: MessagePayload = .dummy(
             type: .regular,
             messageId: .unique,
             authorUserId: user.id,
             createdAt: Date()
         )
-        
+
         let message3: MessagePayload = .dummy(
             type: .ephemeral,
             messageId: .unique,
             authorUserId: user.id,
             createdAt: Date()
         )
-        
+
         let channel = dummyPayload(with: channelId, messages: [message1, message2, message3])
-        
+
         try! database.createCurrentUser(id: user.id)
-        
+
         try database.writeSynchronously { session in
             try session.saveChannel(payload: channel)
         }
-        
+
         guard let channel: ChatChannel = try? database.viewContext.channel(cid: channelId)?.asModel(),
               let lastMessageFromCurrentUser = channel.lastMessageFromCurrentUser else {
             XCTFail("\(#file), \(#function), \(#line) There should be a valid channel")
             return
         }
-        
+
         XCTAssertEqual(lastMessageFromCurrentUser.text, message2.text)
     }
-    
+
+    func test_lastMessageFromCurrentUser_whenLastMessageIsHardDeleted() throws {
+        let user: UserPayload = dummyCurrentUser
+        let channelId: ChannelId = .unique
+        let previousMessage: MessagePayload = .dummy(
+            type: .regular,
+            messageId: .unique,
+            authorUserId: user.id,
+            createdAt: Date(timeIntervalSince1970: 1000)
+        )
+        let hardDeletedMessage: MessagePayload = .dummy(
+            type: .regular,
+            messageId: .unique,
+            authorUserId: user.id,
+            createdAt: Date(timeIntervalSince1970: 2000),
+            deletedAt: Date(timeIntervalSince1970: 2500)
+        )
+
+        let channelPayload = dummyPayload(with: channelId, messages: [previousMessage, hardDeletedMessage])
+
+        try database.createCurrentUser(id: user.id)
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: channelPayload)
+            session.message(id: hardDeletedMessage.id)?.isHardDeleted = true
+        }
+
+        let channel = try XCTUnwrap(database.viewContext.channel(cid: channelId)?.asModel())
+        XCTAssertEqual(channel.lastMessageFromCurrentUser?.id, previousMessage.id)
+    }
+
     func test_lastMessageFromCurrentUser_whenLastMessageIsThreadReply() throws {
         let user: UserPayload = dummyCurrentUser
         let channelId: ChannelId = .unique
@@ -744,7 +1447,7 @@ final class ChannelDTO_Tests: XCTestCase {
             attachments: [],
             pinned: false
         )
-        
+
         let threadMessage = MessagePayload(
             id: .unique,
             type: .regular,
@@ -767,21 +1470,21 @@ final class ChannelDTO_Tests: XCTestCase {
             attachments: [],
             pinned: false
         )
-        
+
         let channel = dummyPayload(with: channelId, messages: [mainMessage, threadMessage])
-        
+
         try! database.createCurrentUser(id: user.id)
-        
+
         try database.writeSynchronously { session in
             try session.saveChannel(payload: channel)
         }
-        
+
         guard let channel: ChatChannel = try? database.viewContext.channel(cid: channelId)?.asModel(),
               let lastMessageFromCurrentUser = channel.lastMessageFromCurrentUser else {
             XCTFail("\(#file), \(#function), \(#line) There should be a valid channel")
             return
         }
-        
+
         XCTAssertEqual(lastMessageFromCurrentUser.text, threadMessage.text)
     }
 
@@ -800,69 +1503,86 @@ final class ChannelDTO_Tests: XCTestCase {
         // Assert: DTO should not contain any changes
         XCTAssertFalse(channel.hasPersistentChangedValues)
     }
-    
+
     func test_defaultExtraDataIsUsed_whenExtraDataDecodingFails() throws {
         let channelId: ChannelId = .unique
-        
+
         let payload = dummyPayloadWithNoExtraData(with: channelId)
-        
+
         // Save the payload to the db
         try database.writeSynchronously { session in
             let channelDTO = try session.saveChannel(payload: payload)
             // Make the extra data JSON invalid
             channelDTO.extraData = #"{"invalid": json}"#.data(using: .utf8)!
         }
-        
+
         // Load the channel from the db and check the fields are correct
         let loadedChannel: ChatChannel? = try? database.viewContext.channel(cid: channelId)?.asModel()
-        
+
         XCTAssertEqual(loadedChannel?.extraData, [:])
     }
-    
-    func test_channelWithChannelListQuery_isSavedAndLoaded() {
+
+    func test_channelWithChannelListQuery_isSavedAndLoaded() throws {
+        let createdAt = Date.unique
         let query = ChannelListQuery(
-            filter: .and([.less(.createdAt, than: .unique), .exists(.deletedAt, exists: false)])
+            filter: .and([
+                .less(.createdAt, than: createdAt),
+                .exists(.deletedAt, exists: false)
+            ])
         )
-        
+
         // Create two channels
         let channel1Id: ChannelId = .unique
-        let payload1 = dummyPayload(with: channel1Id)
-        
+        let payload1 = dummyPayload(with: channel1Id, createdAt: Date.unique(before: createdAt))
+
         let channel2Id: ChannelId = .unique
         let payload2 = dummyPayload(with: channel2Id)
-        
+
         // Save the channels to DB, but only channel 1 is associated with the query
         try! database.writeSynchronously { session in
             try session.saveChannel(payload: payload1, query: query, cache: nil)
             try session.saveChannel(payload: payload2)
         }
-        
-        let fetchRequest = ChannelDTO.channelListFetchRequest(query: query)
+
+        let fetchRequest = ChannelDTO.channelListFetchRequest(query: query, chatClientConfig: .init(apiKeyString: .unique))
         var loadedChannels: [ChannelDTO] {
             try! database.viewContext.fetch(fetchRequest)
         }
-        
+
         XCTAssertEqual(loadedChannels.count, 1)
         XCTAssertEqual(loadedChannels.first?.cid, channel1Id.rawValue)
     }
-    
+
+    func test_channelWithChannelListQuery_shouldUseLimitAndBatchSize() {
+        let query = ChannelListQuery(
+            filter: .and([.less(.createdAt, than: .unique), .exists(.deletedAt, exists: false)]),
+            pageSize: 25
+        )
+
+        let fetchRequest = ChannelDTO.channelListFetchRequest(query: query, chatClientConfig: .init(apiKeyString: .unique))
+
+        XCTAssertEqual(fetchRequest.fetchBatchSize, 25)
+        XCTAssertEqual(fetchRequest.fetchLimit, 25)
+    }
+
     func test_channelListQuery_withSorting() {
         // Create two channels queries with different sortings.
-        let filter: Filter<ChannelListFilterScope> = .in(.members, values: [.unique])
+        let memberId = UserId.unique
+        let filter: Filter<ChannelListFilterScope> = .in(.members, values: [memberId])
         let queryWithDefaultSorting = ChannelListQuery(filter: filter)
         let queryWithUpdatedAtSorting = ChannelListQuery(filter: filter, sort: [.init(key: .updatedAt, isAscending: false)])
 
         // Create dummy channels payloads with ids: a, b, c, d.
-        let payload1 = dummyPayload(with: try! .init(cid: "a:a"), numberOfMessages: 0)
-        let payload2 = dummyPayload(with: try! .init(cid: "a:b"), numberOfMessages: 0)
-        let payload3 = dummyPayload(with: try! .init(cid: "a:c"), numberOfMessages: 0)
-        let payload4 = dummyPayload(with: try! .init(cid: "a:d"), numberOfMessages: 0)
+        let payload1 = dummyPayload(with: try! .init(cid: "a:a"), numberOfMessages: 0, members: [.dummy(user: .dummy(userId: memberId))])
+        let payload2 = dummyPayload(with: try! .init(cid: "a:b"), numberOfMessages: 0, members: [.dummy(user: .dummy(userId: memberId))])
+        let payload3 = dummyPayload(with: try! .init(cid: "a:c"), numberOfMessages: 0, members: [.dummy(user: .dummy(userId: memberId))])
+        let payload4 = dummyPayload(with: try! .init(cid: "a:d"), numberOfMessages: 0, members: [.dummy(user: .dummy(userId: memberId))])
 
         // Get `lastMessageDate` and `created` dates from generated dummy channels and sort the for the default sorting.
         let createdAndLastMessageDates = [payload1, payload2, payload3, payload4]
             .map { $0.channel.lastMessageAt ?? $0.channel.createdAt }
             .sorted(by: { $0 > $1 })
-        
+
         // Get `updatedAt` dates from generated dummy channels and sort the for the updatedAt sorting.
         let updatedAtDates = [payload1, payload2, payload3, payload4]
             .map(\.channel.updatedAt)
@@ -877,9 +1597,9 @@ final class ChannelDTO_Tests: XCTestCase {
         }
 
         // A fetch request with a default sorting.
-        let fetchRequestWithDefaultSorting = ChannelDTO.channelListFetchRequest(query: queryWithDefaultSorting)
+        let fetchRequestWithDefaultSorting = ChannelDTO.channelListFetchRequest(query: queryWithDefaultSorting, chatClientConfig: .init(apiKeyString: .unique))
         // A fetch request with a sorting by `updatedAt`.
-        let fetchRequestWithUpdatedAtSorting = ChannelDTO.channelListFetchRequest(query: queryWithUpdatedAtSorting)
+        let fetchRequestWithUpdatedAtSorting = ChannelDTO.channelListFetchRequest(query: queryWithUpdatedAtSorting, chatClientConfig: .init(apiKeyString: .unique))
 
         var channelsWithDefaultSorting: [ChannelDTO] { try! database.viewContext.fetch(fetchRequestWithDefaultSorting) }
         var channelsWithUpdatedAtSorting: [ChannelDTO] { try! database.viewContext.fetch(fetchRequestWithUpdatedAtSorting) }
@@ -898,7 +1618,7 @@ final class ChannelDTO_Tests: XCTestCase {
         let encoder = JSONEncoder.stream
 
         var channelListSortingKey = ChannelListSortingKey.default
-        XCTAssertEqual(encoder.encodedString(channelListSortingKey), "updated_at")
+        XCTAssertEqual(encoder.encodedString(channelListSortingKey), "last_updated")
         XCTAssertEqual(
             channelListSortingKey.sortDescriptor(isAscending: true),
             NSSortDescriptor(key: "defaultSortingAt", ascending: true)
@@ -963,28 +1683,29 @@ final class ChannelDTO_Tests: XCTestCase {
             hidden1.isHidden = true
         }
 
-        let fetchRequest = ChannelDTO.channelListFetchRequest(query: query)
+        let fetchRequest = ChannelDTO.channelListFetchRequest(query: query, chatClientConfig: .init(apiKeyString: .unique))
         let loadedChannels: [ChannelDTO] = try database.viewContext.fetch(fetchRequest)
 
         XCTAssertEqual(loadedChannels.count, 2)
         XCTAssertTrue(loadedChannels.contains { $0.cid == visibleCid1.rawValue })
         XCTAssertTrue(loadedChannels.contains { $0.cid == visibleCid2.rawValue })
     }
-    
+
     func test_channelUnreadCount_calculatedCorrectly() throws {
         // GIVEN
-        let currentUserPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
+        let currentUserPayload: UserPayload = .dummy(userId: .unique, role: .user)
 
         let currentUserChannelReadPayload: ChannelReadPayload = .init(
             user: currentUserPayload,
             lastReadAt: .init(),
+            lastReadMessageId: .unique,
             unreadMessagesCount: 0
         )
 
         let messageMentioningCurrentUser: MessagePayload = .dummy(
             messageId: .unique,
             authorUserId: .unique,
-            createdAt: currentUserChannelReadPayload.lastReadAt.addingTimeInterval(5),
+            createdAt: currentUserChannelReadPayload.lastRead.addingTimeInterval(5),
             mentionedUsers: [currentUserPayload]
         )
 
@@ -995,15 +1716,19 @@ final class ChannelDTO_Tests: XCTestCase {
             members: [.dummy(user: currentUserPayload)],
             membership: .dummy(user: currentUserPayload),
             messages: [messageMentioningCurrentUser],
+            pendingMessages: nil,
             pinnedMessages: [],
             channelReads: [currentUserChannelReadPayload],
-            isHidden: false
+            isHidden: false,
+            draft: nil,
+            activeLiveLocations: [],
+            pushPreference: nil
         )
 
         let unreadMessages = 5
 
         try database.writeSynchronously { session in
-            try session.saveCurrentUser(payload: currentUserPayload)
+            try session.saveCurrentUser(payload: .dummy(userPayload: currentUserPayload))
             try session.saveChannel(payload: channelPayload)
 
             let read = try XCTUnwrap(
@@ -1016,126 +1741,65 @@ final class ChannelDTO_Tests: XCTestCase {
         let unreadCount = try XCTUnwrap(
             database.viewContext.channel(cid: channelPayload.channel.cid)?.asModel().unreadCount
         )
-        
+
         // THEN
         XCTAssertEqual(unreadCount.messages, unreadMessages)
         XCTAssertEqual(unreadCount.mentions, 1)
     }
     
-    func test_channelCleansMessageState_whenMessageFailedToBeEditedDueToModeration() throws {
-        let currentUserId: UserId = .unique
-        let messageId: MessageId = .unique
-        
-        let currentUserPayload: CurrentUserPayload = .dummy(userId: currentUserId, role: .user)
-
-        let messagePayload: MessagePayload = .dummy(
-            messageId: messageId,
-            authorUserId: currentUserId
+    func test_channelMembersIsUsedOverMembership_whenNotificationsMutedIsIncorrect() throws {
+        // Issue where membership.notificationsMuted is incorrect
+        let cid = ChannelId.unique
+        let userId: UserId = .unique
+        let user = UserPayload.dummy(userId: userId)
+        let memberPayload = MemberPayload(
+            user: user,
+            userId: user.id,
+            role: nil,
+            createdAt: .unique,
+            updatedAt: .unique,
+            notificationsMuted: true
         )
-
+        let membershipPayload = MemberPayload(
+            user: user,
+            userId: user.id,
+            role: nil,
+            createdAt: .unique,
+            updatedAt: .unique,
+            notificationsMuted: false // incorrectly false
+        )
         let channelPayload = ChannelPayload(
-            channel: .dummy(cid: .unique),
-            watcherCount: 0,
-            watchers: [],
-            members: [.dummy(user: currentUserPayload)],
-            membership: .dummy(user: currentUserPayload),
-            messages: [messagePayload],
+            channel: .dummy(cid: cid),
+            watcherCount: nil,
+            watchers: nil,
+            members: [memberPayload],
+            membership: membershipPayload,
+            messages: [],
+            pendingMessages: nil,
             pinnedMessages: [],
             channelReads: [],
-            isHidden: false
+            isHidden: nil,
+            draft: nil,
+            activeLiveLocations: [],
+            pushPreference: nil
         )
-        
-        // Save channel and updated message to be failedToBeEditedDueToModeration
         try database.writeSynchronously { session in
-            try session.saveCurrentUser(payload: currentUserPayload)
             try session.saveChannel(payload: channelPayload)
-            
-            guard let messageDTO = session.message(id: messageId) else { return }
-            
-            messageDTO.isBounced = true
-            messageDTO.localMessageState = .syncingFailed
         }
         
-        // Load the message
-        let message = try XCTUnwrap(database.viewContext.message(id: messageId))
-        
-        // Assert message failed to be edited due to moderation
-        XCTAssertEqual(message.failedToBeEditedDueToModeration, true)
-
-        // Clean state of messages that failed to be edited due to moderation
-        try database.writeSynchronously { session in
-            if let channelDTO = session.channel(cid: channelPayload.channel.cid) {
-                channelDTO.cleanMessagesThatFailedToBeEditedDueToModeration()
-            }
+        var channelMember: ChatChannelMember?
+        let session = database.backgroundReadOnlyContext
+        session.performAndWait {
+            channelMember = try? session.member(userId: userId, cid: cid)?.asModel()
         }
-        
-        // Load the message
-        let updatedMessage = try XCTUnwrap(database.viewContext.message(id: messageId))
-        
-        // Assert message is properly cleaned
-        XCTAssertEqual(updatedMessage.isBounced, false)
-        XCTAssertNil(updatedMessage.localMessageState)
+        let member = try XCTUnwrap(channelMember)
+        XCTAssertEqual(true, member.notificationsMuted)
     }
-    
-    func test_channelDoesNotCleanMessageState_whenMessageFailedToBeSentDueToModeration() throws {
-        let currentUserId: UserId = .unique
-        let messageId: MessageId = .unique
-        
-        let currentUserPayload: CurrentUserPayload = .dummy(userId: currentUserId, role: .user)
 
-        let messagePayload: MessagePayload = .dummy(
-            messageId: messageId,
-            authorUserId: currentUserId
-        )
-
-        let channelPayload = ChannelPayload(
-            channel: .dummy(cid: .unique),
-            watcherCount: 0,
-            watchers: [],
-            members: [.dummy(user: currentUserPayload)],
-            membership: .dummy(user: currentUserPayload),
-            messages: [messagePayload],
-            pinnedMessages: [],
-            channelReads: [],
-            isHidden: false
-        )
-        
-        // Save channel and update message to be failedToBeSentDueToModeration
-        try database.writeSynchronously { session in
-            try session.saveCurrentUser(payload: currentUserPayload)
-            try session.saveChannel(payload: channelPayload)
-            
-            guard let messageDTO = session.message(id: messageId) else { return }
-            
-            messageDTO.isBounced = true
-            messageDTO.localMessageState = .sendingFailed
-        }
-        
-        // Load the message
-        let message = try XCTUnwrap(database.viewContext.message(id: messageId))
-        
-        // Assert message failed to be sent due to moderation
-        XCTAssertEqual(message.failedToBeSentDueToModeration, true)
-
-        // Clean state of messages that failed to be edited due to moderation
-        try database.writeSynchronously { session in
-            if let channelDTO = session.channel(cid: channelPayload.channel.cid) {
-                channelDTO.cleanMessagesThatFailedToBeEditedDueToModeration()
-            }
-        }
-        
-        // Load the message
-        let updatedMessage = try XCTUnwrap(database.viewContext.message(id: messageId))
-        
-        // Assert message is not cleaned because it didn't failed to be edited due to moderation
-        XCTAssertEqual(updatedMessage.isBounced, true)
-        XCTAssertEqual(updatedMessage.localMessageState, .sendingFailed)
-    }
-    
     func test_typingUsers_areCleared_onResetEphemeralValues() throws {
         let cid: ChannelId = .unique
         let userId: UserId = .unique
-        
+
         // Create channel in the database
         try database.createChannel(cid: cid)
         // Create user in the database
@@ -1145,21 +1809,27 @@ final class ChannelDTO_Tests: XCTestCase {
             let channel = try XCTUnwrap(session.channel(cid: cid))
             let user = try XCTUnwrap(session.user(id: userId))
             channel.currentlyTypingUsers.insert(user)
+            session.saveMemberInfo(
+                payload: MemberInfoPayload(extraData: ["is_premium": .bool(true)]),
+                userId: userId,
+                cid: cid,
+                cache: nil
+            )
         }
-        
-        // Load the channel
-        func getChannel() throws -> ChatChannel { try channel(with: cid) }
 
-        // Assert channel's currentlyTypingUsers are not empty
-        try XCTAssertFalse(getChannel().currentlyTypingUsers.isEmpty)
-        
-        // Simulate `resetEphemeralValues`
+        // Load the channel
+        func getChannelDTO() throws -> ChannelDTO {
+            try XCTUnwrap(database.viewContext.channel(cid: cid))
+        }
+
+        try XCTAssertFalse(getChannelDTO().currentlyTypingUsers.isEmpty)
+
         database.resetEphemeralValues()
-        
-        // Assert channel's currentlyTypingUsers are cleared
-        AssertAsync.willBeTrue((try? getChannel().currentlyTypingUsers.isEmpty) ?? false)
+
+        AssertAsync.willBeTrue((try? getChannelDTO().currentlyTypingUsers.isEmpty) ?? false)
+        AssertAsync.willBeTrue((try? getChannelDTO().typingMemberInfos.isEmpty) ?? false)
     }
-    
+
     func test_createFromDTO_handlesExtraDataCorrectlyWhenPresent() throws {
         let cid: ChannelId = .unique
 
@@ -1172,7 +1842,7 @@ final class ChannelDTO_Tests: XCTestCase {
     func test_watchers_areCleared_onResetEphemeralValues() throws {
         let cid: ChannelId = .unique
         let userId: UserId = .unique
-        
+
         // Create channel in the database
         try database.createChannel(cid: cid)
         // Create user in the database
@@ -1184,17 +1854,17 @@ final class ChannelDTO_Tests: XCTestCase {
             channel.watchers.insert(member)
             channel.watcherCount = Int64.random(in: 1...10)
         }
-        
+
         // Load the channel
         func getChannel() throws -> ChatChannel { try channel(with: cid) }
 
         // Assert channel's watchers are not empty, watcherCount not zero
         try XCTAssertFalse(getChannel().lastActiveWatchers.isEmpty)
         try XCTAssertNotEqual(getChannel().watcherCount, 0)
-        
+
         // Simulate `resetEphemeralValues`
         database.resetEphemeralValues()
-        
+
         // Assert channel's watchers are cleared, watcherCount zero'ed
         AssertAsync {
             Assert.willBeTrue((try? getChannel().lastActiveWatchers.isEmpty) ?? false)
@@ -1220,58 +1890,57 @@ final class ChannelDTO_Tests: XCTestCase {
         let expected = ["giphy", "workout", "location"]
         XCTAssertEqual(actual, expected)
     }
-    
-    func test_asModel_populatesPreviewMessage() throws {
+
+    /// The root cause of this issue can be found on ChatChannel.create(fromDTO:), when creating a block to lazily get
+    /// its unread count. To get the data, there is a predicate that looks as follows: `NSPredicate(format: "%@ IN mentionedUsers", currentUser.user)`.
+    /// Whenever `currentUser.user` is invalid, this would directly crash as we cannot create a predicate with nil on the left hand side
+    /// This test verifies that this code is not executed when `currentUser.user` is invalid
+    func test_asModel_shouldNotCrashWhenCurrentUserInvalid() throws {
         // GIVEN
         let channelPayload: ChannelPayload = .dummy()
-        
-        let previewMessagePayload: MessagePayload = .dummy(
-            messageId: .unique,
-            authorUserId: .unique,
-            text: .unique
-        )
-        
+        let userId = UserId.unique
+
         try database.writeSynchronously { session in
-            let chanenlDTO = try session.saveChannel(payload: channelPayload)
-            
-            chanenlDTO.previewMessage = try session.saveMessage(
-                payload: previewMessagePayload,
-                channelDTO: chanenlDTO,
-                syncOwnReactions: false,
-                cache: nil
-            )
+            try session.saveChannel(payload: channelPayload)
+            try session.saveCurrentUser(payload: .dummy(userId: userId, role: .user))
         }
 
         // WHEN
         let channel = try XCTUnwrap(
             database.viewContext.channel(cid: channelPayload.channel.cid)?.asModel()
         )
-        
+
+        try database.writeSynchronously { session in
+            let currentUser = try XCTUnwrap(session.currentUser)
+            let managedObjectContext = try XCTUnwrap(currentUser.managedObjectContext)
+            managedObjectContext.delete(currentUser.user)
+        }
+
         // THEN
-        let previewMessage = try XCTUnwrap(channel.previewMessage)
-        XCTAssertEqual(previewMessage.text, previewMessagePayload.text)
+        XCTAssertEqual(channel.unreadCount.messages, 0)
     }
-    
-    func test_asModel_populatesLatestMessage() throws {
+
+    func test_asModel_populatesLatestMessage_withoutFilteringDeletedMessages() throws {
         // GIVEN
+        var config = ChatClientConfig(apiKeyString: .unique)
+        config.shouldShowShadowedMessages = true
+        config.localCaching = .init(
+            chatChannel: .init(
+                lastActiveWatchersLimit: 0,
+                lastActiveMembersLimit: 0,
+                latestMessagesLimit: 3
+            )
+        )
         database = DatabaseContainer_Spy(
             kind: .inMemory,
-            localCachingSettings: .init(
-                chatChannel: .init(
-                    lastActiveWatchersLimit: 0,
-                    lastActiveMembersLimit: 0,
-                    latestMessagesLimit: 3
-                )
-            ),
-            deletedMessagesVisibility: .visibleForCurrentUser,
-            shouldShowShadowedMessages: true
+            chatClientConfig: config
         )
-        
+
         let currentUser: CurrentUserPayload = .dummy(userId: .unique, role: .admin)
         let anotherUser: UserPayload = .dummy(userId: .unique)
 
         let cid: ChannelId = .unique
-       
+
         let message1: MessagePayload = .dummy(
             messageId: .unique,
             authorUserId: currentUser.id,
@@ -1279,7 +1948,7 @@ final class ChannelDTO_Tests: XCTestCase {
             createdAt: .init(),
             cid: cid
         )
-        
+
         let deletedMessageFromCurrentUser: MessagePayload = .dummy(
             type: .deleted,
             messageId: .unique,
@@ -1289,7 +1958,7 @@ final class ChannelDTO_Tests: XCTestCase {
             deletedAt: .init(),
             cid: cid
         )
-        
+
         let deletedMessageFromAnotherUser: MessagePayload = .dummy(
             type: .deleted,
             messageId: .unique,
@@ -1299,7 +1968,7 @@ final class ChannelDTO_Tests: XCTestCase {
             deletedAt: .init(),
             cid: cid
         )
-        
+
         let shadowedMessageFromAnotherUser: MessagePayload = .dummy(
             messageId: .unique,
             authorUserId: anotherUser.id,
@@ -1308,7 +1977,7 @@ final class ChannelDTO_Tests: XCTestCase {
             cid: cid,
             isShadowed: true
         )
-        
+
         let message2: MessagePayload = .dummy(
             messageId: .unique,
             authorUserId: anotherUser.id,
@@ -1316,7 +1985,7 @@ final class ChannelDTO_Tests: XCTestCase {
             createdAt: shadowedMessageFromAnotherUser.createdAt.addingTimeInterval(-1),
             cid: cid
         )
-        
+
         let channelPayload: ChannelPayload = .dummy(
             channel: .dummy(cid: cid),
             messages: [
@@ -1337,17 +2006,424 @@ final class ChannelDTO_Tests: XCTestCase {
         let channel = try XCTUnwrap(
             database.viewContext.channel(cid: cid)?.asModel()
         )
-        
+
         // THEN
         XCTAssertEqual(
             Set(channel.latestMessages.map(\.id)),
-            Set([message1.id, deletedMessageFromCurrentUser.id, shadowedMessageFromAnotherUser.id])
+            Set([message1.id, deletedMessageFromCurrentUser.id, deletedMessageFromAnotherUser.id])
         )
+    }
+
+    // MARK: Max depth
+
+    func test_asModel_onlyFetchesUntilCertainRelationship() throws {
+        let cid = ChannelId.unique
+
+        // GIVEN
+        let quoted3MessagePayload: MessagePayload = .dummy(
+            messageId: .unique,
+            cid: cid
+        )
+
+        let quoted2MessagePayload: MessagePayload = .dummy(
+            messageId: .unique,
+            quotedMessageId: quoted3MessagePayload.id,
+            quotedMessage: quoted3MessagePayload,
+            cid: cid
+        )
+
+        let message1Payload: MessagePayload = .dummy(
+            messageId: .unique,
+            quotedMessageId: quoted2MessagePayload.id,
+            quotedMessage: quoted2MessagePayload,
+            cid: cid
+        )
+
+        let channelPayload: ChannelPayload = .dummy(
+            channel: .dummy(cid: cid),
+            messages: [
+                message1Payload
+            ]
+        )
+        let userId = UserId.unique
+
+        try database.writeSynchronously { session in
+            try session.saveCurrentUser(payload: .dummy(userId: userId, role: .user))
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        // WHEN
+        let channel = try loadChannel(cid: cid)
+
+        // THEN
+        let message1 = try XCTUnwrap(channel.latestMessages.first { $0.id == message1Payload.id })
+        let quoted2Message = try XCTUnwrap(message1.quotedMessage)
+        XCTAssertEqual(quoted2Message.id, quoted2MessagePayload.id)
+
+        let quoted3Message = quoted2Message.quotedMessage
+        // 3rd level of depth is not mapped
+        XCTAssertNil(quoted3Message)
+    }
+
+    func test_asModel_whenModelTransformerProvided_transformsValues() throws {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let channelPayload = dummyPayload(with: cid)
+
+        let transformer = CustomChannelTransformer()
+        var config = ChatClientConfig(apiKeyString: .unique)
+        config.modelsTransformer = transformer
+        database = DatabaseContainer_Spy(
+            kind: .inMemory,
+            chatClientConfig: config
+        )
+        
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: channelPayload)
+        }
+        
+        // WHEN
+        let channel = try loadChannel(cid: cid)
+        
+        // THEN
+        XCTAssertEqual(channel.cid, transformer.mockTransformedChannel.cid)
+    }
+
+    func test_saveChannel_savesAndLoadsDraftMessage() throws {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let draftMessagePayload = DraftMessagePayload(
+            id: .unique,
+            text: "Draft message text",
+            command: nil,
+            args: nil,
+            showReplyInChannel: false,
+            mentionedUsers: nil,
+            extraData: ["custom_key": .string("custom_value")],
+            attachments: nil,
+            isSilent: false
+        )
+
+        let channelPayload = ChannelPayload(
+            channel: .dummy(cid: cid),
+            watcherCount: nil,
+            watchers: nil,
+            members: [],
+            membership: nil,
+            messages: [],
+            pendingMessages: nil,
+            pinnedMessages: [],
+            channelReads: [],
+            isHidden: nil,
+            draft: DraftPayload.dummy(
+                cid: cid,
+                channelPayload: nil,
+                createdAt: .init(),
+                message: draftMessagePayload,
+                quotedMessage: nil,
+                parentId: nil,
+                parentMessage: nil
+            ),
+            activeLiveLocations: [.dummy(latitude: 10, longitude: 10)],
+            pushPreference: nil
+        )
+
+        // WHEN
+        try database.writeSynchronously { session in
+            try session.saveCurrentUser(payload: .dummy(userId: .unique, role: .admin))
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        // THEN
+        let channel = try loadChannel(cid: cid)
+        let draftMessage = try XCTUnwrap(channel.draftMessage)
+        XCTAssertEqual(draftMessage.id, draftMessagePayload.id)
+        XCTAssertEqual(draftMessage.text, draftMessagePayload.text)
+        XCTAssertEqual(draftMessage.extraData, draftMessagePayload.custom)
+        XCTAssertEqual(channel.activeLiveLocations.first?.latitude, 10)
+        XCTAssertEqual(channel.activeLiveLocations.first?.longitude, 10)
+    }
+
+    func test_saveChannel_savesThreads() throws {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let channelDetail: ChannelDetailPayload = .dummy(cid: cid)
+        let parentMessageId: MessageId = .unique
+        let reply: MessagePayload = .dummy(messageId: .unique, parentId: parentMessageId, cid: cid)
+        let threadPayload: ThreadPayload = .dummy(
+            parentMessageId: parentMessageId,
+            channel: channelDetail,
+            replyCount: 1,
+            title: "Thread title",
+            latestReplies: [reply]
+        )
+        let channelPayload: ChannelPayload = .dummy(channel: channelDetail, threads: [threadPayload])
+
+        // WHEN
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        // THEN
+        let thread = try database.readSynchronously { session in
+            try XCTUnwrap(session.thread(parentMessageId: parentMessageId, cache: nil)?.asModel())
+        }
+        XCTAssertEqual(thread.parentMessageId, parentMessageId)
+        XCTAssertEqual(thread.title, "Thread title")
+        XCTAssertEqual(thread.channel.cid, cid)
+        XCTAssertEqual(thread.latestReplies.map(\.id), [reply.id])
+
+        let threadIds = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: cid)).threads.map(\.parentMessageId)
+        }
+        XCTAssertEqual(threadIds, [parentMessageId])
+    }
+
+    func test_saveChannel_whenThreadIsNotEnriched_skipsThreadAndSavesChannel() throws {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let channelDetail: ChannelDetailPayload = .dummy(cid: cid)
+        let parentMessageId: MessageId = .unique
+        let threadPayload = ThreadPayload(
+            activeParticipantCount: 0,
+            channelCid: cid.rawValue,
+            createdAt: .unique,
+            createdByUserId: .unique,
+            custom: [:],
+            latestReplies: [],
+            parentMessageId: parentMessageId,
+            participantCount: 0,
+            replyCount: 0,
+            title: "",
+            updatedAt: .unique
+        )
+        let channelPayload: ChannelPayload = .dummy(channel: channelDetail, threads: [threadPayload])
+
+        // WHEN
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        // THEN
+        let threadIds = try database.readSynchronously { session in
+            try XCTUnwrap(session.channel(cid: cid)).threads.map(\.parentMessageId)
+        }
+        XCTAssertTrue(threadIds.isEmpty)
+    }
+
+    func test_saveChannel_whenDraftMessageIsNil_removesExistingDraft() throws {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let draftMessagePayload = DraftMessagePayload(
+            id: .unique,
+            text: "Draft message text",
+            command: nil,
+            args: nil,
+            showReplyInChannel: false,
+            mentionedUsers: nil,
+            extraData: [:],
+            attachments: nil,
+            isSilent: false
+        )
+
+        let channelPayload = ChannelPayload(
+            channel: .dummy(cid: cid),
+            watcherCount: nil,
+            watchers: nil,
+            members: [],
+            membership: nil,
+            messages: [],
+            pendingMessages: nil,
+            pinnedMessages: [],
+            channelReads: [],
+            isHidden: nil,
+            draft: DraftPayload.dummy(
+                cid: cid,
+                channelPayload: nil,
+                createdAt: .init(),
+                message: draftMessagePayload,
+                quotedMessage: nil,
+                parentId: nil,
+                parentMessage: nil
+            ),
+            activeLiveLocations: [],
+            pushPreference: nil
+        )
+
+        try database.writeSynchronously { session in
+            try session.saveCurrentUser(payload: .dummy(userId: .unique, role: .admin))
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        // Verify draft exists
+        var channel = try XCTUnwrap(database.viewContext.channel(cid: cid)?.asModel())
+        XCTAssertNotNil(channel.draftMessage)
+
+        // WHEN
+        // Save channel without draft
+        let payloadWithoutDraft = ChannelPayload(
+            channel: .dummy(cid: cid),
+            watcherCount: nil,
+            watchers: nil,
+            members: [],
+            membership: nil,
+            messages: [],
+            pendingMessages: nil,
+            pinnedMessages: [],
+            channelReads: [],
+            isHidden: nil,
+            draft: nil,
+            activeLiveLocations: [],
+            pushPreference: nil
+        )
+
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: payloadWithoutDraft)
+        }
+
+        // THEN
+        channel = try XCTUnwrap(database.viewContext.channel(cid: cid)?.asModel())
+        XCTAssertNil(channel.draftMessage)
+    }
+
+    func test_saveChannel_draftMessageWithQuotedMessage() throws {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let quotedMessagePayload: MessagePayload = .dummy(
+            messageId: .unique,
+            authorUserId: .unique,
+            text: "Quoted message"
+        )
+        let draftMessagePayload = DraftMessagePayload(
+            id: .unique,
+            text: "Draft message text",
+            command: nil,
+            args: nil,
+            showReplyInChannel: false,
+            mentionedUsers: nil,
+            extraData: [:],
+            attachments: nil,
+            isSilent: false
+        )
+
+        let channelPayload = ChannelPayload(
+            channel: .dummy(cid: cid),
+            watcherCount: nil,
+            watchers: nil,
+            members: [],
+            membership: nil,
+            messages: [],
+            pendingMessages: nil,
+            pinnedMessages: [],
+            channelReads: [],
+            isHidden: nil,
+            draft: DraftPayload.dummy(
+                cid: cid,
+                channelPayload: nil,
+                createdAt: .init(),
+                message: draftMessagePayload,
+                quotedMessage: quotedMessagePayload,
+                parentId: nil,
+                parentMessage: nil
+            ),
+            activeLiveLocations: [],
+            pushPreference: nil
+        )
+
+        // WHEN
+        try database.writeSynchronously { session in
+            try session.saveCurrentUser(payload: .dummy(userId: .unique, role: .admin))
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        // THEN
+        let channel = try loadChannel(cid: cid)
+        let draftMessage = try XCTUnwrap(channel.draftMessage)
+        let quotedMessage = try XCTUnwrap(draftMessage.quotedMessage)
+        XCTAssertEqual(quotedMessage.id, quotedMessagePayload.id)
+        XCTAssertEqual(quotedMessage.text, quotedMessagePayload.text)
+    }
+
+    func test_saveChannel_draftMessageWithParentMessage() throws {
+        // GIVEN
+        let cid: ChannelId = .unique
+        let parentMessagePayload: MessagePayload = .dummy(
+            messageId: .unique,
+            authorUserId: .unique,
+            text: "Parent message"
+        )
+        let draftMessagePayload = DraftMessagePayload(
+            id: .unique,
+            text: "Draft message text",
+            command: nil,
+            args: nil,
+            showReplyInChannel: false,
+            mentionedUsers: nil,
+            extraData: [:],
+            attachments: nil,
+            isSilent: false
+        )
+
+        let channelPayload = ChannelPayload(
+            channel: .dummy(cid: cid),
+            watcherCount: nil,
+            watchers: nil,
+            members: [],
+            membership: nil,
+            messages: [],
+            pendingMessages: nil,
+            pinnedMessages: [],
+            channelReads: [],
+            isHidden: nil,
+            draft: DraftPayload.dummy(
+                cid: cid,
+                channelPayload: nil,
+                createdAt: .init(),
+                message: draftMessagePayload,
+                quotedMessage: nil,
+                parentId: parentMessagePayload.id,
+                parentMessage: parentMessagePayload
+            ),
+            activeLiveLocations: [],
+            pushPreference: nil
+        )
+
+        // WHEN
+        try database.writeSynchronously { session in
+            try session.saveCurrentUser(payload: .dummy(userId: .unique, role: .admin))
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        // THEN
+        let channel = try loadChannel(cid: cid)
+        let draftMessage = try XCTUnwrap(channel.draftMessage)
+        XCTAssertEqual(draftMessage.threadId, parentMessagePayload.id)
+        let parentMessageId = try XCTUnwrap(draftMessage.threadId)
+        XCTAssertEqual(parentMessageId, parentMessagePayload.id)
     }
 }
 
 private extension ChannelDTO_Tests {
+    func createChannelWithEmptyPaginationCursors() throws -> ChannelDTO {
+        let channelPayload = ChannelPayload.dummy()
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: channelPayload)
+        }
+
+        let channel = try XCTUnwrap(
+            database.viewContext.channel(cid: channelPayload.channel.cid)
+        )
+        return channel
+    }
+
     func channel(with cid: ChannelId) throws -> ChatChannel {
         try XCTUnwrap(database.viewContext.channel(cid: cid)).asModel()
+    }
+}
+
+private class CustomChannelTransformer: StreamModelsTransformer, @unchecked Sendable {
+    var mockTransformedChannel: ChatChannel = .mock(cid: .init(type: .messaging, id: "transformed"))
+    func transform(channel: ChatChannel) -> ChatChannel {
+        mockTransformedChannel
     }
 }

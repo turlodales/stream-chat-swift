@@ -1,12 +1,12 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
 import UIKit
 
 /// Delegate responsible for easily assigning swipe action buttons to collectionView cells.
-public protocol SwipeableViewDelegate: AnyObject {
+@MainActor public protocol SwipeableViewDelegate: AnyObject {
     /// Prepares the receiver that showing of actionViews will ocur.
     /// use this method to for example close other actionViews in your collectionView/tableView.
     /// - Parameter indexPath: IndexPath of `collectionViewCell` which asks for action buttons.
@@ -142,7 +142,7 @@ open class SwipeableView: _View, ComponentsProvider, UIGestureRecognizerDelegate
         }
     }
 
-    override public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    override open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let recognizer = gestureRecognizer as? UIPanGestureRecognizer else {
             return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
@@ -153,11 +153,23 @@ open class SwipeableView: _View, ComponentsProvider, UIGestureRecognizerDelegate
         //
         // *This practically means on panning the cell we don't accidentally scroll the list
         let translation = recognizer.translation(in: self)
+        if abs(translation.x) <= abs(translation.y) {
+            return false
+        }
 
-        return abs(translation.x) > abs(translation.y)
+        // Additionally, if the gesture recognizer started from the left edge of the screen,
+        // ignore this recognizer so that it doesn't steal the gesture from UINavigationController's
+        // interactivePopGestureRecognizer.
+        let edgeThreshold: CGFloat = 30
+        let location = recognizer.location(in: self)
+        if location.x < edgeThreshold {
+            return false
+        }
+
+        return true
     }
 
-    public func gestureRecognizer(
+    open func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
@@ -169,7 +181,7 @@ open class SwipeableView: _View, ComponentsProvider, UIGestureRecognizerDelegate
         true
     }
 
-    public func gestureRecognizer(
+    open func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {

@@ -1,0 +1,626 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+@testable import StreamChat
+@testable import StreamChatTestTools
+import XCTest
+
+final class StreamCDNStorage_Tests: XCTestCase {
+    func test_uploadFileEncoderIsCalledWithEndpoint() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        // Setup mock encoder response (it's not actually used, we just need to return something)
+        let request = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(request)
+
+        // Create a test endpoint
+        let attachmentId = AttachmentId.unique
+        let expectedEndpoint: Endpoint<UploadChannelResponse> = .uploadChannelImage(
+            type: attachmentId.cid.type.rawValue,
+            id: attachmentId.cid.id,
+            multipartFormData: MultipartFormData(Data(), fileName: "")
+        )
+
+        // Simulate file uploading
+        client.uploadAttachment(
+            .dummy(
+                id: attachmentId,
+                uploadingState: .init(
+                    localFileURL: .localYodaImage,
+                    state: .pendingUpload,
+                    file: .init(type: .jpeg, size: 0, mimeType: nil)
+                )
+            ),
+            options: .init(),
+            completion: { (_: Result<UploadedFile, Error>) in }
+        )
+
+        // Check the encoder is called with the correct endpoint
+        let endpoint = builder.encoder.encodeRequest_endpoints.first
+        XCTAssertEqual(endpoint?.path.value, expectedEndpoint.path.value)
+        XCTAssertEqual(endpoint?.method, expectedEndpoint.method)
+    }
+    
+    func test_standaloneUploadFileEncoderIsCalledWithEndpoint() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        // Setup mock encoder response (it's not actually used, we just need to return something)
+        let request = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(request)
+
+        // Create a test endpoint
+        let expectedEndpoint: Endpoint<ImageUploadResponse> = .uploadImage(multipartFormData: MultipartFormData(Data(), fileName: ""))
+
+        // Simulate file uploading
+        client.uploadAttachment(
+            localUrl: .localYodaImage,
+            options: .init(),
+            completion: { (_: Result<UploadedFile, Error>) in }
+        )
+
+        // Check the encoder is called with the correct endpoint
+        let endpoint = builder.encoder.encodeRequest_endpoints.first
+        XCTAssertEqual(endpoint?.path.value, expectedEndpoint.path.value)
+        XCTAssertEqual(endpoint?.method, expectedEndpoint.method)
+    }
+
+    func test_uploadFileEncoderFailingToEncode() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+        // Setup mock encoder response to fail with `testError`
+        let testError = TestError()
+        builder.encoder.encodeRequest = .failure(testError)
+
+        // Create a request and assert the result is failure
+        let result: Result<UploadedFile, Error> = try waitFor {
+            client.uploadAttachment(
+                localUrl: .localYodaImage,
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        XCTAssertEqual(result.error as? TestError, testError)
+    }
+    
+    func test_uploadStandaloneFileEncoderFailingToEncode() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+        // Setup mock encoder response to fail with `testError`
+        let testError = TestError()
+        builder.encoder.encodeRequest = .failure(testError)
+
+        // Create a request and assert the result is failure
+        let result: Result<UploadedFile, Error> = try waitFor {
+            client.uploadAttachment(
+                .dummy(
+                    uploadingState: .init(
+                        localFileURL: .localYodaImage,
+                        state: .pendingUpload,
+                        file: .init(type: .jpeg, size: 0, mimeType: nil)
+                    )
+                ),
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        XCTAssertEqual(result.error as? TestError, testError)
+    }
+
+    func test_uploadFileSuccess() throws {
+        let builder = TestBuilder()
+        let decoder = builder.decoder
+        let client = builder.make()
+
+        // Create a test request and set it as a response from the encoder
+        let testRequest = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(testRequest)
+
+        // Set up a successful mock network response for the request
+        let mockResponseData = try JSONEncoder.stream.encode(["file": URL.unique()])
+        URLProtocol_Mock.mockResponse(request: testRequest, statusCode: 234, responseBody: mockResponseData)
+
+        // Set up a decoder response
+        // ⚠️ Watch out: the user is different there, so we can distinguish between the incoming data
+        // to the encoder, and the outgoing data).
+        let fileURL = URL.unique()
+        let thumbnailURL = URL.unique()
+        let payload = FileUploadResponse.dummy(file: fileURL.absoluteString, thumbUrl: thumbnailURL.absoluteString)
+        decoder.decodeRequestResponse = .success(payload)
+
+        // Create a request and wait for the completion block
+        let result: Result<UploadedFile, Error> = try waitFor {
+            client.uploadAttachment(
+                .dummy(
+                    uploadingState: .init(
+                        localFileURL: .localYodaImage,
+                        state: .pendingUpload,
+                        file: .init(type: .jpeg, size: 0, mimeType: nil)
+                    )
+                ),
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        // Check the incoming data to the encoder is the URLResponse and data from the network
+        XCTAssertEqual(decoder.decodeRequestResponse_data, mockResponseData)
+        XCTAssertEqual(decoder.decodeRequestResponse_response?.statusCode, 234)
+
+        // Check the outgoing data is from the decoder
+        XCTAssertEqual(try result.get().fileURL, fileURL)
+        XCTAssertEqual(try result.get().thumbnailURL, thumbnailURL)
+        // Default Stream CDN does not carry an attachment back; the SDK uses the original attachment.
+        XCTAssertNil(try result.get().attachment)
+    }
+
+    func test_uploadFileResponse_withoutFile_fails() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+        let testRequest = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(testRequest)
+        builder.decoder.decodeRequestResponse = .success(FileUploadResponse.dummy())
+        URLProtocol_Mock.mockResponse(request: testRequest, statusCode: 200)
+
+        let result: Result<UploadedFile, Error> = try waitFor {
+            client.uploadAttachment(
+                localUrl: .localYodaImage,
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        XCTAssertTrue(result.error is ClientError.Unknown)
+    }
+    
+    func test_standaloneUploadFileSuccess() throws {
+        let builder = TestBuilder()
+        let decoder = builder.decoder
+        let client = builder.make()
+
+        // Create a test request and set it as a response from the encoder
+        let testRequest = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(testRequest)
+
+        // Set up a successful mock network response for the request
+        let url = URL.unique()
+        let mockResponseData = try JSONEncoder.stream.encode(["file": url])
+        URLProtocol_Mock.mockResponse(request: testRequest, statusCode: 234, responseBody: mockResponseData)
+        
+        let responseURL = URL.unique()
+        let response = FileUploadResponse.dummy(file: responseURL.absoluteString, thumbUrl: URL.unique().absoluteString)
+        decoder.decodeRequestResponse = .success(response)
+
+        // Create a request and wait for the completion block
+        let result: Result<UploadedFile, Error> = try waitFor {
+            client.uploadAttachment(
+                localUrl: .localYodaImage,
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        // Check the incoming data to the encoder is the URLResponse and data from the network
+        XCTAssertEqual(decoder.decodeRequestResponse_data, mockResponseData)
+        XCTAssertEqual(decoder.decodeRequestResponse_response?.statusCode, 234)
+
+        XCTAssertEqual(try result.get().fileURL, responseURL)
+    }
+
+    func test_uploadFileFailure() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+        let decoder = builder.decoder
+
+        // Create a test request and set it as a response from the encoder
+        let testRequest = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(testRequest)
+
+        // We cannot use `TestError` since iOS14 wraps this into another error
+        let networkError = NSError(domain: "TestNetworkError", code: -1, userInfo: nil)
+        let encoderError = TestError()
+
+        // Set up a mock network response from the request
+        URLProtocol_Mock.mockResponse(request: testRequest, statusCode: 444, error: networkError)
+
+        // Set up a decoder response to return `encoderError`
+        decoder.decodeRequestResponse = .failure(encoderError)
+
+        // Create a request and wait for the completion block
+        let result: Result<UploadedFile, Error> = try waitFor {
+            client.uploadAttachment(
+                .dummy(
+                    uploadingState: .init(
+                        localFileURL: .localYodaImage,
+                        state: .pendingUpload,
+                        file: .init(type: .jpeg, size: 0, mimeType: nil)
+                    )
+                ),
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        // Check the incoming error to the encoder is the error from the response
+        XCTAssertNotNil(decoder.decodeRequestResponse_error)
+
+        // We have to compare error codes, since iOS14 wraps network errors into `NSURLError`
+        // in which we cannot retrieve the wrapper error
+        XCTAssertEqual((decoder.decodeRequestResponse_error as NSError?)?.code, networkError.code)
+
+        // Check the outgoing data is from the decoder
+        XCTAssertEqual(result.error as? TestError, encoderError)
+    }
+    
+    func test_standaloneUploadFileFailure() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+        let decoder = builder.decoder
+
+        // Create a test request and set it as a response from the encoder
+        let testRequest = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(testRequest)
+
+        // We cannot use `TestError` since iOS14 wraps this into another error
+        let networkError = NSError(domain: "TestNetworkError", code: -1, userInfo: nil)
+        let encoderError = TestError()
+
+        // Set up a mock network response from the request
+        URLProtocol_Mock.mockResponse(request: testRequest, statusCode: 444, error: networkError)
+
+        // Set up a decoder response to return `encoderError`
+        decoder.decodeRequestResponse = .failure(encoderError)
+
+        // Create a request and wait for the completion block
+        let result: Result<UploadedFile, Error> = try waitFor {
+            client.uploadAttachment(
+                localUrl: .localYodaImage,
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        // Check the incoming error to the encoder is the error from the response
+        XCTAssertNotNil(decoder.decodeRequestResponse_error)
+
+        // We have to compare error codes, since iOS14 wraps network errors into `NSURLError`
+        // in which we cannot retrieve the wrapper error
+        XCTAssertEqual((decoder.decodeRequestResponse_error as NSError?)?.code, networkError.code)
+
+        // Check the outgoing data is from the decoder
+        XCTAssertEqual(result.error as? TestError, encoderError)
+    }
+
+    func test_callingUploadFile_createsNetworkRequest() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        let uniquePath: String = .unique
+        let uniqueQueryItem: String = .unique
+        var testRequest = URLRequest(url: URL(string: "test://test.test/\(uniquePath)?item=\(uniqueQueryItem)")!)
+        testRequest.httpMethod = "post"
+        builder.encoder.encodeRequest = .success(testRequest)
+
+        // Simulate file uploading.
+        client.uploadAttachment(
+            .dummy(
+                uploadingState: .init(
+                    localFileURL: .localYodaImage,
+                    state: .pendingUpload,
+                    file: .init(type: .jpeg, size: 0, mimeType: nil)
+                )
+            ),
+            options: .init(),
+            completion: { (_: Result<UploadedFile, Error>) in }
+        )
+
+        // The multipart body/`Content-Type` are built by `RequestEncoder` (see RequestEncoder_Tests);
+        // here we just verify the encoder's request is dispatched to the network.
+        AssertNetworkRequest(
+            method: .post,
+            path: "/" + uniquePath,
+            headers: nil,
+            queryParameters: ["item": uniqueQueryItem],
+            body: nil
+        )
+    }
+    
+    // MARK: - Delete Attachment Tests
+    
+    func test_deleteAttachmentEncoderIsCalledWithEndpoint() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        // Setup mock encoder response (it's not actually used, we just need to return something)
+        let request = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(request)
+
+        // Create test values
+        let remoteURL = URL.unique()
+        let testEndpoint: Endpoint<EmptyResponse> = .init(
+            path: .deleteFile,
+            method: .delete,
+            queryItems: ["url": remoteURL.absoluteString]
+        )
+
+        // Simulate file deletion
+        client.deleteAttachment(
+            remoteUrl: remoteURL,
+            options: .init(),
+            completion: { _ in }
+        )
+
+        // Check the encoder is called with the correct endpoint
+        XCTAssertEqual(builder.encoder.encodeRequest_endpoints.first, AnyEndpoint(testEndpoint))
+    }
+    
+    func test_deleteAttachmentEncoderFailingToEncode() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+        
+        // Setup mock encoder response to fail with `testError`
+        let testError = TestError()
+        builder.encoder.encodeRequest = .failure(testError)
+
+        let remoteURL = URL.unique()
+
+        // Create a request and assert the result is failure
+        let result: Error? = try waitFor {
+            client.deleteAttachment(
+                remoteUrl: remoteURL,
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        XCTAssertEqual(result as? TestError, testError)
+    }
+    
+    func test_deleteAttachmentSuccess() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        // Create a test request and set it as a response from the encoder
+        let testRequest = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(testRequest)
+
+        // Set up a successful mock network response for the request (no body needed for delete)
+        URLProtocol_Mock.mockResponse(request: testRequest, statusCode: 200)
+
+        let remoteURL = URL.unique()
+
+        // Create a request and wait for the completion block
+        let result: Error? = try waitFor {
+            client.deleteAttachment(
+                remoteUrl: remoteURL,
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        // Check the result is successful (nil error)
+        XCTAssertNil(result)
+    }
+    
+    func test_deleteAttachment_deallocatedStorage_callsCompletionWithError() throws {
+        let builder = TestBuilder()
+        builder.encoder.encodeRequest = nil
+        var client: StreamCDNStorage? = builder.make()
+
+        let expectation = XCTestExpectation(description: "Completion called")
+        nonisolated(unsafe) var receivedError: Error?
+
+        client?.deleteAttachment(
+            remoteUrl: .unique(),
+            options: .init()
+        ) { error in
+            receivedError = error
+            expectation.fulfill()
+        }
+
+        client = nil
+        builder.encoder.encodeRequest_completion?(.success(URLRequest(url: .unique())))
+
+        wait(for: [expectation], timeout: 2)
+        XCTAssertNotNil(receivedError)
+    }
+
+    func test_uploadAttachment_deallocatedStorage_callsCompletionWithError() throws {
+        let builder = TestBuilder()
+        builder.encoder.encodeRequest = nil
+        var client: StreamCDNStorage? = builder.make()
+
+        let expectation = XCTestExpectation(description: "Completion called")
+        nonisolated(unsafe) var receivedResult: Result<UploadedFile, Error>?
+
+        client?.uploadAttachment(
+            .dummy(
+                uploadingState: .init(
+                    localFileURL: .localYodaImage,
+                    state: .pendingUpload,
+                    file: .init(type: .jpeg, size: 0, mimeType: nil)
+                )
+            ),
+            options: .init()
+        ) { result in
+            receivedResult = result
+            expectation.fulfill()
+        }
+
+        client = nil
+        builder.encoder.encodeRequest_completion?(.success(URLRequest(url: .unique())))
+
+        wait(for: [expectation], timeout: 2)
+        XCTAssertNotNil(receivedResult?.error)
+    }
+
+    // MARK: - Edge Cases
+
+    func test_uploadAttachment_withoutUploadingState_fails() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+        builder.encoder.encodeRequest = .success(URLRequest(url: .unique()))
+
+        let result: Result<UploadedFile, Error> = try waitFor {
+            client.uploadAttachment(
+                .dummy(),
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        XCTAssertNotNil(result.error)
+    }
+
+    func test_uploadAttachmentLocalUrl_invalidURL_fails() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+        builder.encoder.encodeRequest = .success(URLRequest(url: .unique()))
+
+        let result: Result<UploadedFile, Error> = try waitFor {
+            client.uploadAttachment(
+                localUrl: URL(string: "file:///nonexistent/path/file.txt")!,
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        XCTAssertNotNil(result.error)
+    }
+
+    func test_deleteAttachment_imageExtension_usesImageType() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        let request = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(request)
+
+        let remoteURL = URL(string: "https://cdn.example.com/photo.jpg")!
+        let testEndpoint: Endpoint<EmptyResponse> = .init(
+            path: .deleteImage,
+            method: .delete,
+            queryItems: ["url": remoteURL.absoluteString]
+        )
+
+        client.deleteAttachment(
+            remoteUrl: remoteURL,
+            options: .init(),
+            completion: { _ in }
+        )
+
+        XCTAssertEqual(builder.encoder.encodeRequest_endpoints.first, AnyEndpoint(testEndpoint))
+    }
+
+    func test_uploadAttachment_withProgress_reportsProgress() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        let testRequest = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(testRequest)
+
+        let mockResponseData = try JSONEncoder.stream.encode(["file": URL.unique()])
+        URLProtocol_Mock.mockResponse(request: testRequest, statusCode: 200, responseBody: mockResponseData)
+        let payload = FileUploadResponse.dummy(file: URL.unique().absoluteString)
+        builder.decoder.decodeRequestResponse = .success(payload)
+
+        nonisolated(unsafe) var progressCalled = false
+        let completionExpectation = expectation(description: "Upload completed")
+
+        client.uploadAttachment(
+            .dummy(
+                uploadingState: .init(
+                    localFileURL: .localYodaImage,
+                    state: .pendingUpload,
+                    file: .init(type: .jpeg, size: 0, mimeType: nil)
+                )
+            ),
+            options: .init(progress: { _ in
+                progressCalled = true
+            }),
+            completion: { (_: Result<UploadedFile, Error>) in
+                completionExpectation.fulfill()
+            }
+        )
+
+        wait(for: [completionExpectation], timeout: 5)
+        XCTAssertTrue(progressCalled)
+    }
+
+    func test_uploadAttachmentLocalUrl_imageFile_usesImageEndpoint() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        let request = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(request)
+
+        let expectedEndpoint: Endpoint<ImageUploadResponse> = .uploadImage(multipartFormData: MultipartFormData(Data(), fileName: ""))
+
+        client.uploadAttachment(
+            localUrl: .localYodaImage,
+            options: .init(),
+            completion: { (_: Result<UploadedFile, Error>) in }
+        )
+
+        let endpoint = builder.encoder.encodeRequest_endpoints.first
+        XCTAssertEqual(endpoint?.path.value, expectedEndpoint.path.value)
+        XCTAssertEqual(endpoint?.method, expectedEndpoint.method)
+    }
+
+    func test_uploadAttachmentLocalUrl_nonImageFile_usesFileEndpoint() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        let request = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(request)
+
+        let expectedEndpoint: Endpoint<FileUploadResponse> = .uploadFile(multipartFormData: MultipartFormData(Data(), fileName: ""))
+
+        let tempDir = NSTemporaryDirectory()
+        let tempFile = URL(fileURLWithPath: tempDir).appendingPathComponent("test-\(UUID().uuidString).pdf")
+        try Data("test".utf8).write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        client.uploadAttachment(
+            localUrl: tempFile,
+            options: .init(),
+            completion: { (_: Result<UploadedFile, Error>) in }
+        )
+
+        let endpoint = builder.encoder.encodeRequest_endpoints.first
+        XCTAssertEqual(endpoint?.path.value, expectedEndpoint.path.value)
+        XCTAssertEqual(endpoint?.method, expectedEndpoint.method)
+    }
+
+    func test_deleteAttachmentFailure() throws {
+        let builder = TestBuilder()
+        let client = builder.make()
+
+        // Create a test request and set it as a response from the encoder
+        let testRequest = URLRequest(url: .unique())
+        builder.encoder.encodeRequest = .success(testRequest)
+
+        // We cannot use `TestError` since iOS14 wraps this into another error
+        let networkError = NSError(domain: "TestNetworkError", code: -1, userInfo: nil)
+
+        // Set up a mock network response from the request with error
+        URLProtocol_Mock.mockResponse(request: testRequest, statusCode: 404, error: networkError)
+
+        let remoteURL = URL.unique()
+
+        // Create a request and wait for the completion block
+        let result: Error? = try waitFor {
+            client.deleteAttachment(
+                remoteUrl: remoteURL,
+                options: .init(),
+                completion: $0
+            )
+        }
+
+        // Check the error is propagated
+        XCTAssertNotNil(result)
+    }
+}

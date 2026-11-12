@@ -1,12 +1,12 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
 import Foundation
 
 /// Updates current user data to the backend and updates local storage.
-class CurrentUserUpdater: Worker {
+class CurrentUserUpdater: Worker, @unchecked Sendable {
     /// Updates the current user data.
     ///
     /// By default all data is `nil`, and it won't be updated unless a value is provided.
@@ -15,42 +15,70 @@ class CurrentUserUpdater: Worker {
     ///   - currentUserId: The current user identifier.
     ///   - name: Optionally provide a new name to be updated.
     ///   - imageURL: Optionally provide a new image to be updated.
+    ///   - privacySettings: The privacy settings of the user. Example: If the user does not want to expose typing events or read events.
     ///   - userExtraData: Optionally provide new user extra data to be updated.
+    ///   - unset: Existing values for specified fields are removed. For example, `image` or `name`.
     ///   - completion: Called when user is successfuly updated, or with error.
     func updateUserData(
         currentUserId: UserId,
-        name: String? = nil,
-        imageURL: URL? = nil,
-        userExtraData: [String: RawJSON]? = nil,
-        completion: ((Error?) -> Void)? = nil
+        name: String?,
+        imageURL: URL?,
+        privacySettings: UserPrivacySettings?,
+        role: UserRole?,
+        teamsRole: [TeamId: UserRole]?,
+        userExtraData: [String: RawJSON]?,
+        unset: Set<String>,
+        completion: (@Sendable (Error?) -> Void)? = nil
     ) {
-        let params: [Any?] = [name, imageURL, userExtraData]
-        guard !params.allSatisfy({ $0 == nil }) else {
+        let params: [Any?] = [imageURL, name, privacySettings, role, teamsRole, userExtraData]
+        guard !params.allSatisfy({ $0 == nil }) || !unset.isEmpty else {
             log.warning("Update user request not performed. All provided data was nil.")
             completion?(nil)
             return
         }
-        
-        let payload = UserUpdateRequestBody(
-            name: name,
-            imageURL: imageURL,
-            extraData: userExtraData
-        )
-        
+
+        var set = userExtraData ?? [:]
+        if let name = name {
+            set[StringCodingKey.name.stringValue] = .string(name)
+        }
+        if let imageURL = imageURL {
+            set[StringCodingKey.image.stringValue] = .string(imageURL.absoluteString)
+        }
+        if let privacySettings = privacySettings {
+            guard let rawJSON = privacySettings.rawJSON else {
+                completion?(ClientError.InvalidJSON("Failed to encode privacy settings: \(privacySettings)"))
+                return
+            }
+            set[StringCodingKey.privacySettings.stringValue] = rawJSON
+        }
+        if let role = role {
+            set[StringCodingKey.role.stringValue] = .string(role.rawValue)
+        }
+        if let teamsRole = teamsRole {
+            set[StringCodingKey.teamsRole.stringValue] = .dictionary(teamsRole.mapValues { .string($0.rawValue) })
+        }
+
+        let request = UpdateUsersPartialRequest(users: [
+            UpdateUserPartialRequest(id: currentUserId, set: set, unset: Array(unset))
+        ])
+
         apiClient
-            .request(endpoint: .updateUser(id: currentUserId, payload: payload)) { [weak self] in
+            .request(endpoint: .updateUsersPartial(updateUsersPartialRequest: request)) { [weak self] in
                 switch $0 {
                 case let .success(response):
+                    guard let user = response.users[currentUserId] else {
+                        completion?(ClientError.UserDoesNotExist(userId: currentUserId))
+                        return
+                    }
                     self?.database.write({ (session) in
-                        let userDTO = try session.saveUser(payload: response.user)
-                        session.currentUser?.user = userDTO
+                        try session.saveCurrentUser(fullResponse: user)
                     }) { completion?($0) }
                 case let .failure(error):
                     completion?(error)
                 }
             }
     }
-    
+
     /// Registers a device for push notifications to the current user.
     /// `setUser` must be called before calling this.
     /// - Parameters:
@@ -58,46 +86,67 @@ class CurrentUserUpdater: Worker {
     ///   - pushProvider: The push provider.
     ///   - providerName: Name of the push configuration in dashboard. If nil, default configuration will be used.
     ///   - currentUserId: The current user identifier.
+    ///   - forceRegistration: Sends the request even when the device is already registered.
     ///   - completion: Called when device is successfully registered, or with error.
     func addDevice(
         deviceId: DeviceId,
         pushProvider: PushProvider,
         providerName: String? = nil,
         currentUserId: UserId,
-        completion: ((Error?) -> Void)? = nil
+        forceRegistration: Bool = false,
+        completion: (@Sendable (Error?) -> Void)? = nil
     ) {
-        func saveCurrentDevice(deviceId: String, completion: ((Error?) -> Void)?) {
-            database.write({ (session) in
-                try session.saveCurrentDevice(deviceId)
-            }) { completion?($0) }
-        }
-        
-        // We already have the device saved
-        if let currentUserDTO = database.viewContext.currentUser,
-           currentUserDTO.devices.first(where: { $0.id == deviceId }) != nil {
-            saveCurrentDevice(deviceId: deviceId, completion: completion)
-            return
-        }
-        apiClient
-            .request(
-                endpoint: .addDevice(
-                    userId: currentUserId,
-                    deviceId: deviceId,
-                    pushProvider: pushProvider,
-                    providerName: providerName
-                ),
-                completion: { result in
-                    if let error = result.error {
-                        log.debug("Device token \(deviceId) failed to be registered on Stream's backend.\n Reason: \(error.localizedDescription)")
-                        completion?(error)
-                        return
-                    }
-                    log.debug("Device token \(deviceId) was successfully registered on Stream's backend.")
-                    saveCurrentDevice(deviceId: deviceId, completion: completion)
-                }
-            )
+        database.write(converting: { session in
+            let isRegistered = session.currentUser?.devices.contains {
+                $0.id == deviceId
+                    && $0.userId == currentUserId
+                    && $0.pushProvider == pushProvider.rawValue
+                    && $0.pushProviderName == providerName
+            } ?? false
+            try session.saveCurrentDevice(deviceId)
+            return isRegistered
+        }, completion: { result in
+            switch result {
+            case let .failure(databaseError):
+                completion?(databaseError)
+            case .success(true) where !forceRegistration:
+                log.debug("Device token \(deviceId) is already registered on Stream's backend.")
+                completion?(nil)
+            case .success:
+                self.apiClient
+                    .request(
+                        endpoint: .createDevice(
+                            createDeviceRequest: CreateDeviceRequest(
+                                id: deviceId,
+                                pushProvider: CreateDeviceRequest.PushProvider(rawValue: pushProvider.rawValue) ?? .unknown,
+                                pushProviderName: providerName
+                            )
+                        ),
+                        completion: { result in
+                            if let error = result.error {
+                                log.debug("Device token \(deviceId) failed to be registered on Stream's backend.\n Reason: \(error.localizedDescription)")
+                                completion?(error)
+                                return
+                            }
+                            log.debug("Device token \(deviceId) was successfully registered on Stream's backend.")
+                            let device = Device(
+                                createdAt: Date(),
+                                id: deviceId,
+                                pushProvider: pushProvider.rawValue,
+                                pushProviderName: providerName,
+                                userId: currentUserId
+                            )
+                            self.database.write({ session in
+                                _ = try session.saveCurrentUserDevices([device], clearExisting: false)
+                            }, completion: { _ in
+                                completion?(nil)
+                            })
+                        }
+                    )
+            }
+        })
     }
-    
+
     /// Removes a registered device from the current user.
     /// `setUser` must be called before calling this.
     /// - Parameters:
@@ -105,49 +154,337 @@ class CurrentUserUpdater: Worker {
     ///   - currentUserId: The current user identifier.
     ///   If `currentUser.devices` is not up-to-date, please make an `fetchDevices` call.
     ///   - completion: Called when device is successfully deregistered, or with error.
-    func removeDevice(id: DeviceId, currentUserId: UserId, completion: ((Error?) -> Void)? = nil) {
-        apiClient
-            .request(
-                endpoint: .removeDevice(
-                    userId: currentUserId,
-                    deviceId: id
-                ),
-                completion: { [weak self] result in
-                    if let error = result.error {
-                        completion?(error)
-                        return
+    func removeDevice(id: DeviceId, currentUserId: UserId, completion: (@Sendable (Error?) -> Void)? = nil) {
+        database.write({ session in
+            session.deleteDevice(id: id)
+        }, completion: { databaseError in
+            if let databaseError {
+                completion?(databaseError)
+                return
+            }
+            self.apiClient
+                .request(
+                    endpoint: .deleteDevice(id: id),
+                    completion: { result in
+                        completion?(result.error)
                     }
-                    self?.database.write({ (session) in
-                        session.deleteDevice(id: id)
-                    }) { completion?($0) }
-                }
-            )
+                )
+        })
     }
-    
+
     /// Updates the registered devices for the current user from backend.
     /// - Parameters:
     ///     - currentUserId: The current user identifier.
     ///     - completion: Called when request is successfully completed, or with error.
-    func fetchDevices(currentUserId: UserId, completion: ((Error?) -> Void)? = nil) {
-        apiClient.request(endpoint: .devices(userId: currentUserId)) { [weak self] result in
+    func fetchDevices(currentUserId: UserId, completion: (@Sendable (Result<[Device], Error>) -> Void)? = nil) {
+        apiClient.request(endpoint: .listDevices()) { [weak self] result in
             do {
-                let devicesPayload = try result.get()
+                nonisolated(unsafe) var devices = [Device]()
+                let response = try result.get()
                 self?.database.write({ (session) in
                     // Since this call always return all device, we want' to clear the existing ones
                     // to remove the deleted devices.
-                    try session.saveCurrentUserDevices(devicesPayload.devices, clearExisting: true)
-                }) { completion?($0) }
+                    devices = try session.saveCurrentUserDevices(
+                        response.devices,
+                        clearExisting: true
+                    )
+                    .map { try $0.asModel() }
+                }) { error in
+                    if let error {
+                        completion?(.failure(error))
+                    } else {
+                        completion?(.success(devices))
+                    }
+                }
             } catch {
-                completion?(error)
+                completion?(.failure(error))
             }
         }
     }
     
+    func deleteAllLocalAttachmentDownloads(completion: @escaping @Sendable (Error?) -> Void) {
+        let downloadsBaseURL = database.chatClientConfig.localAttachmentDownloadsFolderURL
+        database.write({ session in
+            // Try to delete all the local files even when one of them happens to fail.
+            var latestError: Error?
+            let attachments = session.allLocallyDownloadedAttachments()
+            for attachment in attachments {
+                if let localRelativePath = attachment.localRelativePath {
+                    let localURL = URL.streamAttachmentLocalStorageURL(
+                        forRelativePath: localRelativePath,
+                        baseURL: downloadsBaseURL
+                    )
+                    if FileManager.default.fileExists(atPath: localURL.path) {
+                        do {
+                            try FileManager.default.removeItem(at: localURL)
+                        } catch {
+                            latestError = error
+                        }
+                    }
+                }
+                attachment.clearLocalState()
+            }
+            log.info("Deleted local downloads for number of attachments: \(attachments.count)", subsystems: .database)
+            guard let latestError else { return }
+            throw latestError
+        }, completion: completion)
+    }
+
     /// Marks all channels for a user as read.
     /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
-    func markAllRead(completion: ((Error?) -> Void)? = nil) {
-        apiClient.request(endpoint: .markAllRead()) {
+    func markAllRead(completion: (@Sendable (Error?) -> Void)? = nil) {
+        apiClient.request(endpoint: .markChannelsRead(markChannelsReadRequest: MarkChannelsReadRequest())) {
             completion?($0.error)
+        }
+    }
+
+    func loadAllUnreads(completion: @escaping (@Sendable (Result<CurrentUserUnreads, Error>) -> Void)) {
+        apiClient.request(endpoint: .unreadCounts()) { result in
+            switch result {
+            case .success(let response):
+                completion(.success(response))
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func setPushPreference(
+        _ preference: PushPreferenceInput,
+        completion: @escaping @Sendable (Result<PushPreference, Error>) -> Void
+    ) {
+        let request = UpsertPushPreferencesRequest(preferences: [preference])
+        apiClient.request(endpoint: .updatePushNotificationPreferences(upsertPushPreferencesRequest: request)) { [database] result in
+            switch result {
+            case let .success(response):
+                guard let userPreference = response.userPreferences.values.first else {
+                    completion(.failure(ClientError.CurrentUserDoesNotExist()))
+                    return
+                }
+                database.write { session in
+                    guard let currentUserDTO = session.currentUser else {
+                        log.error("Cannot save push preference: no current user in the database")
+                        return
+                    }
+                    let savedDTO = try session.savePushPreference(
+                        id: currentUserDTO.user.id,
+                        payload: userPreference
+                    )
+                    currentUserDTO.pushPreference = savedDTO
+                } completion: { error in
+                    if let error {
+                        completion(.failure(error))
+                    } else {
+                        completion(.success(userPreference))
+                    }
+                }
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// Get all blocked users.
+    ///
+    /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    ///
+    func loadBlockedUsers(completion: @escaping @Sendable (Result<[BlockedUserDetails], Error>) -> Void) {
+        apiClient.request(endpoint: .getBlockedUsers()) {
+            switch $0 {
+            case let .success(payload):
+                self.database.write({ session in
+                    session.currentUser?.blockedUserIds = Set(payload.blocks.map(\.blockedUserId))
+                }, completion: {
+                    if let error = $0 {
+                        log.error("Failed to save blocked users to the database. Error: \(error)")
+                    }
+                    let blockedUsers = payload.blocks.map {
+                        BlockedUserDetails(
+                            userId: $0.blockedUserId,
+                            blockedAt: $0.createdAt,
+                            blockedUser: $0.blockedUser.asModel()
+                        )
+                    }
+                    completion(.success(blockedUsers))
+                })
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// Mutes the users with the provided identifiers.
+    ///
+    /// - Parameters:
+    ///   - userIds: The identifiers of the users to mute.
+    ///   - expirationInMinutes: The duration of the mute in minutes. When `nil`, the mute does not expire.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    ///
+    func muteUsers(
+        _ userIds: Set<UserId>,
+        expiration expirationInMinutes: Int? = nil,
+        completion: @escaping @Sendable (Result<MuteUsersResponse, Error>) -> Void
+    ) {
+        apiClient.request(endpoint: .mute(muteRequest: .init(targetIds: userIds.sorted(), timeout: expirationInMinutes))) { result in
+            switch result {
+            case let .success(payload):
+                self.database.write(converting: { session in
+                    try session.saveCurrentUserMutedUsers(payload.ownUser?.mutes ?? payload.mutes ?? [])
+                    return payload.asModel()
+                }, completion: { databaseResult in
+                    completion(databaseResult)
+                })
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// Unmutes the users with the provided identifiers.
+    ///
+    /// - Parameters:
+    ///   - userIds: The identifiers of the users to unmute.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    ///
+    func unmuteUsers(
+        _ userIds: Set<UserId>,
+        completion: @escaping @Sendable (Result<UnmuteUsersResponse, Error>) -> Void
+    ) {
+        apiClient.request(endpoint: .unmute(unmuteRequest: .init(targetIds: userIds.sorted()))) { result in
+            completion(result)
+        }
+    }
+
+    func loadActiveLiveLocations(completion: @escaping @Sendable (Result<[SharedLocation], Error>) -> Void) {
+        apiClient.request(endpoint: .getUserLiveLocations()) { result in
+            switch result {
+            case let .success(payload):
+                self.database.write { session in
+                    try payload.activeLiveLocations.map {
+                        try session.saveLocation(payload: $0, cache: nil).asModel()
+                    }
+                } completion: { result in
+                    completion(result)
+                }
+
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// Marks messages as delivered for the current user.
+    /// - Parameters:
+    ///   - deliveries: Array of delivery info information.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    func markMessagesAsDelivered(
+        _ deliveries: [MessageDeliveryInfo],
+        completion: (@Sendable (Error?) -> Void)? = nil
+    ) {
+        let payload = ChannelDeliveredRequestPayload(
+            latestDeliveredMessages: deliveries.map { $0.asPayload }
+        )
+        
+        apiClient.request(endpoint: .markDelivered(markDeliveredRequest: payload)) { result in
+            completion?(result.error)
+        }
+    }
+}
+
+extension CurrentUserUpdater {
+    func addDevice(_ device: PushDevice, currentUserId: UserId, forceRegistration: Bool = false) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            addDevice(
+                deviceId: device.deviceId,
+                pushProvider: device.pushProvider,
+                providerName: device.providerName,
+                currentUserId: currentUserId,
+                forceRegistration: forceRegistration
+            ) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+
+    func removeDevice(id: DeviceId, currentUserId: UserId) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            removeDevice(id: id, currentUserId: currentUserId) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+
+    func deleteAllLocalAttachmentDownloads() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            deleteAllLocalAttachmentDownloads { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+    
+    func fetchDevices(currentUserId: UserId) async throws -> [Device] {
+        try await withCheckedThrowingContinuation { continuation in
+            fetchDevices(currentUserId: currentUserId) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    func markAllRead(currentUserId: UserId) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            markAllRead { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+
+    func loadBlockedUsers() async throws -> [BlockedUserDetails] {
+        try await withCheckedThrowingContinuation { continuation in
+            loadBlockedUsers { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    func muteUsers(_ userIds: Set<UserId>, expiration expirationInMinutes: Int? = nil) async throws -> MuteUsersResponse {
+        try await withCheckedThrowingContinuation { continuation in
+            muteUsers(userIds, expiration: expirationInMinutes) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    func unmuteUsers(_ userIds: Set<UserId>) async throws -> UnmuteUsersResponse {
+        try await withCheckedThrowingContinuation { continuation in
+            unmuteUsers(userIds) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    func updateUserData(
+        currentUserId: UserId,
+        name: String?,
+        imageURL: URL?,
+        privacySettings: UserPrivacySettings?,
+        role: UserRole?,
+        teamsRole: [TeamId: UserRole]?,
+        userExtraData: [String: RawJSON]?,
+        unset: Set<String>
+    ) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            updateUserData(
+                currentUserId: currentUserId,
+                name: name,
+                imageURL: imageURL,
+                privacySettings: privacySettings,
+                role: role,
+                teamsRole: teamsRole,
+                userExtraData: userExtraData,
+                unset: unset
+            ) { error in
+                continuation.resume(with: error)
+            }
         }
     }
 }

@@ -1,0 +1,141 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+@testable import StreamChat
+
+/// Mock implementation of `ChatClientUpdater`
+final class ConnectionRepository_Mock: ConnectionRepository, Spy, @unchecked Sendable {
+    enum Signature {
+        static let initialize = "initialize()"
+        static let connect = "connect(completion:)"
+        static let disconnect = "disconnect(source:completion:)"
+        static let forceConnectionInactiveMode = "forceConnectionStatusForInactiveModeIfNeeded()"
+        static let updateWebSocketEndpointTokenInfo = "updateWebSocketEndpoint(with:userInfo:)"
+        static let updateWebSocketEndpointUserId = "updateWebSocketEndpoint(with:)"
+        static let completeConnectionIdWaiters = "completeConnectionIdWaiters(connectionId:)"
+        static let provideConnectionId = "provideConnectionId(timeout:completion:)"
+        static let handleConnectionUpdate = "handleConnectionUpdate(state:onExpiredToken:)"
+    }
+
+    let spyState = SpyState()
+    var connectResult: Result<Void, Error>?
+
+    var disconnectSource: WebSocketConnectionState.DisconnectionSource?
+    var disconnectResult: Result<Void, Error>?
+
+    var updateWebSocketEndpointToken: Token?
+    var updateWebSocketEndpointUserInfo: UserInfo?
+    var completeWaitersConnectionId: ConnectionId?
+    var connectionUpdateState: WebSocketConnectionState?
+    var simulateExpiredTokenOnConnectionUpdate = false
+    
+    var provideConnectionIdResult: Result<ConnectionId, Error>?
+
+    convenience init() {
+        self.init(
+            isClientInActiveMode: true,
+            syncRepository: SyncRepository_Mock(),
+            webSocketEncoder: DefaultRequestEncoder(baseURL: .unique(), apiKey: .init(.unique)),
+            webSocketClient: WebSocketClient_Mock(),
+            apiClient: APIClient_Spy(),
+            timerType: DefaultTimer.self
+        )
+    }
+
+    convenience init(client: ChatClient) {
+        self.init(
+            isClientInActiveMode: client.config.isClientInActiveMode,
+            syncRepository: client.syncRepository,
+            webSocketEncoder: client.webSocketEncoder,
+            webSocketClient: client.webSocketClient,
+            apiClient: client.apiClient,
+            timerType: DefaultTimer.self
+        )
+    }
+
+    override init(isClientInActiveMode: Bool, webSocketEventProtocol: WebSocketEventProtocol = .v2, syncRepository: SyncRepository, webSocketEncoder: RequestEncoder?, webSocketClient: WebSocketClient?, apiClient: APIClient, timerType: TimerScheduling.Type) {
+        super.init(
+            isClientInActiveMode: isClientInActiveMode,
+            webSocketEventProtocol: webSocketEventProtocol,
+            syncRepository: syncRepository,
+            webSocketEncoder: webSocketEncoder,
+            webSocketClient: webSocketClient,
+            apiClient: apiClient,
+            timerType: timerType
+        )
+    }
+
+    // MARK: - Overrides
+
+    override func initialize() {
+        record()
+    }
+
+    override func connect(completion: ((Error?) -> Void)? = nil) {
+        record()
+        if let result = connectResult {
+            completion?(result.error)
+        }
+    }
+
+    override func disconnect(
+        source: WebSocketConnectionState.DisconnectionSource = .userInitiated,
+        completion: @escaping () -> Void
+    ) {
+        record()
+        if disconnectResult != nil {
+            completion()
+        }
+
+        disconnectSource = source
+    }
+
+    override func forceConnectionStatusForInactiveModeIfNeeded() {
+        record()
+    }
+
+    override func updateWebSocketEndpoint(with token: Token, userInfo: UserInfo?) {
+        updateWebSocketEndpointToken = token
+        updateWebSocketEndpointUserInfo = userInfo
+        record()
+    }
+
+    override func updateWebSocketEndpoint(with currentUserId: UserId) {
+        record()
+    }
+
+    override func completeConnectionIdWaiters(connectionId: String?) {
+        record()
+        completeWaitersConnectionId = connectionId
+    }
+
+    override func provideConnectionId(timeout: TimeInterval = 10, completion: @escaping (Result<ConnectionId, Error>) -> Void) {
+        record()
+        provideConnectionIdResult?.invoke(with: completion)
+    }
+
+    override func handleConnectionUpdate(state: WebSocketConnectionState, onExpiredToken: () -> Void) {
+        record()
+        connectionUpdateState = state
+        if simulateExpiredTokenOnConnectionUpdate {
+            onExpiredToken()
+        }
+    }
+
+    // MARK: - Clean Up
+
+    func cleanUp() {
+        clear()
+        connectResult = nil
+        updateWebSocketEndpointToken = nil
+
+        disconnectResult = nil
+        disconnectSource = nil
+        simulateExpiredTokenOnConnectionUpdate = false
+        connectionUpdateState = nil
+        completeWaitersConnectionId = nil
+        updateWebSocketEndpointToken = nil
+    }
+}

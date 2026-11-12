@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -50,23 +50,23 @@ struct FilterCodingTestPair {
     var json: String
     var filter: Filter<FilterTestScope>
 
-    static var allCases: [FilterCodingTestPair] = [
+    static let allCases: [FilterCodingTestPair] = [
         .equalInt(),
-        .notEqualDate(),
         .greaterDouble(),
         .greaterOrEqualBool(),
         .lessInt(),
         .lessOrEqualDouble(),
         .inArrayInt(),
         .inArrayDouble(),
-        .notInArrayString(),
+        .inArrayString(),
+        .equalArrayInt(),
         .query(),
         .autocomplete(),
         .existsTrue(),
         .notExists(),
         .containsAndEqual(),
         .greaterOrLess(),
-        .nonEqualNorEqual()
+        .nor()
     ]
 }
 
@@ -78,23 +78,6 @@ extension FilterCodingTestPair {
     static func equalInt() -> FilterCodingTestPair {
         let json = #"{"test_key_Int":{"$eq":1}}"#
         let filter: Filter<FilterTestScope> = .equal(.testKeyInt, to: 1)
-        return FilterCodingTestPair(json: json, filter: filter)
-    }
-
-    static func notEqualDate() -> FilterCodingTestPair {
-        let dateComponents = DateComponents(
-            timeZone: TimeZone(secondsFromGMT: 0),
-            year: 2020,
-            month: 8,
-            day: 12,
-            hour: 13,
-            minute: 14,
-            second: 59
-        )
-        let date: Date = Calendar.gmtCalendar.date(from: dateComponents)!
-        let dateString = "2020-08-12T13:14:59Z"
-        let json = "{\"test_key_Date\":{\"$ne\":\"\(dateString)\"}}"
-        let filter: Filter<FilterTestScope> = .notEqual(.testKeyDate, to: date)
         return FilterCodingTestPair(json: json, filter: filter)
     }
 
@@ -145,15 +128,7 @@ extension FilterCodingTestPair {
         let filter: Filter<FilterTestScope> = .in(.testKeyArrayDouble, values: array)
         return FilterCodingTestPair(json: json, filter: filter)
     }
-
-    static func notInArrayString() -> FilterCodingTestPair {
-        let array = ["1", "2", "3", "4"]
-        let arrayJSON = #"["1","2","3","4"]"#
-        let json = "{\"test_key_ArrayString\":{\"$nin\":\(arrayJSON)}}"
-        let filter: Filter<FilterTestScope> = .notIn(.testKeyArrayString, values: array)
-        return FilterCodingTestPair(json: json, filter: filter)
-    }
-
+    
     static func query() -> FilterCodingTestPair {
         let json = #"{"test_key":{"$q":"Quick brown fox jump over lazy dog"}}"#
         let filter: Filter<FilterTestScope> = .query(.testKey, text: "Quick brown fox jump over lazy dog")
@@ -192,11 +167,23 @@ extension FilterCodingTestPair {
         return FilterCodingTestPair(json: json, filter: filter)
     }
 
-    static func nonEqualNorEqual() -> FilterCodingTestPair {
-        let json = #"{"$nor":[{"test_key_Bool":{"$ne":true}},{"test_key_Double":{"$eq":678.89999999999998}}]}"#
+    static func inArrayString() -> FilterCodingTestPair {
+        let json = #"{"test_key_ArrayString":{"$in":["a","b"]}}"#
+        let filter: Filter<FilterTestScope> = .in(.testKeyArrayString, values: ["a", "b"])
+        return FilterCodingTestPair(json: json, filter: filter)
+    }
+
+    static func equalArrayInt() -> FilterCodingTestPair {
+        let json = #"{"test_key_ArrayInt":{"$eq":[1,2]}}"#
+        let filter: Filter<FilterTestScope> = .equal(.testKeyArrayInt, values: [1, 2])
+        return FilterCodingTestPair(json: json, filter: filter)
+    }
+
+    static func nor() -> FilterCodingTestPair {
+        let json = #"{"$nor":[{"test_key_Int":{"$eq":1}},{"test_key_Bool":{"$eq":true}}]}"#
         let filter: Filter<FilterTestScope> = .nor([
-            .notEqual(.testKeyBool, to: true),
-            .equal(.testKeyDouble, to: 678.9)
+            .equal(.testKeyInt, to: 1),
+            .equal(.testKeyBool, to: true)
         ])
         return FilterCodingTestPair(json: json, filter: filter)
     }

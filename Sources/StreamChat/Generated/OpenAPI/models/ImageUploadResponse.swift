@@ -1,0 +1,21 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+final class ImageUploadResponse: Sendable, Decodable {
+    let file: String?
+    let thumbUrl: String?
+
+    init(file: String? = nil, thumbUrl: String? = nil) {
+        self.file = file
+        self.thumbUrl = thumbUrl
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        self.file = try container.decodeIfPresent(String.self, forKey: .file)
+        self.thumbUrl = try container.decodeIfPresent(String.self, forKey: .thumbUrl)
+    }
+}

@@ -1,13 +1,14 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
-import StreamChatTestTools
+@testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import XCTest
 
-final class ChatMentionSuggestionView_Tests: XCTestCase {
+@MainActor final class ChatMentionSuggestionView_Tests: XCTestCase {
     /// Default reference width for the cell. Not related to any screen size.
     private static var defaultCellWidth: CGFloat = 300
 
@@ -68,7 +69,7 @@ final class ChatMentionSuggestionView_Tests: XCTestCase {
                 backgroundColor = .green
                 widthAnchor.constraint(equalTo: heightAnchor, multiplier: 1).isActive = true
             }
-            
+
             var maskingPath: CGPath? {
                 UIBezierPath(rect: frame.insetBy(dx: -frame.width / 4, dy: -frame.height / 4)).cgPath
             }
@@ -84,7 +85,7 @@ final class ChatMentionSuggestionView_Tests: XCTestCase {
 
         var components = Components.mock
         components.onlineIndicatorView = RectIndicator.self
-        components.mentionAvatarView = CustomAvatarView.self
+        components.userAvatarView = CustomAvatarView.self
 
         let view = ChatMentionSuggestionView().withoutAutoresizingMaskConstraints
         view.widthAnchor.constraint(equalToConstant: Self.defaultCellWidth).isActive = true
@@ -142,15 +143,15 @@ final class ChatMentionSuggestionView_Tests: XCTestCase {
         view.content = chatUserNoName
         AssertSnapshot(view, suffix: "user name not set")
     }
-    
+
     func test_whenUserThatHasNameIsAssignedAfterUserWithoutName_usernameLabelGetsShown() {
         let view = ChatMentionSuggestionView().withoutAutoresizingMaskConstraints
         view.widthAnchor.constraint(equalToConstant: Self.defaultCellWidth).isActive = true
         view.components = .mock
-        
+
         view.content = chatUserNoName
         AssertSnapshot(view, variants: [.defaultLight], suffix: "without name")
-        
+
         view.content = chatUserOnline
         AssertSnapshot(view, variants: [.defaultLight], suffix: "with name")
     }

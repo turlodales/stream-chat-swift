@@ -8,5 +8,8 @@
   "updated_at" : "2020-06-09T18:33:04.078929Z",
   "last_active" : "2020-06-09T18:33:04.075114Z",
   "teams": ["RED", "GREEN", "BLUE"],
-  "name" : "Bitter cloud"
+  "language": "pt",
+  "name" : "Bitter cloud",
+  "avg_response_time": 5,
+  "teams_role" : { "ios" : "guest" }
 }

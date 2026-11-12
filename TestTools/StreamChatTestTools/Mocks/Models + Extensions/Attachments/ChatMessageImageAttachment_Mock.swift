@@ -1,9 +1,9 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
-@testable import StreamChat
 import Foundation
+@testable import StreamChat
 
 extension ChatMessageImageAttachment {
     /// Creates a new `ChatMessageImageAttachment` object from the provided data.
@@ -12,6 +12,7 @@ extension ChatMessageImageAttachment {
         imageURL: URL = .localYodaImage,
         title: String = URL.localYodaImage.lastPathComponent,
         localState: LocalAttachmentState? = nil,
+        localDownloadState: LocalAttachmentDownloadState? = nil,
         extraData: [String: RawJSON]? = nil
     ) -> Self {
         .init(
@@ -20,9 +21,16 @@ extension ChatMessageImageAttachment {
             payload: .init(
                 title: title,
                 imageRemoteURL: imageURL,
-                imagePreviewRemoteURL: imageURL,
+                file: try! AttachmentFile(url: imageURL),
                 extraData: extraData
             ),
+            downloadingState: localDownloadState.map {
+                .init(
+                    localFileURL: $0 == .downloaded ? .newTemporaryFileURL() : nil,
+                    state: $0,
+                    file: try! AttachmentFile(url: imageURL)
+                )
+            },
             uploadingState: localState.map {
                 .init(
                     localFileURL: imageURL,

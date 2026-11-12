@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -7,13 +7,18 @@ import Foundation
 
 @objc(CurrentUserDTO)
 class CurrentUserDTO: NSManagedObject {
+    /// JSON-encoded `[groupKey: unreadCount]`.
+    @NSManaged var unreadGroupedChannelsCounts: Data?
     @NSManaged var unreadChannelsCount: Int64
     @NSManaged var unreadMessagesCount: Int64
-    
+    @NSManaged var unreadThreadsCount: Int64
+    @NSManaged var totalUnreadCountByTeam: [String: Int]?
+
     /// Contains the timestamp when last sync process was finished.
     /// The date later serves as reference date for the last event synced using `/sync` endpoint
     @NSManaged var lastSynchedEventDate: DBDate?
-
+    
+    @NSManaged var blockedUserIds: Set<String>
     @NSManaged var flaggedUsers: Set<UserDTO>
     @NSManaged var flaggedMessages: Set<MessageDTO>
     @NSManaged var mutedUsers: Set<UserDTO>
@@ -21,10 +26,20 @@ class CurrentUserDTO: NSManagedObject {
     @NSManaged var devices: Set<DeviceDTO>
     @NSManaged var currentDevice: DeviceDTO?
     @NSManaged var channelMutes: Set<ChannelMuteDTO>
+    @NSManaged var isInvisible: Bool
+
+    // UserPrivacySettings. For now, these booleans are enough for the DTO to make it simpler.
+    // But if new properties are added, we might need to create new DTOs specific to each setting.
+    @NSManaged var isTypingIndicatorsEnabled: Bool
+    @NSManaged var isReadReceiptsEnabled: Bool
+    @NSManaged var isDeliveryReceiptsEnabled: Bool
     
+    @NSManaged var pushPreference: PushPreferenceDTO?
+
     /// Returns a default fetch request for the current user.
     static var defaultFetchRequest: NSFetchRequest<CurrentUserDTO> {
         let request = NSFetchRequest<CurrentUserDTO>(entityName: CurrentUserDTO.entityName)
+        CurrentUserDTO.applyPrefetchingState(to: request)
         // Sorting doesn't matter here as soon as we have a single current-user in a database.
         // It's here to make the request safe for FRC
         request.sortDescriptors = [.init(keyPath: \CurrentUserDTO.unreadMessagesCount, ascending: true)]
@@ -38,21 +53,23 @@ extension CurrentUserDTO {
     /// - Parameter context: The context used to fetch `CurrentUserDTO`
     fileprivate static func load(context: NSManagedObjectContext) -> CurrentUserDTO? {
         let request = NSFetchRequest<CurrentUserDTO>(entityName: CurrentUserDTO.entityName)
+        CurrentUserDTO.applyPrefetchingState(to: request)
         let result = load(by: request, context: context)
-        
+
         log.assert(
             result.count <= 1,
             "The database is corrupted. There is more than 1 entity of the type `CurrentUserDTO` in the DB."
         )
-        
+
         return result.first
     }
-    
+
     /// If the `CurrentUserDTO` entity exists in the context, fetches and returns it. Otherwise create a new `CurrentUserDTO`.
     ///
     /// - Parameter context: The context used to fetch/create `CurrentUserDTO`
     fileprivate static func loadOrCreate(context: NSManagedObjectContext) -> CurrentUserDTO {
         let request = NSFetchRequest<CurrentUserDTO>(entityName: CurrentUserDTO.entityName)
+        CurrentUserDTO.applyPrefetchingState(to: request)
         let result = load(by: request, context: context)
         log.assert(
             result.count <= 1,
@@ -61,111 +78,284 @@ extension CurrentUserDTO {
         if let existing = result.first {
             return existing
         }
-        
+
         let new = NSEntityDescription.insertNewObject(into: context, for: request)
         return new
+    }
+    
+    static func load(context: NSManagedObjectContext) throws -> CurrentChatUser {
+        guard let dto = load(context: context) else { throw ClientError.CurrentUserDoesNotExist() }
+        return try dto.asModel()
     }
 }
 
 extension NSManagedObjectContext: CurrentUserDatabaseSession {
-    func saveCurrentUser(payload: CurrentUserPayload) throws -> CurrentUserDTO {
+    func saveCurrentUser(payload: OwnUserResponse) throws -> CurrentUserDTO {
+        invalidateCurrentUserCache()
+        
         let dto = CurrentUserDTO.loadOrCreate(context: self)
-        dto.user = try saveUser(payload: payload)
+        dto.user = try saveUser(ownResponse: payload)
 
-        let mutedUsers = try payload.mutedUsers.map { try saveUser(payload: $0.mutedUser) }
-        dto.mutedUsers = Set(mutedUsers)
-
-        let channelMutes = Set(
-            try payload.mutedChannels.map { try saveChannelMute(payload: $0) }
-        )
-        dto.channelMutes.subtracting(channelMutes).forEach { delete($0) }
-        dto.channelMutes = channelMutes
-        
-        if let unreadCount = payload.unreadCount {
-            try saveCurrentUserUnreadCount(count: unreadCount)
+        // Save push preference
+        if let pushPreference = payload.pushPreferences {
+            dto.pushPreference = try savePushPreference(id: payload.id, payload: pushPreference)
         }
-        
-        _ = try saveCurrentUserDevices(payload.devices, clearExisting: true)
-        
+
+        dto.totalUnreadCountByTeam = payload.totalUnreadCountByTeam
+
+        try saveCurrentUserCommonFields(
+            blockedUserIds: payload.blockedUserIds ?? [],
+            channelMutes: payload.channelMutes,
+            devices: payload.devices,
+            dto: dto,
+            isInvisible: payload.invisible,
+            mutes: payload.mutes,
+            privacySettings: payload.privacySettings,
+            totalUnreadCount: payload.totalUnreadCount,
+            unreadChannels: payload.unreadChannels,
+            unreadThreads: payload.unreadThreads
+        )
+
         return dto
     }
-    
-    func saveCurrentUserUnreadCount(count: UnreadCount) throws {
+
+    func saveCurrentUser(fullResponse: FullUserResponse) throws -> CurrentUserDTO {
+        invalidateCurrentUserCache()
+
+        let dto = CurrentUserDTO.loadOrCreate(context: self)
+        dto.user = try saveUser(fullResponse: fullResponse)
+
+        try saveCurrentUserCommonFields(
+            blockedUserIds: fullResponse.blockedUserIds,
+            channelMutes: fullResponse.channelMutes,
+            devices: fullResponse.devices,
+            dto: dto,
+            isInvisible: fullResponse.invisible,
+            mutes: fullResponse.mutes,
+            privacySettings: fullResponse.privacySettings,
+            totalUnreadCount: fullResponse.totalUnreadCount,
+            unreadChannels: fullResponse.unreadChannels,
+            unreadThreads: fullResponse.unreadThreads
+        )
+
+        return dto
+    }
+
+    private func saveCurrentUserCommonFields(
+        blockedUserIds: [String],
+        channelMutes: [MutedChannelPayload],
+        devices: [Device],
+        dto: CurrentUserDTO,
+        isInvisible: Bool,
+        mutes: [MutedUserPayload],
+        privacySettings: UserPrivacySettings?,
+        totalUnreadCount: Int?,
+        unreadChannels: Int?,
+        unreadThreads: Int?
+    ) throws {
+        dto.isInvisible = isInvisible
+
+        // If no privacy setting is provided by the backend then we treat as enabled by default.
+        // This is a bit different than the rest of the backend responses, but it was done like this
+        // for backwards compatibility reasons on the server side.
+        dto.isReadReceiptsEnabled = privacySettings?.readReceipts?.enabled ?? true
+        dto.isTypingIndicatorsEnabled = privacySettings?.typingIndicators?.enabled ?? true
+        dto.isDeliveryReceiptsEnabled = privacySettings?.deliveryReceipts?.enabled ?? true
+
+        let mutedUsers = try mutes.compactMap { $0.target }.map { try saveUser(payload: $0) }
+        dto.mutedUsers = Set(mutedUsers)
+
+        dto.blockedUserIds = Set(blockedUserIds)
+
+        // CHA-4826
+        let channelMuteDTOs = Set(
+            channelMutes.compactMapLoggingError { try saveChannelMute(payload: $0) }
+        )
+        dto.channelMutes.subtracting(channelMuteDTOs).forEach { delete($0) }
+        dto.channelMutes = channelMuteDTOs
+
+        if let unreadChannels, let totalUnreadCount {
+            try saveCurrentUserUnreadCount(
+                count: UnreadCountPayload(
+                    channels: unreadChannels,
+                    messages: totalUnreadCount,
+                    threads: unreadThreads
+                )
+            )
+        }
+
+        _ = try saveCurrentUserDevices(devices, clearExisting: true)
+    }
+
+    func saveCurrentUserUnreadCount(count: UnreadCountPayload) throws {
+        invalidateCurrentUserCache()
+
         guard let dto = currentUser else {
             throw ClientError.CurrentUserDoesNotExist()
         }
-                
-        dto.unreadChannelsCount = Int64(clamping: count.channels)
-        dto.unreadMessagesCount = Int64(clamping: count.messages)
+
+        if let unreadChannels = count.channels {
+            dto.unreadChannelsCount = Int64(clamping: unreadChannels)
+        }
+        if let unreadMessages = count.messages {
+            dto.unreadMessagesCount = Int64(clamping: unreadMessages)
+        }
+        if let threadsCount = count.threads {
+            dto.unreadThreadsCount = Int64(clamping: threadsCount)
+        }
     }
-    
-    func saveCurrentUserDevices(_ devices: [DevicePayload], clearExisting: Bool) throws -> [DeviceDTO] {
+
+    func saveCurrentUserMutedUsers(_ mutedUsers: [MutedUserPayload]) throws -> [UserDTO] {
+        invalidateCurrentUserCache()
+
+        guard let dto = currentUser else {
+            throw ClientError.CurrentUserDoesNotExist()
+        }
+
+        let userDTOs = try mutedUsers.compactMap { $0.target }.map { try saveUser(payload: $0) }
+        dto.mutedUsers.formUnion(userDTOs)
+        return userDTOs
+    }
+
+    /// Merges per-group unread channel counts into `CurrentUserDTO.unreadChannelCountsByGroup`.
+    /// Called from `queryGroupedChannels` responses and from WS events carrying
+    /// `grouped_unread_channels`; both paths use merge semantics, so keys absent from the input
+    /// are left untouched and a group that disappears from a server snapshot will keep its
+    /// locally-cached count until something explicitly clears it.
+    func mergeCurrentUserUnreadChannelCountsByGroup(_ unreadChannelCountsByGroup: [String: Int]) throws {
+        invalidateCurrentUserCache()
+
+        guard let dto = currentUser else {
+            throw ClientError.CurrentUserDoesNotExist()
+        }
+
+        // Server counts have no group filter cutoffs, so filtered groups are counted locally.
+        let filteredGroupKeys = Set(loadFilteredGroupChannelListQueries().map(\.filterHash))
+        let unfilteredCounts = unreadChannelCountsByGroup.filter { !filteredGroupKeys.contains($0.key) }
+        dto.unreadChannelCountsByGroup = (dto.unreadChannelCountsByGroup ?? [:]).merging(unfilteredCounts) { _, new in new }
+    }
+
+    func adjustUnreadChannelCount(forGroup groupKey: String, by delta: Int) {
+        invalidateCurrentUserCache()
+        guard channelListQuery(ChannelListQuery(groupKey: groupKey))?.groupFilterJSONData == nil,
+              let dto = currentUser, var counts = dto.unreadChannelCountsByGroup, let existing = counts[groupKey] else {
+            return
+        }
+        counts[groupKey] = max(0, existing + delta)
+        dto.unreadChannelCountsByGroup = counts
+    }
+
+    func updateFilteredGroupUnreadChannelCounts(for queries: [ChannelListQueryDTO]) {
+        invalidateCurrentUserCache()
+        guard let dto = currentUser else { return }
+        let currentCounts = dto.unreadChannelCountsByGroup ?? [:]
+        var counts = currentCounts
+        for query in queries where query.groupFilterJSONData != nil {
+            counts[query.filterHash] = Int(query.groupNotLoadedUnreadCount) + query.loadedUnreadChannelsCount(currentUserId: dto.user.id)
+        }
+        // Assigning always marks the current user as changed, which notifies its observers.
+        guard counts != currentCounts else { return }
+        dto.unreadChannelCountsByGroup = counts
+    }
+
+    func saveCurrentUserDevices(_ devices: [Device], clearExisting: Bool) throws -> [DeviceDTO] {
+        invalidateCurrentUserCache()
+
         guard let currentUser = currentUser else {
             throw ClientError.CurrentUserDoesNotExist()
         }
-        
+
         if clearExisting {
             currentUser.devices.removeAll()
             if !devices.contains(where: { $0.id == currentUser.currentDevice?.id }) {
                 currentUser.currentDevice = nil
             }
         }
-        
+
         let deviceDTOs = devices.map { device -> DeviceDTO in
             let dto = DeviceDTO.loadOrCreate(id: device.id, context: self)
-            dto.createdAt = device.createdAt?.bridgeDate
+            dto.createdAt = device.createdAt.bridgeDate
+            dto.disabled = device.disabled.map { NSNumber(value: $0) }
+            dto.disabledReason = device.disabledReason
+            dto.hardwareId = device.hardwareId
+            dto.pushProvider = device.pushProvider
+            dto.pushProviderName = device.pushProviderName
+            dto.userId = device.userId
+            dto.voip = device.voip.map { NSNumber(value: $0) }
             dto.user = currentUser
             return dto
         }
-        
+
         return deviceDTOs
     }
-    
+
     func saveCurrentDevice(_ deviceId: String) throws {
+        invalidateCurrentUserCache()
+
         guard let currentUser = currentUser else {
             throw ClientError.CurrentUserDoesNotExist()
         }
-        
+
         let dto = DeviceDTO.loadOrCreate(id: deviceId, context: self)
         dto.user = currentUser
         currentUser.currentDevice = dto
     }
-    
+
     func deleteDevice(id: String) {
         if let dto = DeviceDTO.load(id: id, context: self) {
             delete(dto)
         }
     }
-    
-    private static let currentUserKey = "io.getStream.chat.core.context.current_user_key"
-    private static let removeAllDataToken = "io.getStream.chat.core.context.remove_all_data_token"
-    
+
+    static let currentUserKey = "io.getStream.chat.core.context.current_user_key"
     var currentUser: CurrentUserDTO? {
-        // we already have cached value in `userInfo` so all setup is complete
-        // so we can just return cached value
-        if let currentUser = userInfo[Self.currentUserKey] as? CurrentUserDTO {
-            return currentUser
-        }
-        
-        // we do not have cached value in `userInfo` so we try to load current user from DB
-        if let currentUser = CurrentUserDTO.load(context: self) {
-            // if we have current user we save it to `userInfo` so we do not have to load it again
-            userInfo[Self.currentUserKey] = currentUser
-            
-            // When all data is removed it should this code's responsibility to clear `userInfo`
-            userInfo[Self.removeAllDataToken] = NotificationCenter.default.addObserver(
-                forName: DatabaseContainer.WillRemoveAllDataNotification,
-                object: nil,
-                queue: nil
-            ) { [userInfo] _ in
-                userInfo[Self.currentUserKey] = nil
+        if let objectId = userInfo[Self.currentUserKey] as? NSManagedObjectID {
+            if let dto = try? existingObject(with: objectId) as? CurrentUserDTO {
+                return dto.isDeleted ? nil : dto
             }
-            
-            return currentUser
         }
-        
-        // we really don't have current user
+        if let dto = CurrentUserDTO.load(context: self) {
+            if !dto.objectID.isTemporaryID {
+                userInfo[Self.currentUserKey] = dto.objectID
+            }
+            return dto
+        }
         return nil
+    }
+
+    func invalidateCurrentUserCache() {
+        userInfo[Self.currentUserKey] = nil
+    }
+    
+    func deleteCurrentUser() {
+        guard let currentUser else { return }
+        delete(currentUser)
+    }
+}
+
+extension CurrentUserDTO {
+    var unreadChannelCountsByGroup: [String: Int]? {
+        get {
+            guard let unreadGroupedChannelsCounts else { return nil }
+            return try? JSONDecoder.default.decode([String: Int].self, from: unreadGroupedChannelsCounts)
+        }
+        set {
+            unreadGroupedChannelsCounts = newValue.flatMap { try? JSONEncoder.default.encode($0) }
+        }
+    }
+}
+
+extension CurrentUserDTO {
+    override class func prefetchedRelationshipKeyPaths() -> [String] {
+        [
+            KeyPath.string(\CurrentUserDTO.channelMutes),
+            KeyPath.string(\CurrentUserDTO.currentDevice),
+            KeyPath.string(\CurrentUserDTO.devices),
+            KeyPath.string(\CurrentUserDTO.flaggedMessages),
+            KeyPath.string(\CurrentUserDTO.flaggedUsers),
+            KeyPath.string(\CurrentUserDTO.mutedUsers),
+            KeyPath.string(\CurrentUserDTO.user)
+        ]
     }
 }
 
@@ -176,51 +366,65 @@ extension CurrentUserDTO {
 
 extension CurrentChatUser {
     fileprivate static func create(fromDTO dto: CurrentUserDTO) throws -> CurrentChatUser {
-        guard dto.isValid, let context = dto.managedObjectContext else { throw InvalidModel(dto) }
+        try dto.isNotDeleted()
+        
         let user = dto.user
 
         let extraData: [String: RawJSON]
         do {
-            extraData = try JSONDecoder.default.decode([String: RawJSON].self, from: dto.user.extraData)
+            extraData = try JSONDecoder.stream.decodeRawJSON(from: dto.user.extraData)
         } catch {
-            log.error(
-                "Failed to decode extra data for user with id: <\(dto.user.id)>, using default value instead. "
-                    + "Error: \(error)"
-            )
+            log.error("Failed to decode extra data for user with id: <\(dto.user.id)>, using default value instead. Error: \(error)")
             extraData = [:]
         }
-
+        
         let mutedUsers: [ChatUser] = try dto.mutedUsers.map { try $0.asModel() }
         let flaggedUsers: [ChatUser] = try dto.flaggedUsers.map { try $0.asModel() }
         let flaggedMessagesIDs: [MessageId] = dto.flaggedMessages.map(\.id)
 
-        let fetchMutedChannels: () -> Set<ChatChannel> = {
-            Set(dto.channelMutes.compactMap { try? $0.channel.asModel() })
-        }
+        let mutedChannels = Set(dto.channelMutes.compactMap { try? $0.channel.asModel() })
+
+        let language: TranslationLanguage? = dto.user.language.map { TranslationLanguage(languageCode: $0) }
+        
+        let pushPreference = try dto.pushPreference?.asModel()
 
         return try CurrentChatUser(
             id: user.id,
             name: user.name,
             imageURL: user.imageURL,
             isOnline: user.isOnline,
+            isInvisible: dto.isInvisible,
             isBanned: user.isBanned,
             userRole: UserRole(rawValue: user.userRoleRaw),
+            teamsRole: user.teamsRole?.mapValues { UserRole(rawValue: $0) },
             createdAt: user.userCreatedAt.bridgeDate,
             updatedAt: user.userUpdatedAt.bridgeDate,
+            deactivatedAt: user.userDeactivatedAt?.bridgeDate,
             lastActiveAt: user.lastActivityAt?.bridgeDate,
             teams: Set(user.teams),
+            language: language,
             extraData: extraData,
             devices: dto.devices.map { try $0.asModel() },
             currentDevice: dto.currentDevice?.asModel(),
+            blockedUserIds: dto.blockedUserIds,
             mutedUsers: Set(mutedUsers),
             flaggedUsers: Set(flaggedUsers),
             flaggedMessageIDs: Set(flaggedMessagesIDs),
             unreadCount: UnreadCount(
                 channels: Int(dto.unreadChannelsCount),
-                messages: Int(dto.unreadMessagesCount)
+                messages: Int(dto.unreadMessagesCount),
+                threads: Int(dto.unreadThreadsCount)
             ),
-            mutedChannels: fetchMutedChannels,
-            underlyingContext: context
+            unreadChannelCountsByGroup: dto.unreadChannelCountsByGroup,
+            totalUnreadCountByTeam: dto.totalUnreadCountByTeam,
+            mutedChannels: mutedChannels,
+            privacySettings: .init(
+                typingIndicators: .init(enabled: dto.isTypingIndicatorsEnabled),
+                readReceipts: .init(enabled: dto.isReadReceiptsEnabled),
+                deliveryReceipts: .init(enabled: dto.isDeliveryReceiptsEnabled)
+            ),
+            avgResponseTime: dto.user.avgResponseTime?.intValue,
+            pushPreference: pushPreference
         )
     }
 }

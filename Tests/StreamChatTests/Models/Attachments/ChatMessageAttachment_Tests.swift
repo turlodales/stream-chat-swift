@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -38,6 +38,21 @@ final class ChatMessageAttachment_Tests: XCTestCase {
         XCTAssertEqual(typeErasedAttachment.uploadingState, fileAttachment.uploadingState)
     }
 
+    func test_asAttachment() throws {
+        // Create voiceRecording attachment.
+        let voiceRecordingAttachment: ChatMessageVoiceRecordingAttachment = .mock(
+            id: .unique
+        )
+
+        // As File attachment.
+        let fileAttachment = try XCTUnwrap(voiceRecordingAttachment.asAttachment(payloadType: FileAttachmentPayload.self))
+
+        // Assert type-erased attachment has correct values.
+        XCTAssertEqual(fileAttachment.id, voiceRecordingAttachment.id)
+        XCTAssertEqual(fileAttachment.type, .file)
+        XCTAssertEqual(fileAttachment.uploadingState, voiceRecordingAttachment.uploadingState)
+    }
+
     func test_anyAttachment_withKnownType_asConcreteAttachment() throws {
         // Create file attachment with known `file` type.
         let originalAttachment = ChatMessageFileAttachment.mock(id: .unique)
@@ -69,6 +84,7 @@ final class ChatMessageAttachment_Tests: XCTestCase {
             id: .unique,
             type: .unknown,
             payload: fileAttachmentPayload,
+            downloadingState: nil,
             uploadingState: nil
         )
 
@@ -96,6 +112,7 @@ final class ChatMessageAttachment_Tests: XCTestCase {
             id: .unique,
             type: .unknown,
             payload: try JSONEncoder().encode(joke),
+            downloadingState: nil,
             uploadingState: try .mock()
         )
 
@@ -104,8 +121,38 @@ final class ChatMessageAttachment_Tests: XCTestCase {
             id: typeErasedAttachment.id,
             type: typeErasedAttachment.type,
             payload: joke,
+            downloadingState: nil,
             uploadingState: typeErasedAttachment.uploadingState
         )
         XCTAssertEqual(typeErasedAttachment.attachment(payloadType: Joke.self), jokeAttachment)
+    }
+
+    func test_streamAttachmentDownloadsDirectory_usesCustomBaseURL() {
+        let baseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let downloadsDirectory = URL.streamAttachmentDownloadsDirectory(baseURL: baseURL)
+        let localFileURL = URL.streamAttachmentLocalStorageURL(
+            forRelativePath: "message-id-0/File.txt",
+            baseURL: baseURL
+        )
+
+        XCTAssertEqual(
+            downloadsDirectory,
+            baseURL.appendingPathComponent("StreamAttachmentDownloads", isDirectory: true)
+        )
+        XCTAssertEqual(
+            localFileURL.path,
+            downloadsDirectory.appendingPathComponent("message-id-0/File.txt").path
+        )
+    }
+
+    func test_streamAttachmentDownloadsDirectory_defaultsToDocuments() {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        let downloadsDirectory = URL.streamAttachmentDownloadsDirectory()
+
+        XCTAssertEqual(
+            downloadsDirectory,
+            documents?.appendingPathComponent("StreamAttachmentDownloads", isDirectory: true)
+        )
     }
 }

@@ -1,7 +1,8 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
+import CoreData
 @testable import StreamChat
 @testable import StreamChatTestTools
 import XCTest
@@ -32,10 +33,7 @@ final class NSManagedObject_Validation_Tests: XCTestCase {
     }
 
     func test_isValid_ReturnsFalse_WhenTheObjectIsDeleted() throws {
-        guard let message = try createMessage() else {
-            XCTFail()
-            return
-        }
+        nonisolated(unsafe) let message = try XCTUnwrap(createMessage())
 
         try database.writeSynchronously { session in
             session.delete(message: message)
@@ -47,10 +45,7 @@ final class NSManagedObject_Validation_Tests: XCTestCase {
     }
 
     func test_deletedObject_doesNotCrash_whenAccessingDate() throws {
-        guard let message = try createMessage() else {
-            XCTFail()
-            return
-        }
+        nonisolated(unsafe) let message = try XCTUnwrap(createMessage())
 
         try database.writeSynchronously { session in
             session.delete(message: message)
@@ -65,16 +60,41 @@ final class NSManagedObject_Validation_Tests: XCTestCase {
         XCTAssertNil(message.locallyCreatedAt?.bridgeDate)
         XCTAssertNil(message.defaultSortingKey?.bridgeDate)
     }
+    
+    func test_throwingDeletedModelError() throws {
+        try database.createCurrentUser()
+        
+        do {
+            try database.writeSynchronously { session in
+                guard let user = session.currentUser else { throw ClientError.CurrentUserDoesNotExist() }
+                (session as! NSManagedObjectContext).delete(user)
+                // Error is thrown when converting to model
+                _ = try user.asModel()
+            }
+            XCTFail("Error should have been thrown")
+        } catch {
+            XCTAssertTrue(error is DeletedModel)
+        }
+    }
 }
 
 private extension NSManagedObject_Validation_Tests {
     private func createMessage() throws -> MessageDTO? {
         let channelId = ChannelId(type: .messaging, id: "123")
-        var message: MessageDTO?
+        nonisolated(unsafe) var message: MessageDTO?
         try database.createCurrentUser()
         try database.createChannel(cid: channelId)
         try database.writeSynchronously { session in
-            message = try session.createNewMessage(in: channelId, text: "Hello", pinning: nil, quotedMessageId: nil)
+            message = try session.createNewMessage(
+                in: channelId,
+                messageId: .unique,
+                text: "Hello",
+                pinning: nil,
+                quotedMessageId: nil,
+                isSystem: false,
+                skipPush: false,
+                skipEnrichUrl: false
+            )
         }
         return message
     }

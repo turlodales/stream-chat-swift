@@ -1,23 +1,39 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
+import PhotosUI
 import StreamChat
+import StreamChatCommonUI
 import UIKit
 
 /// The possible errors that can occur in attachment validation
 public enum AttachmentValidationError: Error {
     /// The size of the attachment exceeds the max file size
     case maxFileSizeExceeded
-    
+
     /// The number of attachments reached the limit.
     case maxAttachmentsCountPerMessageExceeded(limit: Int)
 }
 
+public struct LocalAttachmentInfoKey: Hashable, Equatable, RawRepresentable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let originalImage: Self = .init(rawValue: "originalImage")
+    public static let duration: Self = .init(rawValue: "duration")
+    public static let waveformData: Self = .init(rawValue: "waveformData")
+    public static let originalWidth: Self = .init(rawValue: "originalWidth")
+    public static let originalHeight: Self = .init(rawValue: "originalHeight")
+}
+
 /// The possible composer states. An Enum is not used so it does not cause
 /// future breaking changes and is possible to extend with new cases.
-public struct ComposerState: RawRepresentable, Equatable {
+public struct ComposerState: RawRepresentable, Equatable, Sendable {
     public let rawValue: String
     public var description: String { rawValue.uppercased() }
 
@@ -25,9 +41,11 @@ public struct ComposerState: RawRepresentable, Equatable {
         self.rawValue = rawValue
     }
 
-    public static var new = ComposerState(rawValue: "new")
-    public static var edit = ComposerState(rawValue: "edit")
-    public static var quote = ComposerState(rawValue: "quote")
+    public static let new = ComposerState(rawValue: "new")
+    public static let edit = ComposerState(rawValue: "edit")
+    public static let quote = ComposerState(rawValue: "quote")
+    public static let recording = ComposerState(rawValue: "recording")
+    public static let recordingLocked = ComposerState(rawValue: "recordingLocked")
 }
 
 /// A view controller that manages the composer view.
@@ -37,7 +55,8 @@ open class ComposerVC: _ViewController,
     UIImagePickerControllerDelegate,
     UIDocumentPickerDelegate,
     UINavigationControllerDelegate,
-    InputTextViewClipboardAttachmentDelegate {
+    InputTextViewClipboardAttachmentDelegate,
+    VoiceRecordingDelegate {
     /// The content of the composer.
     public struct Content {
         /// The text of the input text view.
@@ -60,6 +79,11 @@ open class ComposerVC: _ViewController,
         public var extraData: [String: RawJSON]
         /// The current cooldown time for the Slow mode active on channel.
         public var cooldownTime: Int
+        /// A boolean value indicating if the message url enrichment should be skipped.
+        public var skipEnrichUrl: Bool
+        /// A boolean value indicating if the message should be shown in the channel.
+        /// If the provided value is nil, it won't change the current checkbox state.
+        public var showReplyInChannel: Bool?
 
         /// A boolean that checks if the message contains any content.
         public var isEmpty: Bool {
@@ -71,14 +95,34 @@ open class ComposerVC: _ViewController,
             return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty
         }
 
+        /// The text that should be sent to the backend considering the command.
+        public var inputText: String {
+            if let command = command {
+                return "/\(command.name) " + text
+            }
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
         /// A boolean that checks if the composer is replying in a thread
         public var isInsideThread: Bool { threadMessage != nil }
         /// A boolean that checks if the composer recognised already a command.
         public var hasCommand: Bool { command != nil }
-        
+
         /// A boolean that checks if slow mode is on.
         public var isSlowModeOn: Bool {
             cooldownTime > 0
+        }
+
+        /// A boolean that checks if the composer is in voice recording mode.
+        public var isVoiceRecording: Bool {
+            state == .recording || state == .recordingLocked
+        }
+
+        /// A boolean that checks if the message only contains link attachments.
+        public var hasOnlyLinkAttachments: Bool {
+            let linkAttachmentsCount = attachments.filter { $0.type == .linkPreview }.count
+            let onlyContainsLinkAttachments = attachments.count == linkAttachmentsCount
+            return onlyContainsLinkAttachments
         }
 
         public init(
@@ -91,7 +135,9 @@ open class ComposerVC: _ViewController,
             mentionedUsers: Set<ChatUser>,
             command: Command?,
             extraData: [String: RawJSON] = [:],
-            cooldownTime: Int = 0
+            cooldownTime: Int = 0,
+            skipEnrichUrl: Bool = false,
+            showReplyInChannel: Bool? = nil
         ) {
             self.text = text
             self.state = state
@@ -103,6 +149,8 @@ open class ComposerVC: _ViewController,
             self.command = command
             self.extraData = extraData
             self.cooldownTime = cooldownTime
+            self.skipEnrichUrl = skipEnrichUrl
+            self.showReplyInChannel = showReplyInChannel
         }
 
         /// Creates a new content struct with all empty data.
@@ -117,7 +165,8 @@ open class ComposerVC: _ViewController,
                 mentionedUsers: [],
                 command: nil,
                 extraData: [:],
-                cooldownTime: 0
+                cooldownTime: 0,
+                skipEnrichUrl: false
             )
         }
 
@@ -133,7 +182,28 @@ open class ComposerVC: _ViewController,
                 mentionedUsers: [],
                 command: nil,
                 extraData: [:],
-                cooldownTime: cooldownTime
+                cooldownTime: cooldownTime,
+                skipEnrichUrl: false
+            )
+        }
+
+        /// Sets the content state to new message from a saved draft.
+        ///
+        /// - Parameter message: The message which was saved as a draft.
+        public mutating func draftMessage(_ message: DraftMessage) {
+            self = .init(
+                text: message.text,
+                state: message.quotedMessage != nil ? .quote : .new,
+                editingMessage: nil,
+                quotingMessage: message.quotedMessage,
+                threadMessage: threadMessage,
+                attachments: message.attachments.toAnyAttachmentPayload(),
+                mentionedUsers: message.mentionedUsers,
+                command: message.command.map { Command(name: $0, args: message.text) },
+                extraData: message.extraData,
+                cooldownTime: cooldownTime,
+                skipEnrichUrl: skipEnrichUrl,
+                showReplyInChannel: message.showReplyInChannel
             )
         }
 
@@ -147,11 +217,12 @@ open class ComposerVC: _ViewController,
                 editingMessage: message,
                 quotingMessage: nil,
                 threadMessage: threadMessage,
-                attachments: attachments,
+                attachments: message.allAttachments.toAnyAttachmentPayload(),
                 mentionedUsers: message.mentionedUsers,
                 command: command,
                 extraData: message.extraData,
-                cooldownTime: cooldownTime
+                cooldownTime: cooldownTime,
+                skipEnrichUrl: skipEnrichUrl
             )
         }
 
@@ -169,7 +240,8 @@ open class ComposerVC: _ViewController,
                 mentionedUsers: mentionedUsers,
                 command: command,
                 extraData: extraData,
-                cooldownTime: cooldownTime
+                cooldownTime: cooldownTime,
+                skipEnrichUrl: skipEnrichUrl
             )
         }
 
@@ -184,10 +256,11 @@ open class ComposerVC: _ViewController,
                 mentionedUsers: mentionedUsers,
                 command: command,
                 extraData: extraData,
-                cooldownTime: cooldownTime
+                cooldownTime: cooldownTime,
+                skipEnrichUrl: skipEnrichUrl
             )
         }
-        
+
         public mutating func slowMode(cooldown: Int) {
             self = .init(
                 text: text,
@@ -199,10 +272,11 @@ open class ComposerVC: _ViewController,
                 mentionedUsers: mentionedUsers,
                 command: command,
                 extraData: extraData,
-                cooldownTime: cooldown
+                cooldownTime: cooldown,
+                skipEnrichUrl: skipEnrichUrl
             )
         }
-        
+
         public mutating func resetSlowMode() {
             self = .init(
                 text: text,
@@ -214,7 +288,36 @@ open class ComposerVC: _ViewController,
                 mentionedUsers: mentionedUsers,
                 command: command,
                 extraData: extraData,
-                cooldownTime: 0
+                cooldownTime: 0,
+                skipEnrichUrl: skipEnrichUrl
+            )
+        }
+
+        public mutating func recording() {
+            self = .init(
+                text: text,
+                state: .recording,
+                editingMessage: editingMessage,
+                quotingMessage: quotingMessage,
+                threadMessage: threadMessage,
+                attachments: attachments,
+                mentionedUsers: mentionedUsers,
+                command: command,
+                skipEnrichUrl: skipEnrichUrl
+            )
+        }
+
+        public mutating func recordingLocked() {
+            self = .init(
+                text: text,
+                state: .recordingLocked,
+                editingMessage: editingMessage,
+                quotingMessage: quotingMessage,
+                threadMessage: threadMessage,
+                attachments: attachments,
+                mentionedUsers: mentionedUsers,
+                command: command,
+                skipEnrichUrl: skipEnrichUrl
             )
         }
     }
@@ -223,10 +326,24 @@ open class ComposerVC: _ViewController,
     public var content: Content = .initial() {
         didSet {
             updateContentIfNeeded()
+
+            /// If the input message was erased or the attachments have been removed, delete the draft message.
+            if !oldValue.isEmpty && content.isEmpty {
+                deleteDraftMessageIfNeeded()
+            }
         }
     }
-    
+
+    /// The component responsible for tracking cooldown timing when slow mode is enabled.
     open var cooldownTracker: CooldownTracker = CooldownTracker(timer: ScheduledStreamTimer(interval: 1))
+
+    /// The debouncer to control requests when enriching urls.
+    public var enrichUrlDebouncer = Debouncer(0.4, queue: .main)
+
+    /// The debouncer to control user searching requests when mentioning users.
+    public var userMentionsDebouncer = Debouncer(0.25, queue: .main)
+
+    lazy var linkDetector = TextLinkDetector()
 
     /// A symbol that is used to recognise when the user is mentioning a user.
     open var mentionSymbol = "@"
@@ -246,7 +363,22 @@ open class ComposerVC: _ViewController,
 
     /// A Boolean value indicating whether the attachments are enabled.
     open var isAttachmentsEnabled: Bool {
-        channelConfig?.uploadsEnabled == true
+        channelController?.channel?.canUploadFile ?? true
+    }
+
+    /// A Boolean value indicating whether sending message is enabled.
+    open var isSendMessageEnabled: Bool {
+        channelController?.channel?.canSendMessage ?? true
+    }
+
+    /// A Boolean value indicating whether if the message being sent can contain links.
+    open var canSendLinks: Bool {
+        channelController?.channel?.canSendLinks ?? true
+    }
+
+    /// A Boolean value indicating whether the current input text contains links.
+    open var inputContainsLinks: Bool {
+        linkDetector.hasLinks(in: content.text)
     }
 
     /// When enabled mentions search users across the entire app instead of searching
@@ -254,6 +386,9 @@ open class ComposerVC: _ViewController,
 
     /// A controller to search users and that is used to populate the mention suggestions.
     open var userSearchController: ChatUserSearchController!
+
+    /// A controller to search members in a channel and that is used to populate the mention suggestions.
+    open var memberListController: ChatChannelMemberListController?
 
     /// A controller that manages the channel that the composer is creating content for.
     open var channelController: ChatChannelController?
@@ -278,7 +413,22 @@ open class ComposerVC: _ViewController,
         )
     )
 
-    /// The view of the composer.
+    /// The view controller responsible to managing the VoiceRecording flow.
+    open internal(set) lazy var voiceRecordingVC = components
+        .voiceRecordingViewController
+        .init(composerView: composerView)
+
+    /// The audioPlayer that will be used for the VoiceRecording's playback.
+    open var audioPlayer: AudioPlaying? {
+        didSet {
+            // When the audioPlayer changes to a new instance, forward it to
+            // the attachmentsVC and voiceRecordingVC to ensure that all are using
+            // the same one.
+            attachmentsVC.audioPlayer = audioPlayer
+            voiceRecordingVC.audioPlayer = audioPlayer
+        }
+    }
+
     open private(set) lazy var composerView: ComposerView = components
         .messageComposerView.init()
         .withoutAutoresizingMaskConstraints
@@ -287,21 +437,107 @@ open class ComposerVC: _ViewController,
     open private(set) lazy var suggestionsVC: ChatSuggestionsVC = components
         .suggestionsVC
         .init()
-    
+
     /// The view controller that shows the suggestions when the user is typing.
     open private(set) lazy var attachmentsVC: AttachmentsPreviewVC = components
         .messageComposerAttachmentsVC
         .init()
 
+    /// The configuration of the system photos picker presented by `mediaPickerVC`.
+    ///
+    /// Override this property to customize the picker without reimplementing result handling.
+    /// For example, to only allow selecting images:
+    /// ```
+    /// override var mediaPickerConfiguration: PHPickerConfiguration {
+    ///     var configuration = super.mediaPickerConfiguration
+    ///     configuration.filter = .images
+    ///     return configuration
+    /// }
+    /// ```
+    @available(iOS 14.0, *)
+    open var mediaPickerConfiguration: PHPickerConfiguration {
+        var configuration = PHPickerConfiguration()
+        configuration.filter = .any(of: [.images, .videos])
+        configuration.selectionLimit = max(1, remainingNumberOfAttachments)
+        // `.current` returns the file already on disk. `.compatible` transcodes in
+        // Photos first, which is much slower for camera videos.
+        configuration.preferredAssetRepresentationMode = .current
+        return configuration
+    }
+
     /// The view controller for selecting image attachments.
-    open private(set) lazy var mediaPickerVC: UIViewController = {
+    ///
+    /// On iOS 14 and above `PHPickerViewController` is used. Set
+    /// `Components.isLegacyPhotosPickerEnabled` to `true` to keep the
+    /// legacy `UIImagePickerController`.
+    ///
+    /// To customize the system photos picker, override `mediaPickerConfiguration`.
+    /// Override this property only when replacing the picker with a completely custom view controller.
+    open var mediaPickerVC: UIViewController {
+        if #available(iOS 14.0, *), !components.isLegacyPhotosPickerEnabled {
+            let picker = PHPickerViewController(configuration: mediaPickerConfiguration)
+            picker.delegate = self
+            return picker
+        }
+        return legacyMediaPickerVC
+    }
+
+    private lazy var legacyMediaPickerVC: UIViewController = {
         let picker = UIImagePickerController()
         picker.mediaTypes = UIImagePickerController.availableMediaTypes(for: .savedPhotosAlbum) ?? ["public.image"]
         picker.sourceType = .savedPhotosAlbum
         picker.delegate = self
         return picker
     }()
-    
+
+    /// The tasks which load and compress the media selected in the media picker.
+    /// There is one per picker selection, because a new selection does not cancel
+    /// the media which is already being processed.
+    private var mediaSelectionTasks: [UUID: Task<Void, Never>] = [:]
+
+    /// The number of attachments the composer had when the current pending media
+    /// started being processed. Pending items are positioned relative to it.
+    private var pendingMediaAnchorCount = 0
+
+    /// The position the next picked item takes within the current pending media.
+    private var nextPendingMediaOrder = 0
+
+    // Loads picker files, previews, and metadata. Replace in tests to avoid Photos I/O.
+    var mediaLoader: ComposerMediaLoading = ComposerMediaLoader()
+
+    /// Attachments that should already show a preview, but are not ready to send yet.
+    private(set) var pendingMediaItems: [PendingMediaItem] = [] {
+        didSet {
+            let structureChanged = oldValue.map(\.id) != pendingMediaItems.map(\.id)
+                || oldValue.count != pendingMediaItems.count
+                || zip(oldValue, pendingMediaItems).contains { $0.previewImage !== $1.previewImage }
+            if structureChanged {
+                updateInputAttachmentsView()
+                updateSendButtonEnabled()
+                updateConfirmButtonEnabled()
+            }
+            attachmentsVC.processingProgressByID = Dictionary(
+                uniqueKeysWithValues: pendingMediaItems.map { ($0.id, $0.progress) }
+            )
+        }
+    }
+
+    /// A boolean that checks if any composer attachment is still being processed.
+    open var hasProcessingAttachments: Bool {
+        !pendingMediaItems.isEmpty
+    }
+
+    /// The number of attachments which can still be added to the message.
+    ///
+    /// Media which was picked but is not ready to be sent yet already occupies a slot,
+    /// so that picking again while a video compresses cannot exceed the limit.
+    open var remainingNumberOfAttachments: Int {
+        max(0, maxNumberOfAttachments - content.attachments.count - pendingMediaItems.count)
+    }
+
+    /// Thumbnails loaded from the photos picker, keyed by the attachment's local file URL.
+    private var attachmentPreviewImages: [URL: UIImage] = [:]
+
     /// The View Controller for taking a picture.
     open private(set) lazy var cameraVC: UIViewController = {
         let camera = UIImagePickerController()
@@ -314,7 +550,12 @@ open class ComposerVC: _ViewController,
 
     /// The view controller for selecting file attachments.
     open private(set) lazy var filePickerVC: UIViewController = {
-        let picker = UIDocumentPickerViewController(documentTypes: ["public.item"], in: .import)
+        let documentTypes: [String] = {
+            let availableTypes = ["public.item"]
+            let allowed = channelController?.client.appSettings?.fileUploadConfig.allowedUTITypes ?? []
+            return allowed.isEmpty ? availableTypes : allowed
+        }()
+        let picker = UIDocumentPickerViewController(documentTypes: documentTypes, in: .import)
         picker.delegate = self
         picker.allowsMultipleSelection = true
         return picker
@@ -322,9 +563,9 @@ open class ComposerVC: _ViewController,
 
     override open func setUp() {
         super.setUp()
-        
+
         composerView.inputMessageView.textView.delegate = self
-        
+
         // Set the delegate for handling the pasting of UIImages in the text view
         composerView.inputMessageView.textView.clipboardAttachmentDelegate = self
 
@@ -339,18 +580,26 @@ open class ComposerVC: _ViewController,
             action: #selector(clearContent(sender:)),
             for: .touchUpInside
         )
-        
+
         channelController?.delegate = self
-        
+
         setupAttachmentsView()
-        
+        setupVoiceRecordingView()
+
         cooldownTracker.onChange = { [weak self] currentTime in
             guard currentTime != 0 && self?.content.state != .edit else {
                 self?.content.resetSlowMode()
                 return
             }
-            
+
             self?.content.slowMode(cooldown: currentTime)
+        }
+
+        composerView.inputMessageView.textView.onLinksChanged = { [weak self] links in
+            self?.didChangeLinks(links)
+        }
+        composerView.linkPreviewView.onClose = { [weak self] in
+            self?.dismissLinkPreview()
         }
     }
 
@@ -360,10 +609,39 @@ open class ComposerVC: _ViewController,
         view.addSubview(composerView)
         composerView.pin(to: view)
     }
-    
+
+    override open func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+
+        updateDraftMessageIfNeeded()
+    }
+
+    open func setupAttachmentsView() {
+        addChildViewController(attachmentsVC, embedIn: composerView.inputMessageView.attachmentsViewContainer)
+        attachmentsVC.didTapRemoveItemButton = { [weak self] index in
+            guard let self else { return }
+            let readyCount = self.content.attachments.count
+            if index < readyCount {
+                if let url = self.content.attachments[index].localFileURL {
+                    self.attachmentPreviewImages.removeValue(forKey: url)
+                }
+                self.content.attachments.remove(at: index)
+            } else if let pendingPreview = self.attachmentsVC.content[safe: index] as? ProcessingAttachmentPreview {
+                self.removePendingMedia(id: pendingPreview.id)
+            }
+        }
+    }
+
+    open func setupVoiceRecordingView() {
+        voiceRecordingVC.delegate = self
+        addChild(voiceRecordingVC)
+        voiceRecordingVC.didMove(toParent: self)
+        voiceRecordingVC.setUp()
+    }
+
     override open func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        
+
         resumeCurrentCooldown()
     }
 
@@ -373,68 +651,154 @@ open class ComposerVC: _ViewController,
         dismissSuggestions()
     }
 
+    // MARK: Update Content
+
     override open func updateContent() {
         super.updateContent()
 
+        // Note: The order of the calls is important.
+        updateText()
+        updateKeystrokeEvents()
+        updateTitleLabel()
+        updateCommandsButtonVisibility()
+        updateConfirmButtonVisibility()
+        updateSendButtonVisibility()
+        updateAttachmentButtonVisibility()
+        updateHeaderViewVisibility()
+        updateRecordButtonVisibility()
+        updateCooldownView()
+        updateCooldownViewVisibility()
+        updateSendButtonEnabled()
+        updateConfirmButtonEnabled()
+        updateInputMessageView()
+        updateInputMessageViewVisibility()
+        updateInputAttachmentsView()
+        updateLinkPreview()
+        updateCheckbox()
+        updateBottomContainerVisibility()
+        updateLeadingContainerVisibility()
+        updateSuggestions()
+        updatePlaceholderLabel()
+    }
+
+    open func updateText() {
         if composerView.inputMessageView.textView.text != content.text {
             // Updating the text unnecessarily makes the caret jump to the end of input
             composerView.inputMessageView.textView.text = content.text
         }
+    }
 
+    open func updateKeystrokeEvents() {
         if !content.isEmpty && channelConfig?.typingEventsEnabled == true {
             channelController?.sendKeystrokeEvent(parentMessageId: content.threadMessage?.id)
         }
+    }
 
+    open func updateRecordButtonVisibility() {
+        guard isSendMessageEnabled else {
+            composerView.recordButton.isHidden = true
+            return
+        }
+
+        let isSendButtonHidden = composerView.sendButton.isHidden
+        let isConfirmButtonHidden = composerView.confirmButton.isHidden
+        let isVoiceRecordingEnabled = components.isVoiceRecordingEnabled
+        Animate {
+            switch self.content.state {
+            case .new:
+                self.composerView.recordButton.isHidden = isSendButtonHidden || !isVoiceRecordingEnabled || !self.isAttachmentsEnabled
+            case .recording:
+                self.composerView.recordButton.isHidden = false
+            case .recordingLocked:
+                self.composerView.recordButton.isHidden = true
+            case .quote:
+                self.composerView.recordButton.isHidden = isSendButtonHidden || !isVoiceRecordingEnabled || !self.isAttachmentsEnabled
+            case .edit:
+                self.composerView.recordButton.isHidden = isConfirmButtonHidden || !self.isAttachmentsEnabled
+            default:
+                break
+            }
+        }
+    }
+
+    open func updateTitleLabel() {
         switch content.state {
-        case .new:
-            composerView.inputMessageView.textView.placeholderLabel.text = content.isSlowModeOn
-                ? L10n.Composer.Placeholder.slowMode
-                : L10n.Composer.Placeholder.message
-            Animate {
-                self.composerView.confirmButton.isHidden = true
-                self.composerView.sendButton.isHidden = self.content.isSlowModeOn
-                self.composerView.headerView.isHidden = true
-                self.composerView.cooldownView.isHidden = !self.content.isSlowModeOn
-            }
-        case .quote:
-            composerView.titleLabel.text = L10n.Composer.Title.reply
-            Animate {
-                self.composerView.confirmButton.isHidden = true
-                self.composerView.sendButton.isHidden = self.content.isSlowModeOn
-                self.composerView.headerView.isHidden = false
-                self.composerView.cooldownView.isHidden = !self.content.isSlowModeOn
-            }
         case .edit:
             composerView.titleLabel.text = L10n.Composer.Title.edit
-            Animate {
-                self.composerView.confirmButton.isHidden = false
-                self.composerView.sendButton.isHidden = true
-                self.composerView.headerView.isHidden = false
-                self.composerView.cooldownView.isHidden = true
-            }
+        case .quote:
+            composerView.titleLabel.text = L10n.Composer.Title.reply
         default:
-            log.warning("The composer state \(content.state.description) was not handled.")
+            break
         }
-        
-        composerView.cooldownView.content = .init(cooldown: content.cooldownTime)
+    }
 
-        composerView.sendButton.isEnabled = !content.isEmpty
-        composerView.confirmButton.isEnabled = !content.isEmpty
-        
+    open func updateCooldownView() {
+        composerView.cooldownView.content = .init(cooldown: content.cooldownTime)
+    }
+
+    open func updateCooldownViewVisibility() {
+        Animate {
+            switch self.content.state {
+            case .new, .quote:
+                self.composerView.cooldownView.isHidden = !self.content.isSlowModeOn
+            case .edit, .recording, .recordingLocked:
+                self.composerView.cooldownView.isHidden = true
+            default:
+                break
+            }
+        }
+    }
+
+    open func updateSendButtonEnabled() {
+        composerView.sendButton.isEnabled = !content.isEmpty && !hasProcessingAttachments
+    }
+
+    open func updateConfirmButtonEnabled() {
+        composerView.confirmButton.isEnabled = !content.isEmpty && !hasProcessingAttachments
+    }
+
+    open func updateAttachmentButtonVisibility() {
+        guard isSendMessageEnabled else {
+            composerView.attachmentButton.isHidden = true
+            return
+        }
+
         let isAttachmentButtonHidden = !isAttachmentsEnabled || content.hasCommand || !composerView.shrinkInputButton.isHidden
-        let isCommandsButtonHidden = !isCommandsEnabled || content.hasCommand || !composerView.shrinkInputButton.isHidden
-        
         Animate {
             self.composerView.attachmentButton.isHidden = isAttachmentButtonHidden
-            self.composerView.commandsButton.isHidden = isCommandsButtonHidden
+        }
+    }
+
+    open func updateCommandsButtonVisibility() {
+        guard isSendMessageEnabled else {
+            composerView.commandsButton.isHidden = true
+            return
         }
 
+        let isCommandsButtonHidden = !isCommandsEnabled || content.hasCommand || !composerView.shrinkInputButton.isHidden
+        Animate {
+            self.composerView.commandsButton.isHidden = isCommandsButtonHidden
+        }
+    }
+
+    open func updateInputMessageView() {
         composerView.inputMessageView.content = .init(
             quotingMessage: content.quotingMessage,
-            command: content.command
+            command: content.command,
+            channel: channelController?.channel
         )
-        
-        attachmentsVC.content = content.attachments.map {
+        composerView.inputMessageView.isUserInteractionEnabled = isSendMessageEnabled
+    }
+
+    open func updateInputMessageViewVisibility() {
+        Animate {
+            self.composerView.inputMessageView.isHidden = self.content.isVoiceRecording
+        }
+    }
+
+    open func updateInputAttachmentsView() {
+        attachmentsVC.previewImagesByURL = attachmentPreviewImages
+        let readyPreviews: [AttachmentPreviewProvider] = content.attachments.map {
             if let provider = $0.payload as? AttachmentPreviewProvider {
                 return provider
             } else {
@@ -445,120 +809,229 @@ open class ComposerVC: _ViewController,
                 return DefaultAttachmentPreviewProvider()
             }
         }
-        composerView.inputMessageView.attachmentsViewContainer.isHidden = content.attachments.isEmpty
+        let pendingPreviews: [AttachmentPreviewProvider] = pendingMediaItems.compactMap { item in
+            if item.type == .image, item.previewImage == nil {
+                return nil
+            }
+            return ProcessingAttachmentPreview(
+                id: item.id,
+                type: item.type,
+                previewImage: item.previewImage,
+                progress: item.progress
+            )
+        }
+        attachmentsVC.content = readyPreviews + pendingPreviews
+        composerView.inputMessageView.attachmentsViewContainer.isHidden = readyPreviews.isEmpty && pendingPreviews.isEmpty
+    }
 
+    open func updateLinkPreview() {
+        // Since we don't want to show link previews with other attachment types, we dismiss the
+        // link preview in case it is being shown and there are other types of attachments in the message.
+        if content.hasOnlyLinkAttachments == false && content.skipEnrichUrl == false {
+            dismissLinkPreview()
+        }
+    }
+
+    open func updateCheckbox() {
         if content.isInsideThread {
             if channelController?.channel?.isDirectMessageChannel == true {
                 composerView.checkboxControl.label.text = L10n.Composer.Checkmark.directMessageReply
             } else {
                 composerView.checkboxControl.label.text = L10n.Composer.Checkmark.channelReply
             }
+
+            if let showReplyInChannel = content.showReplyInChannel {
+                composerView.checkboxControl.isSelected = showReplyInChannel
+            }
         }
+    }
+
+    open func updateBottomContainerVisibility() {
         Animate {
             self.composerView.bottomContainer.isHidden = !self.content.isInsideThread
         }
+    }
 
+    open func updateLeadingContainerVisibility() {
+        Animate {
+            self.composerView.leadingContainer.isHidden = self.content.isVoiceRecording
+        }
+    }
+
+    /// Controls whether the suggestions view should be shown or not.
+    /// By default there are 2 types of suggestions: Commands and Mentions.
+    open func updateSuggestions() {
         if isCommandsEnabled, let typingCommand = typingCommand(in: composerView.inputMessageView.textView) {
             showCommandSuggestions(for: typingCommand)
             return
         }
-
+        
         if isMentionsEnabled, let (typingMention, mentionRange) = typingMention(in: composerView.inputMessageView.textView) {
-            showMentionSuggestions(for: typingMention, mentionRange: mentionRange)
+            userMentionsDebouncer.execute { [weak self] in
+                self?.showMentionSuggestions(for: typingMention, mentionRange: mentionRange)
+            }
             return
         }
-        
-        // If we have files in attachments, do not allow images to be pasted in the text view.
-        // This is due to the limitation of UI(files and images cannot be shown together)
-        let filesExistInAttachments = content.attachments.contains(where: { $0.type == .file })
-        composerView.inputMessageView.textView.isPastingImagesEnabled = !filesExistInAttachments
 
         dismissSuggestions()
     }
-    
-    open func setupAttachmentsView() {
-        addChildViewController(attachmentsVC, embedIn: composerView.inputMessageView.attachmentsViewContainer)
-        attachmentsVC.didTapRemoveItemButton = { [weak self] index in
-            self?.content.attachments.remove(at: index)
+
+    open func updatePlaceholderLabel() {
+        guard isSendMessageEnabled else {
+            composerView.inputMessageView.textView.placeholderLabel.text = L10n.Composer.Placeholder.messageDisabled
+            return
+        }
+
+        composerView.inputMessageView.textView.placeholderLabel.text = content.isSlowModeOn
+            ? L10n.Composer.Placeholder.slowMode
+            : L10n.Composer.Placeholder.message
+    }
+
+    open func updateConfirmButtonVisibility() {
+        guard isSendMessageEnabled else {
+            composerView.confirmButton.isHidden = true
+            return
+        }
+        
+        Animate {
+            self.composerView.confirmButton.isHidden = self.content.state != .edit
         }
     }
-    
-    // MARK: - Actions
-    
-    @objc open func publishMessage(sender: UIButton) {
-        let text: String
-        if let command = content.command {
-            text = "/\(command.name) " + content.text
-        } else {
-            text = content.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    open func updateSendButtonVisibility() {
+        Animate {
+            switch self.content.state {
+            case .new, .quote:
+                self.composerView.sendButton.isHidden = self.content.isSlowModeOn
+            case .edit, .recording, .recordingLocked:
+                self.composerView.sendButton.isHidden = true
+            default:
+                break
+            }
         }
+    }
+
+    open func updateHeaderViewVisibility() {
+        Animate {
+            switch self.content.state {
+            case .new, .recording:
+                self.composerView.headerView.isHidden = true
+            case .edit, .quote, .recordingLocked:
+                self.composerView.headerView.isHidden = false
+            default:
+                break
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    @objc open func publishMessage(sender: UIButton) {
+        guard !hasProcessingAttachments else { return }
+
+        if !canSendLinks && inputContainsLinks {
+            presentAlert(title: L10n.Composer.LinksDisabled.title, message: L10n.Composer.LinksDisabled.subtitle)
+            return
+        }
+
+        deleteDraftMessageIfNeeded()
+
+        let text = content.inputText
 
         if let editingMessage = content.editingMessage {
             editMessage(withId: editingMessage.id, newText: text)
-            
+
             // This is just a temporary solution. This will be handled on the LLC level
             // in CIS-883
             channelController?.sendStopTypingEvent()
             content.clear()
+            pendingMediaItems.removeAll()
+            attachmentPreviewImages.removeAll()
         } else {
             createNewMessage(text: text)
-            
-            if !content.hasCommand, let cooldownDuration = channelController?.channel?.cooldownDuration {
+
+            let channel = channelController?.channel
+            let skipSlowMode = channel?.ownCapabilities.contains(.skipSlowMode) == true
+            if !content.hasCommand, !skipSlowMode, let cooldownDuration = channel?.cooldownDuration {
                 cooldownTracker.start(with: cooldownDuration)
             }
-            
+
             content.clear()
+            pendingMediaItems.removeAll()
+            attachmentPreviewImages.removeAll()
         }
     }
-    
+
     /// Shows a photo/media picker.
     open func showMediaPicker() {
         present(mediaPickerVC, animated: true)
     }
-    
+
     /// Shows a document picker.
     open func showFilePicker() {
         present(filePickerVC, animated: true)
     }
-    
+
+    /// Shows the camera view.
     open func showCamera() {
         present(cameraVC, animated: true)
     }
-    
+
+    /// Shows the poll creation view.
+    open func showPollCreation() {
+        guard let channelId = channelController?.channel?.cid,
+              let channelController = channelController?.client.channelController(for: channelId)
+        else {
+            return
+        }
+        let pollCreationVC = components.pollCreationVC.init(channelController: channelController)
+        let navVC = UINavigationController(rootViewController: pollCreationVC)
+        present(navVC, animated: true)
+    }
+
     /// Returns actions for attachments picker.
     open var attachmentsPickerActions: [UIAlertAction] {
+        let isCameraAvailable = UIImagePickerController.isSourceTypeAvailable(.camera)
+        let isPollCreationEnabled = channelConfig?.pollsEnabled == true && channelController?.channel?.canSendPoll == true
+
         let showFilePickerAction = UIAlertAction(
             title: L10n.Composer.Picker.file,
             style: .default,
             handler: { [weak self] _ in self?.showFilePicker() }
         )
-        
+
         let showMediaPickerAction = UIAlertAction(
             title: L10n.Composer.Picker.media,
             style: .default,
             handler: { [weak self] _ in self?.showMediaPicker() }
         )
-        
-        let showCameraAction = UIAlertAction(
+
+        let showCameraAction = isCameraAvailable ? UIAlertAction(
             title: L10n.Composer.Picker.camera,
             style: .default,
             handler: { [weak self] _ in self?.showCamera() }
-        )
-        
+        ) : nil
+
+        let showPollCreationAction = isPollCreationEnabled && !content.isInsideThread ? UIAlertAction(
+            title: L10n.Composer.Picker.poll,
+            style: .default,
+            handler: { [weak self] _ in self?.showPollCreation() }
+        ) : nil
+
         let cancelAction = UIAlertAction(
             title: L10n.Composer.Picker.cancel,
             style: .cancel
         )
-        
-        let isCameraAvailable = UIImagePickerController.isSourceTypeAvailable(.camera)
-        
-        if isCameraAvailable {
-            return [showCameraAction, showMediaPickerAction, showFilePickerAction, cancelAction]
-        }
-        
-        return [showMediaPickerAction, showFilePickerAction, cancelAction]
+
+        return [
+            showCameraAction,
+            showMediaPickerAction,
+            showFilePickerAction,
+            showPollCreationAction,
+            cancelAction
+        ].compactMap { $0 }
     }
-    
+
     /// Action that handles tap on attachments button in composer.
     @objc open func showAttachmentsPicker(sender: UIButton) {
         presentAlert(
@@ -568,7 +1041,7 @@ open class ComposerVC: _ViewController,
             sourceView: sender
         )
     }
-    
+
     @objc open func shrinkInput(sender: UIButton) {
         Animate {
             self.composerView.shrinkInputButton.isHidden = true
@@ -579,12 +1052,12 @@ open class ComposerVC: _ViewController,
                 }
 
             // If attachment uploads is disabled, don't ever show the attachments button
-            if self.channelController?.channel?.config.uploadsEnabled == false {
+            if !self.isAttachmentsEnabled {
                 self.composerView.attachmentButton.isHidden = true
             }
         }
     }
-    
+
     @objc open func showAvailableCommands(sender: UIButton) {
         if suggestionsVC.isPresented {
             dismissSuggestions()
@@ -592,24 +1065,19 @@ open class ComposerVC: _ViewController,
             showCommandSuggestions(for: "")
         }
     }
-    
+
     @objc open func clearContent(sender: UIButton) {
         content.clear()
+        attachmentPreviewImages.removeAll()
+        cancelMediaSelection()
     }
 
     /// Creates a new message and notifies the delegate that a new message was created.
     /// - Parameter text: The text content of the message.
     open func createNewMessage(text: String) {
         guard let cid = channelController?.cid else { return }
-        
-        // If the user included some mentions via suggestions,
-        // but then removed them from text, we should remove them from
-        // the content we'll send
-        for user in content.mentionedUsers {
-            if !text.contains(mentionText(for: user)) {
-                content.mentionedUsers.remove(user)
-            }
-        }
+
+        removeMentionUserIfNotIncluded(in: text)
 
         if let threadParentMessageId = content.threadMessage?.id {
             let messageController = channelController?.client.messageController(
@@ -624,6 +1092,7 @@ open class ComposerVC: _ViewController,
                 mentionedUserIds: content.mentionedUsers.map(\.id),
                 showReplyInChannel: composerView.checkboxControl.isSelected,
                 quotedMessageId: content.quotingMessage?.id,
+                skipEnrichUrl: content.skipEnrichUrl,
                 extraData: content.extraData
             )
             return
@@ -635,8 +1104,70 @@ open class ComposerVC: _ViewController,
             attachments: content.attachments,
             mentionedUserIds: content.mentionedUsers.map(\.id),
             quotedMessageId: content.quotingMessage?.id,
+            skipEnrichUrl: content.skipEnrichUrl,
             extraData: content.extraData
         )
+    }
+
+    /// Updates the draft message in the channel or thread if draft messages are enabled.
+    ///
+    /// The draft is created from the current content in the composer.
+    private func updateDraftMessageIfNeeded() {
+        guard components.isDraftMessagesEnabled else {
+            return
+        }
+
+        let text = content.command != nil ? content.text : content.inputText
+        if content.isEmpty {
+            return
+        }
+
+        removeMentionUserIfNotIncluded(in: text)
+
+        if let threadParentMessageId = content.threadMessage?.id, let cid = channelController?.cid {
+            let messageController = channelController?.client.messageController(
+                cid: cid,
+                messageId: threadParentMessageId
+            )
+
+            messageController?.updateDraftReply(
+                text: text,
+                attachments: content.attachments,
+                mentionedUserIds: content.mentionedUsers.map(\.id),
+                quotedMessageId: content.quotingMessage?.id,
+                showReplyInChannel: composerView.checkboxControl.isSelected,
+                command: content.command,
+                extraData: content.extraData
+            )
+            return
+        }
+
+        channelController?.updateDraftMessage(
+            text: text,
+            attachments: content.attachments,
+            mentionedUserIds: content.mentionedUsers.map(\.id),
+            quotedMessageId: content.quotingMessage?.id,
+            command: content.command,
+            extraData: content.extraData
+        )
+    }
+
+    /// Deletes the draft message in the channel or thread if there is one.
+    private func deleteDraftMessageIfNeeded() {
+        if let threadParentMessageId = content.threadMessage?.id, let cid = channelController?.cid {
+            let messageController = channelController?.client.messageController(
+                cid: cid,
+                messageId: threadParentMessageId
+            )
+            if messageController?.message?.draftReply != nil {
+                messageController?.deleteDraftReply()
+            }
+            return
+        }
+
+        if channelController?.channel?.draftMessage != nil {
+            channelController?.deleteDraftMessage()
+        }
     }
 
     /// Updates an existing message.
@@ -645,13 +1176,21 @@ open class ComposerVC: _ViewController,
     ///   - newText: The new text content of the message.
     open func editMessage(withId id: MessageId, newText: String) {
         guard let cid = channelController?.cid else { return }
+
+        removeMentionUserIfNotIncluded(in: newText)
+
         let messageController = channelController?.client.messageController(
             cid: cid,
             messageId: id
         )
-        // TODO: Adjust LLC to edit attachments also
-        // TODO: Adjust LLC to edit mentions
-        messageController?.editMessage(text: newText, extraData: content.extraData)
+        messageController?.editMessage(
+            text: newText,
+            skipEnrichUrl: content.skipEnrichUrl,
+            skipPush: false,
+            attachments: content.attachments,
+            mentionedUserIds: content.mentionedUsers.map(\.id),
+            extraData: content.extraData
+        )
     }
 
     /// Returns a potential user mention in case the user is currently typing a username.
@@ -677,10 +1216,10 @@ open class ComposerVC: _ViewController,
     /// - Parameter typingCommand: The potential command that the current user is typing.
     open func showCommandSuggestions(for typingCommand: String) {
         let availableCommands = channelController?.channel?.config.commands ?? []
-        
+
         // Don't show the commands suggestion VC if there are no commands
         guard availableCommands.isEmpty == false else { return }
-        
+
         var commandHints: [Command] = availableCommands
 
         if !typingCommand.isEmpty {
@@ -717,8 +1256,8 @@ open class ComposerVC: _ViewController,
 
         showSuggestions()
     }
-    
-    /// Returns the query to be used for searching users for the given typing mention.
+
+    /// Returns the query to be used for searching users across the whole app.
     ///
     /// This function is called in `showMentionSuggestions` to retrieve the query
     /// that will be used to search the users. You should override this if you want to change the
@@ -736,44 +1275,54 @@ open class ComposerVC: _ViewController,
         )
     }
 
+    /// Returns the query to be used for searching members inside a channel.
+    ///
+    /// This function is called in `showMentionSuggestions` to retrieve the query
+    /// that will be used to search for members. You should override this if you want to change the
+    /// member searching logic.
+    ///
+    /// - Parameter typingMention: The potential user mention the current user is typing.
+    /// - Returns: `ChannelMemberListQuery` instance that will be used for searching members in a channel.
+    open func queryForChannelMentionSuggestionsSearch(typingMention term: String) -> ChannelMemberListQuery? {
+        guard let cid = channelController?.cid else {
+            return nil
+        }
+        return ChannelMemberListQuery(
+            cid: cid,
+            filter: .autocomplete(.name, text: term),
+            sort: [.init(key: .name, isAscending: true)]
+        )
+    }
+
+    /// Returns the member list controller to be used for searching members inside a channel.
+    ///
+    /// - Parameter term: The potential user mention the current user is typing.
+    /// - Returns: `ChatChannelMemberListController` instance that will be used for searching members in a channel.
+    open func makeMemberListControllerForMemberSuggestions(typingMention term: String) -> ChatChannelMemberListController? {
+        guard let query = queryForChannelMentionSuggestionsSearch(typingMention: term) else { return nil }
+        return userSearchController.client.memberListController(query: query)
+    }
+
     /// Shows the mention suggestions for the potential mention the current user is typing.
     /// - Parameters:
     ///   - typingMention: The potential user mention the current user is typing.
     ///   - mentionRange: The position where the current user is typing a mention to it can be replaced with the suggestion.
     open func showMentionSuggestions(for typingMention: String, mentionRange: NSRange) {
-        guard let channel = channelController?.channel else {
+        guard !content.text.isEmpty else {
+            // Because we do not have cancellation, when a mention request is finished it can happen
+            // that we already published the message, so we don't need to show the suggestions anymore.
             return
         }
-        guard let currentUserId = channelController?.client.currentUserId else {
+        guard let dataSource = makeMentionSuggestionsDataSource(for: typingMention) else {
             return
         }
-        
-        var usersCache: [ChatUser] = []
-
-        if mentionAllAppUsers {
-            userSearchController.search(
-                query: queryForMentionSuggestionsSearch(typingMention: typingMention)
-            )
-        } else {
-            usersCache = searchUsers(
-                channel.lastActiveMembers,
-                by: typingMention,
-                excludingId: currentUserId
-            )
-        }
-
-        let dataSource = ChatMessageComposerSuggestionsMentionDataSource(
-            collectionView: suggestionsVC.collectionView,
-            searchController: userSearchController,
-            usersCache: usersCache
-        )
         suggestionsVC.dataSource = dataSource
         suggestionsVC.didSelectItemAt = { [weak self] userIndex in
             guard let self = self else { return }
-            guard dataSource.usersCache.count >= userIndex else {
+            guard dataSource.users.count >= userIndex else {
                 return
             }
-            guard let user = dataSource.usersCache[safe: userIndex] else {
+            guard let user = dataSource.users[safe: userIndex] else {
                 indexNotFoundAssertion()
                 return
             }
@@ -781,8 +1330,13 @@ open class ComposerVC: _ViewController,
             let textView = self.composerView.inputMessageView.textView
             let text = textView.text as NSString
             let mentionText = self.mentionText(for: user)
+            guard mentionRange.length <= mentionText.count else {
+                return self.dismissSuggestions()
+            }
+
             let newText = text.replacingCharacters(in: mentionRange, with: mentionText)
-            self.content.text = newText
+            // Add additional spacing to help continue writing the message
+            self.content.text = newText + " "
             self.content.mentionedUsers.insert(user)
 
             let caretLocation = textView.selectedRange.location
@@ -794,7 +1348,89 @@ open class ComposerVC: _ViewController,
 
         showSuggestions()
     }
-    
+
+    /// Creates a `ChatMessageComposerSuggestionsMentionDataSource` with data from local cache, user search or channel members.
+    /// The source of the data will depend on `mentionAllAppUsers` flag and the amount of members in the channel.
+    /// - Parameter typingMention: The potential user mention the current user is typing.
+    /// - Returns: A `ChatMessageComposerSuggestionsMentionDataSource` instance.
+    public func makeMentionSuggestionsDataSource(for typingMention: String) -> ChatMessageComposerSuggestionsMentionDataSource? {
+        guard let channel = channelController?.channel else {
+            return nil
+        }
+
+        guard let currentUserId = channelController?.client.currentUserId else {
+            return nil
+        }
+
+        let trimmedTypingMention = typingMention.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mentionedUsersNames = content.mentionedUsers.map(\.name)
+        let mentionedUsersIds = content.mentionedUsers.map(\.id)
+        let mentionIsAlreadyPresent = mentionedUsersNames.contains(trimmedTypingMention) || mentionedUsersIds.contains(trimmedTypingMention)
+        let shouldShowEmptyMentions = typingMention.isEmpty || mentionIsAlreadyPresent
+
+        // Because we re-create the ChatMessageComposerSuggestionsMentionDataSource always from scratch
+        // We lose the results of the previous search query, so we need to provide it manually.
+        let initialUsers: (String, [ChatUser]) -> [ChatUser] = { previousQuery, previousResult in
+            if typingMention.isEmpty {
+                return []
+            }
+            if typingMention.hasPrefix(previousQuery) || previousQuery.hasPrefix(typingMention) {
+                return previousResult
+            }
+            return []
+        }
+
+        if mentionAllAppUsers {
+            var previousResult = userSearchController.userArray
+            let previousQuery = (userSearchController?.query?.filter?.value as? String) ?? ""
+            if shouldShowEmptyMentions {
+                userSearchController.clearResults()
+                previousResult = []
+            } else {
+                userSearchController.search(
+                    query: queryForMentionSuggestionsSearch(typingMention: typingMention)
+                )
+            }
+            return ChatMessageComposerSuggestionsMentionDataSource(
+                collectionView: suggestionsVC.collectionView,
+                searchController: userSearchController,
+                memberListController: nil,
+                initialUsers: initialUsers(previousQuery, previousResult)
+            )
+        }
+
+        let memberCount = channel.memberCount
+        if memberCount > channel.lastActiveMembers.count {
+            var previousResult = Array(memberListController?.members ?? [])
+            let previousQuery = (memberListController?.query.filter?.value as? String) ?? ""
+            memberListController = makeMemberListControllerForMemberSuggestions(typingMention: typingMention)
+            if shouldShowEmptyMentions {
+                memberListController = nil
+                previousResult = []
+            } else {
+                memberListController?.synchronize()
+            }
+            return ChatMessageComposerSuggestionsMentionDataSource(
+                collectionView: suggestionsVC.collectionView,
+                searchController: userSearchController,
+                memberListController: memberListController,
+                initialUsers: initialUsers(previousQuery, previousResult)
+            )
+        }
+
+        let usersCache = searchUsers(
+            channel.lastActiveMembers,
+            by: typingMention,
+            excludingId: currentUserId
+        )
+        return ChatMessageComposerSuggestionsMentionDataSource(
+            collectionView: suggestionsVC.collectionView,
+            searchController: userSearchController,
+            memberListController: nil,
+            initialUsers: usersCache
+        )
+    }
+
     /// Provides the mention text for composer text field, when the user selects a mention suggestion.
     open func mentionText(for user: ChatUser) -> String {
         if let name = user.name, !name.isEmpty {
@@ -825,33 +1461,215 @@ open class ComposerVC: _ViewController,
         suggestionsVC.removeFromParent()
         suggestionsVC.view.removeFromSuperview()
     }
-    
+
+    /// The links in the current input text have changed
+    /// - Parameter links: The new parsed links from the input text.
+    open func didChangeLinks(_ links: [TextLink]) {
+        guard channelConfig?.urlEnrichmentEnabled == true else {
+            return
+        }
+
+        // We only show the link preview if there no other types of attachments.
+        guard content.hasOnlyLinkAttachments else {
+            dismissLinkPreview()
+            return
+        }
+
+        /// We only try to display the link preview of the first link.
+        guard let link = links.first else {
+            dismissLinkPreview()
+            return
+        }
+
+        enrichUrlDebouncer.execute { [weak self] in
+            self?.channelController?.enrichUrl(link.url) { [weak self] result in
+                let enrichedUrlText = link.url.absoluteString
+                let currentLinks = self?.composerView.inputMessageView.textView.links ?? []
+                guard let currentUrlText = currentLinks.first?.url.absoluteString else {
+                    return
+                }
+
+                // Only show/dismiss enrichment if the current url is still the one
+                // that should be shown. Since we currently do not support
+                // cancelling previous requests, this is the current optimal solution.
+                guard enrichedUrlText == currentUrlText else {
+                    return
+                }
+
+                switch result {
+                case let .success(linkPayload):
+                    self?.showLinkPreview(for: linkPayload)
+                case .failure:
+                    self?.dismissLinkPreview()
+                }
+            }
+        }
+    }
+
+    /// Shows the link preview view.
+    open func showLinkPreview(for linkPayload: LinkAttachmentPayload) {
+        content.skipEnrichUrl = false
+        Animate {
+            self.composerView.linkPreviewView.isHidden = false
+            self.composerView.linkPreviewView.content = .init(linkAttachmentPayload: linkPayload)
+        }
+    }
+
+    /// Dismisses the link preview view.
+    open func dismissLinkPreview() {
+        content.skipEnrichUrl = true
+        Animate {
+            self.composerView.linkPreviewView.isHidden = true
+            self.composerView.linkPreviewView.content = nil
+        }
+    }
+
     /// Creates and adds an attachment from the given URL to the `content`
     /// - Parameters:
     ///   - url: The URL of the attachment
     ///   - type: The type of the attachment
-    open func addAttachmentToContent(from url: URL, type: AttachmentType) throws {
+    open func addAttachmentToContent(
+        from url: URL,
+        type: AttachmentType
+    ) throws {
+        try addAttachmentToContent(from: url, type: type, info: [:], extraData: nil)
+    }
+
+    /// /// Creates and adds an attachment from the given URL to the `content`
+    /// - Parameters:
+    ///   - url: The URL of the attachment
+    ///   - type: The type of the attachment
+    ///   - info: The metadata of the attachment
+    open func addAttachmentToContent(
+        from url: URL,
+        type: AttachmentType,
+        info: [LocalAttachmentInfoKey: Any]
+    ) throws {
+        try addAttachmentToContent(from: url, type: type, info: info, extraData: nil)
+    }
+
+    /// Creates and adds an attachment from the given URL to the `content`
+    /// - Parameters:
+    ///   - url: The URL of the attachment
+    ///   - type: The type of the attachment
+    ///   - info: The metadata of the attachment
+    ///   - extraData: The attachment's extraData
+    open func addAttachmentToContent(
+        from url: URL,
+        type: AttachmentType,
+        info: [LocalAttachmentInfoKey: Any],
+        extraData: (Encodable & Sendable)?
+    ) throws {
+        try addAttachmentToContent(
+            from: url,
+            type: type,
+            info: info,
+            extraData: extraData,
+            validateFileSize: true
+        )
+    }
+
+    func addAttachmentToContent(
+        from url: URL,
+        type: AttachmentType,
+        info: [LocalAttachmentInfoKey: Any],
+        extraData: (Encodable & Sendable)?,
+        validateFileSize: Bool
+    ) throws {
         guard let chatConfig = channelController?.client.config else {
             log.assertionFailure("Channel controller must be set at this point")
             return
         }
-        
+
         let maxAttachmentsCount = chatConfig.maxAttachmentCountPerMessage
         guard content.attachments.count < maxAttachmentsCount else {
             throw AttachmentValidationError.maxAttachmentsCountPerMessageExceeded(
                 limit: maxAttachmentsCount
             )
         }
-        
-        let fileSize = try AttachmentFile(url: url).size
-        guard fileSize < chatConfig.maxAttachmentSize else {
-            throw AttachmentValidationError.maxFileSizeExceeded
+
+        if validateFileSize {
+            let fileSize = try AttachmentFile(url: url).size
+            let maxAttachmentSize = maxAttachmentSize(for: type)
+            guard fileSize <= maxAttachmentSize else {
+                throw AttachmentValidationError.maxFileSizeExceeded
+            }
         }
-        
-        let attachment = try AnyAttachmentPayload(localFileURL: url, attachmentType: type)
+
+        var localMetadata = AnyAttachmentLocalMetadata()
+        if let image = info[.originalImage] as? UIImage {
+            // At the moment the backend is not accepting floating numbers.
+            // So we round down the width and height. We do not round up
+            // to make sure there is no empty space in the image.
+            localMetadata.originalResolution = (
+                width: Double(image.size.width).rounded(.down),
+                height: Double(image.size.height).rounded(.down)
+            )
+        } else {
+            let width = info[.originalWidth] as? Double
+            let height = info[.originalHeight] as? Double
+            if let width = width, let height = height {
+                localMetadata.originalResolution = (width: width, height: height)
+            }
+        }
+
+        switch type {
+        case .voiceRecording:
+            localMetadata.duration = info[.duration] as? TimeInterval
+            localMetadata.waveformData = info[.waveformData] as? [Float]
+        case .video:
+            localMetadata.duration = info[.duration] as? TimeInterval
+        default:
+            /* No-op */
+            break
+        }
+
+        let attachment = try AnyAttachmentPayload(
+            localFileURL: url,
+            attachmentType: type,
+            localMetadata: localMetadata,
+            extraData: extraData
+        )
         content.attachments.append(attachment)
     }
-    
+
+    /// The maximum number of attachments which can be added to a message.
+    ///
+    /// The limit can be changed with `ChatClientConfig.maxAttachmentCountPerMessage`.
+    open var maxNumberOfAttachments: Int {
+        guard let config = channelController?.client.config else {
+            log.assertionFailure("Channel controller must be set at this point")
+            return 1
+        }
+        return config.maxAttachmentCountPerMessage
+    }
+
+    /// The maximum upload file size depending on the attachment type.
+    ///
+    /// The max attachment size can be set from the Stream's Dashboard App Settings.
+    /// - Parameter attachmentType: The attachment type that is being uploaded.
+    /// - Returns: The file size limit in bytes. The default value is 100MB.
+    open func maxAttachmentSize(for attachmentType: AttachmentType) -> Int64 {
+        guard let client = channelController?.client else {
+            log.assertionFailure("Channel controller must be set at this point")
+            return Components.default.maxAttachmentSize
+        }
+
+        let maxAttachmentSize: Int
+        switch attachmentType {
+        case .image:
+            maxAttachmentSize = client.appSettings?.imageUploadConfig.sizeLimit ?? 0
+        default:
+            maxAttachmentSize = client.appSettings?.fileUploadConfig.sizeLimit ?? 0
+        }
+
+        guard maxAttachmentSize > 0 else {
+            return Components.default.maxAttachmentSize
+        }
+
+        return Int64(maxAttachmentSize)
+    }
+
     /// Shows an alert for the error thrown when adding attachment to a composer.
     /// - Parameters:
     ///   - attachmentURL: The attachment's file URL.
@@ -871,7 +1689,7 @@ open class ComposerVC: _ViewController,
             log.assertionFailure(error.localizedDescription)
         }
     }
-    
+
     /// Resumes the cooldown if the channel has currently an active cooldown.
     public func resumeCurrentCooldown() {
         if let currentCooldownTime = channelController?.currentCooldownTime() {
@@ -882,16 +1700,8 @@ open class ComposerVC: _ViewController,
     // MARK: - UITextViewDelegate
 
     open func textViewDidChange(_ textView: UITextView) {
-        Animate {
-            let leadingViews = self.composerView.leadingContainer.subviews
-            let isNotShrinkInputButton: (UIView) -> Bool = { $0 !== self.composerView.shrinkInputButton }
-            let isLeadingActionsVisible = leadingViews
-                .filter { isNotShrinkInputButton($0) && self.composerView.shrinkInputButton.isHidden }
-                .filter(\.isHidden).isEmpty
-            self.composerView.shrinkInputButton.isHidden = textView.text.isEmpty || self.content
-                .hasCommand || !isLeadingActionsVisible
-        }
-        
+        updateShrinkButtonVisibility()
+
         // This guard removes the possibility of having a loop when updating the `UITextView`.
         // The aim is that `UITextView.text` is always in sync with `Content.text`.
         // With this in place we have bidirectional binding since if we update `Content.text`
@@ -910,53 +1720,367 @@ open class ComposerVC: _ViewController,
         return textView.text.count + (text.count - range.length) <= maxMessageLength
     }
 
+    open func updateShrinkButtonVisibility() {
+        let textView = composerView.inputMessageView.textView
+        Animate {
+            let leadingViews = self.composerView.leadingContainer.subviews
+            let isNotShrinkInputButton: (UIView) -> Bool = { $0 !== self.composerView.shrinkInputButton }
+            let isLeadingActionsVisible = leadingViews
+                .filter { isNotShrinkInputButton($0) && self.composerView.shrinkInputButton.isHidden }
+                .filter(\.isHidden).isEmpty
+            self.composerView.shrinkInputButton.isHidden = textView.text.isEmpty || self.content
+                .hasCommand || !isLeadingActionsVisible
+        }
+    }
+
     // MARK: - UIImagePickerControllerDelegate
-    
+
     open func imagePickerController(
         _ picker: UIImagePickerController,
         didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
     ) {
         picker.dismiss(animated: true) { [weak self] in
-            let urlAndType: (URL, AttachmentType)
-            if let imageURL = info[.imageURL] as? URL {
-                urlAndType = (imageURL, .image)
-            } else if let videoURL = info[.mediaURL] as? URL {
-                urlAndType = (videoURL, .video)
-            } else if let editedImage = info[.editedImage] as? UIImage,
-                      let editedImageURL = try? editedImage.temporaryLocalFileUrl() {
-                urlAndType = (editedImageURL, .image)
-            } else if let originalImage = info[.originalImage] as? UIImage,
-                      let originalImageURL = try? originalImage.temporaryLocalFileUrl() {
-                urlAndType = (originalImageURL, .image)
-            } else {
-                log.error("Unexpected item selected in image picker")
-                return
-            }
-            
-            do {
-                try self?.addAttachmentToContent(from: urlAndType.0, type: urlAndType.1)
-            } catch {
-                self?.handleAddAttachmentError(
-                    attachmentURL: urlAndType.0,
-                    attachmentType: urlAndType.1,
-                    error: error
-                )
+            self?.handleImagePickerMediaSelected(info: info)
+        }
+    }
+
+    private func handleImagePickerMediaSelected(info: [UIImagePickerController.InfoKey: Any]) {
+        let media: SelectedMediaItem
+        if let imageURL = info[.imageURL] as? URL {
+            media = .init(url: imageURL, type: .image)
+        } else if let videoURL = info[.mediaURL] as? URL {
+            media = .init(url: videoURL, type: .video)
+        } else if let editedImage = info[.editedImage] as? UIImage,
+                  let editedImageURL = try? editedImage.temporaryLocalFileUrl() {
+            media = .init(url: editedImageURL, type: .image)
+        } else if let originalImage = info[.originalImage] as? UIImage,
+                  let originalImageURL = try? originalImage.temporaryLocalFileUrl() {
+            media = .init(url: originalImageURL, type: .image)
+        } else {
+            log.error("Unexpected item selected in image picker")
+            return
+        }
+
+        let originalImage = media.type == .image ? info[.originalImage] as? UIImage : nil
+        Task { @MainActor [weak self] in
+            await self?.addAttachmentToContent(for: media, originalImage: originalImage)
+        }
+    }
+
+    // MARK: - Photos Picker
+
+    /// Adds the media items which were selected in the photos picker to the composer's content.
+    ///
+    /// Override to filter or transform the picker results. Call `super` to keep loading,
+    /// compression, and validation. To change which media the picker itself allows,
+    /// override `mediaPickerConfiguration` instead.
+    @available(iOS 14.0, *)
+    open func handleMediaPickerResults(_ results: [PHPickerResult]) {
+        let allowedResults = results.prefix(remainingNumberOfAttachments)
+        if allowedResults.count < results.count {
+            showAttachmentsCountExceedingLimitAlert(maxNumberOfAttachments)
+        }
+        guard !allowedResults.isEmpty else { return }
+
+        let ids = enqueuePendingMedia(from: allowedResults.map(\.itemProvider))
+        let taskID = UUID()
+        mediaSelectionTasks[taskID] = Task { @MainActor [weak self] in
+            await self?.processPendingMedia(ids: ids)
+            self?.mediaSelectionTasks[taskID] = nil
+        }
+    }
+
+    /// Cancels loading and compressing the media which was selected in the media picker.
+    open func cancelMediaSelection() {
+        mediaSelectionTasks.values.forEach { $0.cancel() }
+        mediaSelectionTasks.removeAll()
+        pendingMediaItems.removeAll()
+    }
+
+    /// Shows placeholder previews for the picked media, then loads and compresses the files.
+    func addSelectedMedia(from itemProviders: [NSItemProvider]) async {
+        await processPendingMedia(ids: enqueuePendingMedia(from: itemProviders))
+    }
+
+    /// Inserts placeholder previews so the composer can show them before the files are ready.
+    ///
+    /// Media from an earlier selection which is still being processed is kept, so that
+    /// picking again does not discard videos that are already compressing.
+    ///
+    /// - Returns: The identifiers of the items which were added.
+    @discardableResult
+    func enqueuePendingMedia(from itemProviders: [NSItemProvider]) -> [UUID] {
+        if pendingMediaItems.isEmpty {
+            pendingMediaAnchorCount = content.attachments.count
+            nextPendingMediaOrder = 0
+        }
+
+        let items = itemProviders.enumerated().map { index, itemProvider in
+            PendingMediaItem(
+                id: UUID(),
+                type: itemProvider.hasItemConformingToTypeIdentifier(mediaLoader.videoTypeIdentifier) ? .video : .image,
+                previewImage: nil,
+                progress: 0,
+                downloadShare: 0,
+                itemProvider: itemProvider,
+                order: nextPendingMediaOrder + index
+            )
+        }
+        nextPendingMediaOrder += items.count
+        pendingMediaItems.append(contentsOf: items)
+        return items.map(\.id)
+    }
+
+    /// Loads, copies, and compresses the given pending items at the same time.
+    ///
+    /// Images are added as soon as their file is ready. Videos compress
+    /// alongside them and keep the original picker order when they finish.
+    func processPendingMedia(ids: [UUID]) async {
+        await withTaskGroup(of: Void.self) { group in
+            for id in ids {
+                group.addTask { [weak self] in
+                    await self?.loadPendingPreview(for: id)
+                }
+                group.addTask { [weak self] in
+                    await self?.processPendingItem(id: id)
+                }
             }
         }
     }
-    
-    // MARK: - UIDocumentPickerViewControllerDelegate
-    
-    open func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        for fileURL in urls {
-            var attachmentType = AttachmentType(fileExtension: fileURL.pathExtension)
-            // Remove this condition when doing: https://stream-io.atlassian.net/browse/CIS-1740
-            // This is a fallback right now to treat audios as files until we actually support audios
-            if attachmentType == .audio {
-                attachmentType = .file
+
+    func loadPendingPreview(for id: UUID) async {
+        guard let itemProvider = pendingMediaItems.first(where: { $0.id == id })?.itemProvider else { return }
+        guard let previewImage = await mediaLoader.loadPreviewImage(from: itemProvider) else { return }
+        updatePendingPreview(previewImage, for: id)
+    }
+
+    private func updatePendingPreview(_ image: UIImage, for id: UUID) {
+        guard let index = pendingMediaItems.firstIndex(where: { $0.id == id }) else { return }
+        pendingMediaItems[index].previewImage = image
+    }
+
+    /// The part of the progress bar an iCloud download takes when compression follows it.
+    static let cloudDownloadProgressShare: Double = 0.5
+
+    /// The reported progress never goes backwards.
+    private func updatePendingProgress(_ progress: Double, for id: UUID) {
+        guard let index = pendingMediaItems.firstIndex(where: { $0.id == id }) else { return }
+        let progress = min(max(progress, 0), 1)
+        guard progress > pendingMediaItems[index].progress else { return }
+        pendingMediaItems[index].progress = progress
+    }
+
+    /// Reports how much of the file was downloaded from iCloud.
+    ///
+    /// Local videos skip this so compression can use the whole bar from 0%.
+    /// iCloud videos use half of the bar, then compression fills the rest.
+    func updateDownloadProgress(_ progress: Double, isCloudDownload: Bool, for id: UUID) {
+        guard isCloudDownload, let index = pendingMediaItems.firstIndex(where: { $0.id == id }) else { return }
+        let share = pendingMediaItems[index].type == .video ? Self.cloudDownloadProgressShare : 1
+        if pendingMediaItems[index].downloadShare != share {
+            pendingMediaItems[index].downloadShare = share
+        }
+        updatePendingProgress(min(max(progress, 0), 1) * share, for: id)
+    }
+
+    /// Reports the compression progress, which continues where the iCloud download stopped.
+    func updateCompressionProgress(_ progress: Double, for id: UUID) {
+        guard let index = pendingMediaItems.firstIndex(where: { $0.id == id }) else { return }
+        let share = pendingMediaItems[index].downloadShare
+        updatePendingProgress(share + min(max(progress, 0), 1) * (1 - share), for: id)
+    }
+
+    private func processPendingItem(id: UUID) async {
+        guard let item = pendingMediaItems.first(where: { $0.id == id }) else { return }
+        guard let media = await mediaLoader.loadMedia(
+            from: item.itemProvider,
+            progressHandler: { [weak self] progress, isCloudDownload in
+                self?.updateDownloadProgress(progress, isCloudDownload: isCloudDownload, for: id)
+            }
+        ) else {
+            removePendingMedia(id: id)
+            return
+        }
+        guard !Task.isCancelled, pendingMediaItems.contains(where: { $0.id == id }) else {
+            mediaLoader.removeTemporaryMedia(at: media.url)
+            return
+        }
+        await applyLocalThumbnailIfNeeded(id: id, media: media)
+
+        var processedMedia = media
+        if media.type == .video {
+            if await compressedVideoWouldExceedUploadLimit(at: media.url) {
+                mediaLoader.removeTemporaryMedia(at: media.url)
+                removePendingMedia(id: id)
+                showAttachmentExceedsMaxSizeAlert()
+                return
             }
             do {
-                try addAttachmentToContent(from: fileURL, type: attachmentType)
+                let compressedURL = try await compressVideo(
+                    at: media.url,
+                    progressHandler: { [weak self] progress in
+                        Task { @MainActor [weak self] in
+                            self?.updateCompressionProgress(progress, for: id)
+                        }
+                    }
+                )
+                processedMedia = .init(url: compressedURL, type: .video)
+            } catch is CancellationError {
+                mediaLoader.removeTemporaryMedia(at: media.url)
+                removePendingMedia(id: id)
+                return
+            } catch {
+                log.error("Failed to compress the selected video, the original video is used instead: \(error)")
+            }
+        } else {
+            updatePendingProgress(1, for: id)
+        }
+
+        guard !Task.isCancelled, pendingMediaItems.contains(where: { $0.id == id }) else {
+            mediaLoader.removeTemporaryMedia(at: processedMedia.url)
+            return
+        }
+        await commitPendingMedia(id: id, media: processedMedia)
+    }
+
+    /// Where a finished item should sit when others from the same picker batch
+    /// may still be compressing.
+    static func attachmentIndex(
+        batchStartCount: Int,
+        order: Int,
+        unfinishedItemsBefore: Int
+    ) -> Int {
+        batchStartCount + order - unfinishedItemsBefore
+    }
+
+    private func commitPendingMedia(id: UUID, media: SelectedMediaItem) async {
+        guard let pending = pendingMediaItems.first(where: { $0.id == id }) else {
+            mediaLoader.removeTemporaryMedia(at: media.url)
+            return
+        }
+        if let previewImage = pending.previewImage {
+            attachmentPreviewImages[media.url] = previewImage
+        }
+        await addAttachmentToContent(for: media, validateFileSize: true)
+        guard let currentIndex = content.attachments.firstIndex(where: { $0.localFileURL == media.url }) else {
+            // The attachment was rejected, for example because it is still too big to upload.
+            attachmentPreviewImages.removeValue(forKey: media.url)
+            mediaLoader.removeTemporaryMedia(at: media.url)
+            removePendingMedia(id: id)
+            return
+        }
+        let unfinishedItemsBefore = pendingMediaItems.filter { $0.id != id && $0.order < pending.order }.count
+        let desiredIndex = Self.attachmentIndex(
+            batchStartCount: pendingMediaAnchorCount,
+            order: pending.order,
+            unfinishedItemsBefore: unfinishedItemsBefore
+        )
+        if currentIndex != desiredIndex {
+            var attachments = content.attachments
+            let attachment = attachments.remove(at: currentIndex)
+            attachments.insert(attachment, at: min(desiredIndex, attachments.count))
+            content.attachments = attachments
+        }
+        removePendingMedia(id: id)
+    }
+
+    private func removePendingMedia(id: UUID) {
+        pendingMediaItems.removeAll { $0.id == id }
+    }
+
+    private func applyLocalThumbnailIfNeeded(id: UUID, media: SelectedMediaItem) async {
+        let thumbnail: UIImage?
+        switch media.type {
+        case .image:
+            thumbnail = await mediaLoader.imageThumbnail(at: media.url)
+        case .video:
+            thumbnail = await mediaLoader.videoThumbnail(at: media.url)
+        default:
+            thumbnail = nil
+        }
+        guard let thumbnail else { return }
+        updatePendingPreview(thumbnail, for: id)
+    }
+
+    // Skip compression when a 540p export would still be over the upload limit.
+    private func compressedVideoWouldExceedUploadLimit(at url: URL) async -> Bool {
+        guard let estimatedSize = await components.videoCompressor.estimatedFileLength(at: url) else {
+            return false
+        }
+        return estimatedSize > maxAttachmentSize(for: .video)
+    }
+
+    /// Compresses the video at the given location and removes the video it was created from.
+    private func compressVideo(
+        at url: URL,
+        progressHandler: @escaping @Sendable (Double) -> Void
+    ) async throws -> URL {
+        let compressedURL = try await components.videoCompressor.compressVideo(
+            at: url,
+            progressHandler: progressHandler
+        )
+        if compressedURL != url {
+            mediaLoader.removeTemporaryMedia(at: url)
+        }
+        return compressedURL
+    }
+
+    /// Adds the given media item to the composer's content, together with the metadata
+    /// which is needed for rendering it before it is uploaded.
+    private func addAttachmentToContent(
+        for media: SelectedMediaItem,
+        originalImage: UIImage? = nil,
+        validateFileSize: Bool = true
+    ) async {
+        let info = await localInfo(for: media, originalImage: originalImage)
+        do {
+            try addAttachmentToContent(
+                from: media.url,
+                type: media.type,
+                info: info,
+                extraData: nil,
+                validateFileSize: validateFileSize
+            )
+        } catch {
+            handleAddAttachmentError(attachmentURL: media.url, attachmentType: media.type, error: error)
+        }
+    }
+
+    private func localInfo(
+        for media: SelectedMediaItem,
+        originalImage: UIImage? = nil
+    ) async -> [LocalAttachmentInfoKey: Any] {
+        var info: [LocalAttachmentInfoKey: Any] = [:]
+        switch media.type {
+        case .image:
+            if let originalImage = originalImage {
+                info[.originalImage] = originalImage
+            } else if let dimensions = mediaLoader.imageDimensions(at: media.url) {
+                info[.originalWidth] = dimensions.width
+                info[.originalHeight] = dimensions.height
+            }
+        case .video:
+            let metadata = await mediaLoader.loadVideoMetadata(at: media.url)
+            if let duration = metadata.duration {
+                info[.duration] = duration
+            }
+            if let width = metadata.width, let height = metadata.height {
+                info[.originalWidth] = width
+                info[.originalHeight] = height
+            }
+        default:
+            break
+        }
+        return info
+    }
+
+    // MARK: - UIDocumentPickerViewControllerDelegate
+
+    open func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        for fileURL in urls {
+            let attachmentType = AttachmentType(fileExtension: fileURL.pathExtension)
+            do {
+                try addAttachmentToContent(from: fileURL, type: attachmentType, info: [:])
             } catch {
                 handleAddAttachmentError(
                     attachmentURL: fileURL,
@@ -967,28 +2091,32 @@ open class ComposerVC: _ViewController,
             }
         }
     }
-    
+
     /// Shows an alert saying that attachment's size exceeds the limit.
     open func showAttachmentExceedsMaxSizeAlert() {
         presentAlert(message: L10n.Attachment.maxSizeExceeded)
     }
-    
+
     /// Shows an alert saying that the max # of attachments per message is exceeded.
     open func showAttachmentsCountExceedingLimitAlert(_ limit: Int) {
         presentAlert(message: L10n.Attachment.maxCountExceeded(limit))
     }
-    
+
     // MARK: - InputTextViewClipboardAttachmentDelegate
-    
+
     open func inputTextView(_ inputTextView: InputTextView, didPasteImage image: UIImage) {
         guard let imageUrl = try? image.temporaryLocalFileUrl() else {
             log.error("Could not create temporary local file from image")
             return
         }
-        
+
         let type: AttachmentType = .image
         do {
-            try addAttachmentToContent(from: imageUrl, type: type)
+            try addAttachmentToContent(
+                from: imageUrl,
+                type: type,
+                info: [.originalImage: image]
+            )
         } catch {
             handleAddAttachmentError(
                 attachmentURL: imageUrl,
@@ -997,9 +2125,80 @@ open class ComposerVC: _ViewController,
             )
         }
     }
-    
+
+    // MARK: - VoiceRecordingDelegate
+
+    public func voiceRecording(
+        _ voiceRecordingVC: VoiceRecordingVC,
+        addAttachmentFromLocation location: URL,
+        duration: TimeInterval,
+        waveformData: [Float]
+    ) {
+        do {
+            try addAttachmentToContent(
+                from: location,
+                type: .voiceRecording,
+                info: [
+                    .duration: duration,
+                    .waveformData: waveformData
+                ]
+            )
+        } catch {
+            handleAddAttachmentError(
+                attachmentURL: location,
+                attachmentType: .voiceRecording,
+                error: error
+            )
+        }
+    }
+
+    public func voiceRecordingPublishMessage(_ voiceRecordingVC: VoiceRecordingVC) {
+        publishMessage(sender: composerView.sendButton)
+    }
+
+    public func voiceRecordingWillBeginRecording(_ voiceRecordingVC: VoiceRecordingVC) {
+        /* No-op */
+    }
+
+    public func voiceRecordingDidBeginRecording(_ voiceRecordingVC: VoiceRecordingVC) {
+        content.recording()
+    }
+
+    public func voiceRecordingDidLockRecording(_ voiceRecordingVC: VoiceRecordingVC) {
+        content.recordingLocked()
+    }
+
+    public func voiceRecordingDidStopRecording(_ voiceRecordingVC: VoiceRecordingVC) {
+        content = .init(
+            text: content.text,
+            state: .new,
+            editingMessage: content.editingMessage,
+            quotingMessage: content.quotingMessage,
+            threadMessage: content.threadMessage,
+            attachments: content.attachments,
+            mentionedUsers: content.mentionedUsers,
+            command: content.command
+        )
+    }
+
+    public func voiceRecording(
+        _ voiceRecordingVC: VoiceRecordingVC,
+        presentFloatingView floatingView: UIView
+    ) {
+        if let parent = parent {
+            floatingView.translatesAutoresizingMaskIntoConstraints = false
+            parent.view.addSubview(floatingView)
+            NSLayoutConstraint.activate([
+                floatingView.leadingAnchor.pin(equalTo: parent.view.safeAreaLayoutGuide.leadingAnchor),
+                floatingView.trailingAnchor.pin(equalTo: parent.view.safeAreaLayoutGuide.trailingAnchor),
+                composerView.topAnchor.pin(equalTo: floatingView.bottomAnchor),
+                floatingView.topAnchor.pin(greaterThanOrEqualTo: parent.view.safeAreaLayoutGuide.topAnchor)
+            ])
+        }
+    }
+
     // MARK: - Private
-    
+
     private func presentAlert(
         title: String? = nil,
         message: String? = nil,
@@ -1011,9 +2210,28 @@ open class ComposerVC: _ViewController,
     ) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: preferredStyle)
         alert.popoverPresentationController?.sourceView = sourceView
-        actions.forEach(alert.addAction)
-        
+        actions.forEach { alert.addAction($0) }
+
         present(alert, animated: true)
+    }
+
+    func removeMentionUserIfNotIncluded(in currentText: String) {
+        // If the user included some mentions via suggestions,
+        // but then removed them from text, we should remove them from
+        // the content we'll send
+        for user in content.mentionedUsers {
+            if !currentText.contains(mentionText(for: user)) {
+                content.mentionedUsers.remove(user)
+            }
+        }
+    }
+}
+
+@available(iOS 14.0, *)
+extension ComposerVC: PHPickerViewControllerDelegate {
+    public func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        handleMediaPickerResults(results)
+        picker.dismiss(animated: true)
     }
 }
 

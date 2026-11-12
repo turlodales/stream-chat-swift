@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -8,7 +8,7 @@ import UIKit
 /// Default provider that is used when AttachmentPreviewProvider is not implemented for custom attachment payload. This
 /// provider always returns a new instance of `AttachmentPlaceholderView`.
 public struct DefaultAttachmentPreviewProvider: AttachmentPreviewProvider {
-    public func previewView(components: Components) -> UIView {
+    @MainActor public func previewView(components: Components) -> UIView {
         components.attachmentPreviewViewPlaceholder.init()
     }
 
@@ -35,7 +35,7 @@ open class AttachmentPlaceholderView: _View, AppearanceProvider {
     override open func setUpAppearance() {
         super.setUpAppearance()
 
-        borderLayer.strokeColor = appearance.colorPalette.background4.cgColor
+        borderLayer.strokeColor = appearance.colorPalette.backgroundCoreScrim.cgColor
         borderLayer.lineDashPattern = [2, 2]
         borderLayer.fillColor = nil
         borderLayer.masksToBounds = true

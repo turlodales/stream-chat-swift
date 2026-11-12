@@ -1,0 +1,23 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+final class UpdatePollPartialRequestBody: Sendable, Encodable, JSONEncodable {
+    /// Sets new field values
+    let set: [String: RawJSON]?
+    /// Array of field names to unset
+    let unset: [String]?
+
+    init(set: [String: RawJSON]? = nil, unset: [String]? = nil) {
+        self.set = set
+        self.unset = unset
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+        try container.encodeIfPresent(set, forKey: .set)
+        try container.encodeIfPresent(unset, forKey: .unset)
+    }
+}

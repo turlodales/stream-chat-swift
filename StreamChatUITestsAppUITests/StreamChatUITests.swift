@@ -1,9 +1,9 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
-@_exported import StreamChatTestHelpers
-@_exported import StreamChatTestMockServer
 import Foundation
+@_exported import StreamChatTestMockServer
+@_exported import StreamSwiftTestHelpers
 
 final class StreamChatUITests {}

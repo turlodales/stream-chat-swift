@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -11,6 +11,7 @@ public extension ChannelConfig {
         reactionsEnabled: Bool = true,
         typingEventsEnabled: Bool = true,
         readEventsEnabled: Bool = true,
+        deliveryEventsEnabled: Bool = true,
         connectEventsEnabled: Bool = true,
         uploadsEnabled: Bool = true,
         repliesEnabled: Bool = true,
@@ -18,6 +19,13 @@ public extension ChannelConfig {
         searchEnabled: Bool = true,
         mutesEnabled: Bool = true,
         urlEnrichmentEnabled: Bool = true,
+        skipLastMsgAtUpdateForSystemMsg: Bool = false,
+        messageRemindersEnabled: Bool = false,
+        sharedLocationsEnabled: Bool = false,
+        scheduledMessagesMaxPerChannel: Int? = nil,
+        scheduledMessagesMaxPerUser: Int? = nil,
+        scheduledMessagesMaxLeadTime: TimeInterval? = nil,
+        scheduledMessagesMinLeadTime: TimeInterval? = nil,
         messageRetention: String = "",
         maxMessageLength: Int = 0,
         commands: [Command] = [Command(name: "Giphy", description: "", set: "", args: "")],
@@ -28,6 +36,7 @@ public extension ChannelConfig {
             reactionsEnabled: reactionsEnabled,
             typingEventsEnabled: typingEventsEnabled,
             readEventsEnabled: readEventsEnabled,
+            deliveryEventsEnabled: deliveryEventsEnabled,
             connectEventsEnabled: connectEventsEnabled,
             uploadsEnabled: uploadsEnabled,
             repliesEnabled: repliesEnabled,
@@ -35,6 +44,13 @@ public extension ChannelConfig {
             searchEnabled: searchEnabled,
             mutesEnabled: mutesEnabled,
             urlEnrichmentEnabled: urlEnrichmentEnabled,
+            skipLastMsgAtUpdateForSystemMsg: skipLastMsgAtUpdateForSystemMsg,
+            messageRemindersEnabled: messageRemindersEnabled,
+            sharedLocationsEnabled: sharedLocationsEnabled,
+            scheduledMessagesMaxPerChannel: scheduledMessagesMaxPerChannel,
+            scheduledMessagesMaxPerUser: scheduledMessagesMaxPerUser,
+            scheduledMessagesMaxLeadTime: scheduledMessagesMaxLeadTime,
+            scheduledMessagesMinLeadTime: scheduledMessagesMinLeadTime,
             messageRetention: messageRetention,
             maxMessageLength: maxMessageLength,
             commands: commands,
@@ -48,13 +64,19 @@ public extension ChatChannelRead {
     /// Creates a new `ChatChannelRead` object from the provided data.
     static func mock(
         lastReadAt: Date,
+        lastReadMessageId: MessageId?,
         unreadMessagesCount: Int,
-        user: ChatUser
+        user: ChatUser,
+        lastDeliveredAt: Date? = nil,
+        lastDeliveredMessageId: MessageId? = nil
     ) -> Self {
         .init(
             lastReadAt: lastReadAt,
+            lastReadMessageId: lastReadMessageId,
             unreadMessagesCount: unreadMessagesCount,
-            user: user
+            user: user,
+            lastDeliveredAt: lastDeliveredAt,
+            lastDeliveredMessageId: lastDeliveredMessageId
         )
     }
 }
@@ -69,22 +91,38 @@ public extension ChatChannel {
         createdAt: Date = .init(),
         updatedAt: Date = .init(),
         deletedAt: Date? = nil,
+        truncatedAt: Date? = nil,
+        truncatedBy: ChatUser? = nil,
         isHidden: Bool = false,
         createdBy: ChatUser? = nil,
         config: ChannelConfig = .mock(),
+        filterTags: Set<String> = [],
+        ownCapabilities: Set<ChannelCapability> = [.sendMessage, .uploadFile],
         isFrozen: Bool = false,
+        isDisabled: Bool = false,
+        isBlocked: Bool = false,
         lastActiveMembers: [ChatChannelMember] = [],
         membership: ChatChannelMember? = nil,
         currentlyTypingUsers: Set<ChatUser> = [],
         lastActiveWatchers: [ChatUser] = [],
+        team: TeamId? = nil,
+        isAutoTranslationEnabled: Bool = false,
+        autoTranslationLanguages: Set<TranslationLanguage> = [],
         unreadCount: ChannelUnreadCount = .noUnread,
         watcherCount: Int = 0,
         memberCount: Int = 0,
         reads: [ChatChannelRead] = [],
+        cooldownDuration: Int = 0,
         extraData: [String: RawJSON] = [:],
         latestMessages: [ChatMessage] = [],
+        lastMessageFromCurrentUser: ChatMessage? = nil,
+        pinnedMessages: [ChatMessage] = [],
+        pendingMessages: [ChatMessage] = [],
         muteDetails: MuteDetails? = nil,
-        previewMessage: ChatMessage? = nil
+        draftMessage: DraftMessage? = nil,
+        activeLiveLocations: [SharedLocation] = [],
+        pushPreference: PushPreference? = nil,
+        scheduledMessages: [ScheduledMessage] = []
     ) -> Self {
         self.init(
             cid: cid,
@@ -94,26 +132,41 @@ public extension ChatChannel {
             createdAt: createdAt,
             updatedAt: updatedAt,
             deletedAt: deletedAt,
+            truncatedAt: truncatedAt,
+            truncatedBy: truncatedBy,
             isHidden: isHidden,
             createdBy: createdBy,
             config: config,
+            filterTags: filterTags,
+            ownCapabilities: ownCapabilities,
             isFrozen: isFrozen,
-            lastActiveMembers: { lastActiveMembers },
+            isDisabled: isDisabled,
+            isBlocked: isBlocked,
+            lastActiveMembers: lastActiveMembers,
             membership: membership,
-            currentlyTypingUsers: { currentlyTypingUsers },
-            lastActiveWatchers: { lastActiveWatchers },
-            unreadCount: { unreadCount },
+            typingUsers: currentlyTypingUsers.asTypingUsers,
+            lastActiveWatchers: lastActiveWatchers,
+            team: team,
+            isAutoTranslationEnabled: isAutoTranslationEnabled,
+            autoTranslationLanguages: autoTranslationLanguages,
+            unreadCount: unreadCount,
             watcherCount: watcherCount,
             memberCount: memberCount,
             reads: reads,
+            cooldownDuration: cooldownDuration,
             extraData: extraData,
-            latestMessages: { latestMessages },
-            muteDetails: { muteDetails },
-            previewMessage: { previewMessage },
-            underlyingContext: nil
+            latestMessages: latestMessages,
+            lastMessageFromCurrentUser: lastMessageFromCurrentUser,
+            pinnedMessages: pinnedMessages,
+            pendingMessages: pendingMessages,
+            muteDetails: muteDetails,
+            draftMessage: draftMessage,
+            activeLiveLocations: activeLiveLocations,
+            pushPreference: pushPreference,
+            scheduledMessages: scheduledMessages
         )
     }
-    
+
     /// Creates a new `ChatChannel` object for  from the provided data.
     static func mockDMChannel(
         name: String? = nil,
@@ -122,13 +175,18 @@ public extension ChatChannel {
         createdAt: Date = .init(),
         updatedAt: Date = .init(),
         deletedAt: Date? = nil,
+        truncatedAt: Date? = nil,
         isHidden: Bool = false,
         createdBy: ChatUser? = nil,
         config: ChannelConfig = .mock(),
+        ownCapabilities: Set<ChannelCapability> = [.sendMessage, .uploadFile],
         isFrozen: Bool = false,
+        isDisabled: Bool = false,
+        isBlocked: Bool = false,
         lastActiveMembers: [ChatChannelMember] = [],
         currentlyTypingUsers: Set<ChatUser> = [],
         lastActiveWatchers: [ChatUser] = [],
+        team: TeamId? = nil,
         unreadCount: ChannelUnreadCount = .noUnread,
         watcherCount: Int = 0,
         memberCount: Int? = nil,
@@ -136,8 +194,11 @@ public extension ChatChannel {
         extraData: [String: RawJSON] = [:],
         latestMessages: [ChatMessage] = [],
         pinnedMessages: [ChatMessage] = [],
+        pendingMessages: [ChatMessage] = [],
         muteDetails: MuteDetails? = nil,
-        previewMessage: ChatMessage? = nil
+        draftMessage: DraftMessage? = nil,
+        activeLiveLocations: [SharedLocation] = [],
+        pushPreference: PushPreference? = nil
     ) -> Self {
         self.init(
             cid: .init(type: .messaging, id: "!members" + .newUniqueId),
@@ -147,26 +208,36 @@ public extension ChatChannel {
             createdAt: createdAt,
             updatedAt: updatedAt,
             deletedAt: deletedAt,
+            truncatedAt: truncatedAt,
             isHidden: isHidden,
             createdBy: createdBy,
             config: config,
+            ownCapabilities: ownCapabilities,
             isFrozen: isFrozen,
-            lastActiveMembers: { lastActiveMembers },
-            currentlyTypingUsers: { currentlyTypingUsers },
-            lastActiveWatchers: { lastActiveWatchers },
-            unreadCount: { unreadCount },
+            isDisabled: isDisabled,
+            isBlocked: isBlocked,
+            lastActiveMembers: lastActiveMembers,
+            membership: nil,
+            typingUsers: currentlyTypingUsers.asTypingUsers,
+            lastActiveWatchers: lastActiveWatchers,
+            team: team,
+            unreadCount: unreadCount,
             watcherCount: watcherCount,
             memberCount: memberCount ?? lastActiveMembers.count,
             reads: reads,
+            cooldownDuration: 0,
             extraData: extraData,
-            latestMessages: { latestMessages },
-            pinnedMessages: { pinnedMessages },
-            muteDetails: { muteDetails },
-            previewMessage: { previewMessage },
-            underlyingContext: nil
+            latestMessages: latestMessages,
+            lastMessageFromCurrentUser: nil,
+            pinnedMessages: pinnedMessages,
+            pendingMessages: pendingMessages,
+            muteDetails: muteDetails,
+            draftMessage: draftMessage,
+            activeLiveLocations: activeLiveLocations,
+            pushPreference: pushPreference
         )
     }
-    
+
     /// Creates a new `ChatChannel` object for  from the provided data.
     static func mockNonDMChannel(
         name: String? = nil,
@@ -175,21 +246,29 @@ public extension ChatChannel {
         createdAt: Date = .init(),
         updatedAt: Date = .init(),
         deletedAt: Date? = nil,
+        truncatedAt: Date? = nil,
         isHidden: Bool = false,
         createdBy: ChatUser? = nil,
         config: ChannelConfig = .mock(),
+        ownCapabilities: Set<ChannelCapability> = [.sendMessage, .uploadFile],
         isFrozen: Bool = false,
+        isDisabled: Bool = false,
+        isBlocked: Bool = false,
         lastActiveMembers: [ChatChannelMember] = [],
         currentlyTypingUsers: Set<ChatUser> = [],
         lastActiveWatchers: [ChatUser] = [],
+        team: TeamId? = nil,
         unreadCount: ChannelUnreadCount = .noUnread,
         watcherCount: Int = 0,
         memberCount: Int = 0,
         reads: [ChatChannelRead] = [],
         extraData: [String: RawJSON] = [:],
         latestMessages: [ChatMessage] = [],
+        pinnedMessages: [ChatMessage] = [],
+        pendingMessages: [ChatMessage] = [],
         muteDetails: MuteDetails? = nil,
-        previewMessage: ChatMessage? = nil
+        draftMessage: DraftMessage? = nil,
+        activeLiveLocations: [SharedLocation] = []
     ) -> Self {
         self.init(
             cid: .init(type: .messaging, id: .newUniqueId),
@@ -199,22 +278,33 @@ public extension ChatChannel {
             createdAt: createdAt,
             updatedAt: updatedAt,
             deletedAt: deletedAt,
+            truncatedAt: truncatedAt,
             isHidden: isHidden,
             createdBy: createdBy,
             config: config,
+            ownCapabilities: ownCapabilities,
             isFrozen: isFrozen,
-            lastActiveMembers: { lastActiveMembers },
-            currentlyTypingUsers: { currentlyTypingUsers },
-            lastActiveWatchers: { lastActiveWatchers },
-            unreadCount: { unreadCount },
+            isDisabled: isDisabled,
+            isBlocked: isBlocked,
+            lastActiveMembers: lastActiveMembers,
+            membership: nil,
+            typingUsers: currentlyTypingUsers.asTypingUsers,
+            lastActiveWatchers: lastActiveWatchers,
+            team: team,
+            unreadCount: unreadCount,
             watcherCount: watcherCount,
             memberCount: memberCount,
             reads: reads,
+            cooldownDuration: 0,
             extraData: extraData,
-            latestMessages: { latestMessages },
-            muteDetails: { muteDetails },
-            previewMessage: { previewMessage },
-            underlyingContext: nil
+            latestMessages: latestMessages,
+            lastMessageFromCurrentUser: nil,
+            pinnedMessages: pinnedMessages,
+            pendingMessages: pendingMessages,
+            muteDetails: muteDetails,
+            draftMessage: draftMessage,
+            activeLiveLocations: activeLiveLocations,
+            pushPreference: nil
         )
     }
 }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -18,9 +18,8 @@ struct SettingValue {
 }
 
 struct Settings {
-
     // Connectivity
-    var showsConnectivity = SettingValue(setting: .showsConnectivity, isOn: false)
+    var showsConnectivity = SettingValue(setting: .showsConnectivity, isOn: true)
     var setConnectivity = SettingValue(setting: .setConnectivity, isOn: false)
     var isConnected = SettingValue(setting: .isConnected, isOn: true)
 

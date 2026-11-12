@@ -1,17 +1,20 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
 /// A final class that holds the context for the ongoing operations during the sync process
-final class SyncContext {
+final class SyncContext: @unchecked Sendable {
     let lastSyncAt: Date
-    var localChannelIds: [ChannelId] = []
-    var synchedChannelIds: Set<ChannelId> = Set()
-    var watchedAndSynchedChannelIds: Set<ChannelId> = Set()
-    var unwantedChannelIds: Set<ChannelId> = Set()
-    
+    @Atomic var localChannelIds: Set<ChannelId> = Set()
+    @Atomic var synchedChannelIds: Set<ChannelId> = Set()
+    @Atomic var watchedAndSynchedChannelIds: Set<ChannelId> = Set()
+    @Atomic var unwantedChannelIds: Set<ChannelId> = Set()
+    @Atomic var groupedChannelIds: [String: Set<ChannelId>] = [:]
+    @Atomic var refreshedChannelGroups: [ChannelGroup] = []
+    @Atomic var watchesSyncEndpointChannels = false
+
     init(lastSyncAt: Date) {
         self.lastSyncAt = lastSyncAt
     }
@@ -19,53 +22,267 @@ final class SyncContext {
 
 private let syncOperationsMaximumRetries = 2
 
-final class GetChannelIdsOperation: AsyncOperation {
-    init(database: DatabaseContainer, context: SyncContext, activeChannelIds: [ChannelId]) {
-        super.init(maxRetries: syncOperationsMaximumRetries) { [weak database] _, done in
-            guard let database = database else {
+final class ActiveChannelIdsOperation: AsyncOperation, @unchecked Sendable {
+    init(
+        syncRepository: SyncRepository,
+        context: SyncContext
+    ) {
+        super.init(maxRetries: syncOperationsMaximumRetries) { [weak syncRepository] _, done in
+            guard let syncRepository else {
                 done(.continue)
                 return
             }
-            database.backgroundReadOnlyContext.perform {
-                let cids = database.backgroundReadOnlyContext.loadAllChannelListQueries()
-                    .flatMap(\.channels)
-                    .compactMap { try? ChannelId(cid: $0.cid) }
-                log.info("0. Retrieved channels from existing queries from DB. Count \(cids.count)", subsystems: .offlineSupport)
-                context.localChannelIds = Array(Set(cids + activeChannelIds))
+            
+            let completion: @Sendable () -> Void = {
+                context.localChannelIds = Set(context.localChannelIds)
+                log.info("Found \(context.localChannelIds.count) active channels", subsystems: .offlineSupport)
                 done(.continue)
             }
-        }
-    }
-}
-
-final class SyncEventsOperation: AsyncOperation {
-    init(syncRepository: SyncRepository, context: SyncContext) {
-        super.init(maxRetries: syncOperationsMaximumRetries) { [weak syncRepository] _, done in
-            log.info(
-                "1. Call `/sync` endpoint and get missing events for all locally existed channels",
-                subsystems: .offlineSupport
+            
+            context.localChannelIds.formUnion(syncRepository.activeChannelControllers.allObjects.compactMap(\.cid))
+            context.localChannelIds.formUnion(
+                syncRepository.activeChannelListControllers.allObjects
+                    .map(\.channels)
+                    .flatMap { $0 }
+                    .map(\.cid)
+            )
+            
+            context.localChannelIds.formUnion(
+                syncRepository.activeLivestreamChats.allObjects.compactMap { try? $0.cid }
             )
 
-            syncRepository?.syncChannelsEvents(
-                channelIds: context.localChannelIds,
-                lastSyncAt: context.lastSyncAt,
-                isRecovery: true
-            ) { result in
-                switch result {
-                case let .success(channelIds):
-                    context.synchedChannelIds = Set(channelIds)
-                    done(.continue)
-                case let .failure(error):
-                    context.synchedChannelIds = Set([])
-                    done(error.shouldRetry ? .retry : .continue)
+            let activeChats = syncRepository.activeChats.allObjects
+            let activeChannelLists = syncRepository.activeChannelLists.allObjects
+            if activeChats.isEmpty, activeChannelLists.isEmpty {
+                completion()
+            } else {
+                // Main actor requirement
+                let chats = syncRepository.activeChats.allObjects
+                let channelLists = syncRepository.activeChannelLists.allObjects
+                DispatchQueue.main.async {
+                    context.localChannelIds.formUnion(chats.compactMap { try? $0.cid })
+                    context.localChannelIds.formUnion(
+                        channelLists
+                            .map(\.state.channels)
+                            .flatMap { $0 }
+                            .map(\.cid)
+                    )
+                    for channelList in channelLists {
+                        guard let groupKey = channelList.groupKey else { continue }
+                        context.groupedChannelIds[groupKey] = Set(channelList.state.channels.map(\.cid))
+                    }
+                    completion()
                 }
             }
         }
     }
 }
 
-final class WatchChannelOperation: AsyncOperation {
-    init(controller: ChatChannelController, context: SyncContext) {
+final class RefreshChannelListOperation: AsyncOperation, @unchecked Sendable {
+    init(controller: ChatChannelListController, context: SyncContext) {
+        super.init(maxRetries: syncOperationsMaximumRetries) { [weak controller] _, done in
+            guard let controller = controller, controller.canBeRecovered else {
+                done(.continue)
+                return
+            }
+            controller.refreshLoadedChannels { result in
+                switch result {
+                case .success(let channelIds):
+                    log.debug("Synced \(channelIds.count) channels in a channel list controller (\(controller.query.filter)", subsystems: .offlineSupport)
+                    context.synchedChannelIds.formUnion(channelIds)
+                    done(.continue)
+                case .failure(let error):
+                    log.error("Failed refreshing channel list controller (\(controller.query.filter) with error \(error)", subsystems: .offlineSupport)
+                    done(.retry)
+                }
+            }
+        }
+    }
+    
+    init(channelList: ChannelList, context: SyncContext) {
+        super.init(maxRetries: syncOperationsMaximumRetries) { [weak channelList] _, done in
+            guard let channelList else {
+                done(.continue)
+                return
+            }
+            guard channelList.groupKey == nil else {
+                done(.continue)
+                return
+            }
+            Task {
+                do {
+                    let channelIds = try await channelList.refreshLoadedChannels()
+                    log.debug("Synced \(channelIds.count) channels in a channel list", subsystems: .offlineSupport)
+                    context.synchedChannelIds.formUnion(channelIds)
+                    done(.continue)
+                } catch {
+                    log.error("Failed refreshing channel list with error \(error)", subsystems: .offlineSupport)
+                    done(.retry)
+                }
+            }
+        }
+    }
+}
+
+/// Refreshes the first page of all grouped channel lists with a single batched `queryGroupedChannels` call, keeping
+/// their loaded pages and recording the returned channel ids in `context.synchedChannelIds`. `/sync` then covers only the later pages.
+final class SyncGroupedChannelsOperation: AsyncOperation, @unchecked Sendable {
+    init(channelListUpdater: ChannelListUpdater, groupedChannelLists: [ChannelList], context: SyncContext) {
+        let groupKeys = Set(groupedChannelLists.compactMap(\.groupKey)).sorted()
+        super.init(maxRetries: syncOperationsMaximumRetries) { [weak channelListUpdater] _, done in
+            guard let channelListUpdater, !groupKeys.isEmpty else {
+                done(.continue)
+                return
+            }
+
+            Task {
+                do {
+                    var states: [String: ChannelListUpdater.GroupedQueryPaginationState] = [:]
+                    for groupKey in groupKeys {
+                        states[groupKey] = try await channelListUpdater.paginationState(for: groupKey)
+                    }
+                    // Each group keeps its own filter. The flags and the sort are shared by the whole
+                    // request: it watches when any group watches, and the rest come from the first group that has been queried.
+                    let watch = groupKeys.contains { states[$0]?.watch == true }
+                    // `/sync` watches the grouped lists' later pages again when any of them was queried with `watch`.
+                    context.watchesSyncEndpointChannels = watch
+                    let groups = Dictionary(uniqueKeysWithValues: groupKeys.map { groupKey in
+                        (groupKey, GroupedChannelsGroupRequest(filterConditions: states[groupKey]?.filter))
+                    })
+                    let channelGroups = try await channelListUpdater.queryGroupedChannels(
+                        groups: groups,
+                        limit: nil,
+                        sort: groupKeys.compactMap { states[$0]?.sort }.first,
+                        watch: watch,
+                        presence: groupKeys.compactMap { states[$0]?.presence }.first ?? false,
+                        keepingLoadedPages: true
+                    )
+                    let returnedChannelIds = channelGroups.flatMap { $0.channels.map(\.cid) }
+                    context.refreshedChannelGroups = channelGroups
+                    context.synchedChannelIds.formUnion(returnedChannelIds)
+                    log.debug(
+                        "Synced \(returnedChannelIds.count) grouped channels across \(channelGroups.count) group(s)",
+                        subsystems: .offlineSupport
+                    )
+                    done(.continue)
+                } catch {
+                    log.error("Failed to refresh grouped channels during sync: \(error)", subsystems: .offlineSupport)
+                    done(.retry)
+                }
+            }
+        }
+    }
+}
+
+final class SyncEventsOperation: AsyncOperation, @unchecked Sendable {
+    init(syncRepository: SyncRepository, context: SyncContext, recovery: Bool) {
+        super.init(maxRetries: syncOperationsMaximumRetries) { [weak syncRepository] _, done in
+            let channelIds = Set(context.localChannelIds).subtracting(context.synchedChannelIds)
+            log.info(
+                "Preparing `/sync` for missing events. active=\(context.localChannelIds.count) alreadySynced=\(context.synchedChannelIds.count) remaining=\(channelIds.count)",
+                subsystems: .offlineSupport
+            )
+
+            guard !channelIds.isEmpty else {
+                log.info(
+                    "Skipping `/sync` because all active channels were already refreshed by channel lists",
+                    subsystems: .offlineSupport
+                )
+                done(.continue)
+                return
+            }
+
+            let channelIdsToSync = Self.channelIdsToSync(from: channelIds, context: context)
+            log.info(
+                "Calling `/sync` for \(channelIdsToSync.count) channel(s) since \(context.lastSyncAt)",
+                subsystems: .offlineSupport
+            )
+
+            syncRepository?.syncChannelsEvents(
+                channelIds: channelIdsToSync,
+                lastSyncAt: context.lastSyncAt,
+                isRecovery: recovery,
+                watch: context.watchesSyncEndpointChannels,
+                alreadySyncedChannelIds: context.synchedChannelIds
+            ) { result in
+                switch result {
+                case let .success(channelIds):
+                    context.synchedChannelIds.formUnion(channelIds)
+                    done(.continue)
+                case let .failure(error):
+                    done(error.shouldRetry ? .retry : .continue)
+                }
+            }
+        }
+    }
+
+    // A grouped list keeps its loaded pages only when `/sync` covers all of them, so whole groups go first,
+    // smallest first. Groups the first-page refresh already reset have no later pages to keep.
+    private static func channelIdsToSync(from remainingChannelIds: Set<ChannelId>, context: SyncContext) -> [ChannelId] {
+        let limit = SyncRepository.Constants.maximumChannelIdsPerRequest
+        let resetGroupKeys = Set(context.refreshedChannelGroups.filter { $0.next == nil }.map(\.groupKey))
+        let groups = context.groupedChannelIds
+            .filter { !resetGroupKeys.contains($0.key) }
+            .map { (key: $0.key, channelIds: $0.value.intersection(remainingChannelIds)) }
+            .filter { !$0.channelIds.isEmpty }
+            .sorted { ($0.channelIds.count, $0.key) < ($1.channelIds.count, $1.key) }
+        var channelIds: [ChannelId] = []
+        var addedChannelIds = Set<ChannelId>()
+        for group in groups {
+            let groupChannelIds = group.channelIds.subtracting(addedChannelIds)
+            guard channelIds.count + groupChannelIds.count <= limit else { continue }
+            channelIds.append(contentsOf: groupChannelIds)
+            addedChannelIds.formUnion(groupChannelIds)
+        }
+        let groupedChannelIds = groups.reduce(into: Set<ChannelId>()) { $0.formUnion($1.channelIds) }
+        let restChannelIds = remainingChannelIds.subtracting(addedChannelIds)
+        channelIds.append(contentsOf: restChannelIds.subtracting(groupedChannelIds))
+        channelIds.append(contentsOf: restChannelIds.intersection(groupedChannelIds))
+        return Array(channelIds.prefix(limit))
+    }
+}
+
+// Validates the grouped channel lists `SyncGroupedChannelsOperation` refreshed. A list whose loaded channels `/sync`
+// covered keeps its pages and unlinks channels that no longer match the group. Any other list is reset to its first page.
+final class GroupedChannelsSyncValidationOperation: AsyncOperation, @unchecked Sendable {
+    init(channelListUpdater: ChannelListUpdater, context: SyncContext) {
+        super.init(maxRetries: syncOperationsMaximumRetries) { [weak channelListUpdater] _, done in
+            let channelGroups = context.refreshedChannelGroups
+            guard let channelListUpdater, !channelGroups.isEmpty else {
+                done(.continue)
+                return
+            }
+            Task {
+                do {
+                    for channelGroup in channelGroups {
+                        let groupKey = channelGroup.groupKey
+                        if context.groupedChannelIds[groupKey]?.isSubset(of: context.synchedChannelIds) ?? false {
+                            // Kept pages can hold channels that left the group while offline.
+                            try await channelListUpdater.unlinkGroupedChannels(in: groupKey, unreadChannels: channelGroup.unreadChannels)
+                        } else {
+                            log.debug("Resetting grouped channel list \(groupKey) to its first page", subsystems: .offlineSupport)
+                            // Channels linked from live events while `/sync` ran stay linked.
+                            let loadedChannelIds = context.groupedChannelIds[groupKey] ?? []
+                            try await channelListUpdater.resetGroupedChannelsToFirstPage(
+                                in: groupKey,
+                                unlinking: loadedChannelIds.subtracting(channelGroup.channels.map(\.cid)),
+                                next: channelGroup.next,
+                                unreadChannels: channelGroup.unreadChannels
+                            )
+                        }
+                    }
+                    done(.continue)
+                } catch {
+                    log.error("Failed to validate grouped channels during sync: \(error)", subsystems: .offlineSupport)
+                    done(.retry)
+                }
+            }
+        }
+    }
+}
+
+final class WatchChannelOperation: AsyncOperation, @unchecked Sendable {
+    init(controller: ChatChannelController, context: SyncContext, recovery: Bool) {
         super.init(maxRetries: syncOperationsMaximumRetries) { [weak controller] _, done in
             guard let controller = controller, controller.canBeRecovered else {
                 done(.continue)
@@ -73,8 +290,8 @@ final class WatchChannelOperation: AsyncOperation {
             }
 
             let cidString = (controller.cid?.rawValue ?? "unknown")
-            log.info("2. Watching active channel \(cidString)", subsystems: .offlineSupport)
-            controller.recoverWatchedChannel { error in
+            log.info("Watching active channel \(cidString)", subsystems: .offlineSupport)
+            controller.recoverWatchedChannel(recovery: recovery) { error in
                 if let cid = controller.cid, error == nil {
                     log.info("Successfully watched active channel \(cidString)", subsystems: .offlineSupport)
                     context.watchedAndSynchedChannelIds.insert(cid)
@@ -87,79 +304,83 @@ final class WatchChannelOperation: AsyncOperation {
             }
         }
     }
-}
 
-final class RefetchChannelListQueryOperation: AsyncOperation {
-    init(controller: ChatChannelListController, context: SyncContext) {
-        super.init(maxRetries: syncOperationsMaximumRetries) { [weak controller] _, done in
-            guard let controller = controller, controller.canBeRecovered else {
+    init(livestreamController: LivestreamChannelController, context: SyncContext, recovery: Bool) {
+        super.init(maxRetries: syncOperationsMaximumRetries) { [weak livestreamController] _, done in
+            guard let controller = livestreamController else {
                 done(.continue)
                 return
             }
-            
-            let query = controller.query
 
-            log.info("3 & 4. Refetching channel lists queries & Cleaning up local message history", subsystems: .offlineSupport)
-            controller.resetQuery(
-                watchedAndSynchedChannelIds: context.watchedAndSynchedChannelIds,
-                synchedChannelIds: context.synchedChannelIds
-            ) { result in
-                switch result {
-                case let .success((watchedChannels, unwantedCids)):
-                    log.info("Successfully refetched query for \(query.debugDescription)", subsystems: .offlineSupport)
-                    let queryChannelIds = watchedChannels.map(\.cid)
-                    context.watchedAndSynchedChannelIds = context.watchedAndSynchedChannelIds.union(queryChannelIds)
-                    context.unwantedChannelIds = context.unwantedChannelIds.union(unwantedCids)
+            let cidString = (controller.cid?.rawValue ?? "unknown")
+            log.info("Watching active channel \(cidString)", subsystems: .offlineSupport)
+            controller.startWatching(isInRecoveryMode: recovery) { error in
+                if let cid = controller.cid, error == nil {
+                    log.info("Successfully watched active channel \(cidString)", subsystems: .offlineSupport)
+                    context.watchedAndSynchedChannelIds.insert(cid)
                     done(.continue)
-                case let .failure(error):
-                    log.error(
-                        "Failed refetching query for \(query.debugDescription): \(error)",
-                        subsystems: .offlineSupport
-                    )
-                    done(.retry)
-                }
-            }
-        }
-    }
-}
-
-final class DeleteUnwantedChannelsOperation: AsyncOperation {
-    init(database: DatabaseContainer, context: SyncContext) {
-        super.init(maxRetries: syncOperationsMaximumRetries) { [weak database] _, done in
-            log.info("4. Clean up unwanted channels", subsystems: .offlineSupport)
-
-            guard let database = database, !context.unwantedChannelIds.isEmpty else {
-                done(.continue)
-                return
-            }
-
-            // We are going to remove those channels that are not present in remote queries, and that have not
-            // been watched.
-            database.write { session in
-                // We remove watchedAndSynched from unwantedChannels because it might happen that a channel marked
-                // as unwanted in one query, might still be needed in another query (scenario where multiple queries
-                // are active at the same time).
-                let idsToRemove = context.unwantedChannelIds.subtracting(context.watchedAndSynchedChannelIds)
-                session.removeChannels(cids: idsToRemove)
-            } completion: { error in
-                if let error = error {
-                    log.error(
-                        "Failed removing unwanted channels: \(error)",
-                        subsystems: .offlineSupport
-                    )
-                    done(.retry)
                 } else {
+                    let errorMessage = error?.localizedDescription ?? "missing cid"
+                    log.error("Failed watching active channel \(cidString): \(errorMessage)", subsystems: .offlineSupport)
+                    done(.retry)
+                }
+            }
+        }
+    }
+
+    init(chat: Chat, context: SyncContext) {
+        super.init(maxRetries: syncOperationsMaximumRetries) { [weak chat] _, done in
+            guard let chat else {
+                done(.continue)
+                return
+            }
+            Task {
+                guard await chat.state.channelQuery.options.contains(.watch) else {
                     done(.continue)
+                    return
+                }
+                do {
+                    let cid = try await chat.cid
+                    log.info("Watching active chat \(cid.rawValue)", subsystems: .offlineSupport)
+                    try await chat.watch()
+                    context.watchedAndSynchedChannelIds.insert(cid)
+                    log.info("Successfully watched active chat \(cid.rawValue)", subsystems: .offlineSupport)
+                    done(.continue)
+                } catch {
+                    log.error("Failed watching active chat with error \(error.localizedDescription)", subsystems: .offlineSupport)
+                    done(.retry)
+                }
+            }
+        }
+    }
+
+    init(livestreamChat: LivestreamChat, context: SyncContext) {
+        super.init(maxRetries: syncOperationsMaximumRetries) { [weak livestreamChat] _, done in
+            guard let livestreamChat else {
+                done(.continue)
+                return
+            }
+            Task {
+                do {
+                    let cid = try livestreamChat.cid
+                    log.info("Watching active livestream chat \(cid.rawValue)", subsystems: .offlineSupport)
+                    try await livestreamChat.watch()
+                    context.watchedAndSynchedChannelIds.insert(cid)
+                    log.info("Successfully watched active livestream chat \(cid.rawValue)", subsystems: .offlineSupport)
+                    done(.continue)
+                } catch {
+                    log.error("Failed watching active livestream chat with error \(error.localizedDescription)", subsystems: .offlineSupport)
+                    done(.retry)
                 }
             }
         }
     }
 }
 
-final class ExecutePendingOfflineActions: AsyncOperation {
+final class ExecutePendingOfflineActions: AsyncOperation, @unchecked Sendable {
     init(offlineRequestsRepository: OfflineRequestsRepository) {
         super.init(maxRetries: syncOperationsMaximumRetries) { [weak offlineRequestsRepository] _, done in
-            log.info("5. Running offline actions requests", subsystems: .offlineSupport)
+            log.info("Running offline actions requests", subsystems: .offlineSupport)
             offlineRequestsRepository?.runQueuedRequests {
                 done(.continue)
             }

@@ -1,30 +1,135 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
 /// Makes channel member related calls to the backend.
-class ChannelMemberUpdater: Worker {
-    /// Bans the user in the channel for a specific # of minutes.
+class ChannelMemberUpdater: Worker, @unchecked Sendable {
+    /// Updates the channel member with additional information.
+    /// - Parameters:
+    ///   - userId: The user id of the member.
+    ///   - cid: The channel which the member should be updated.
+    ///   - updates: The additional information.
+    ///   - unset: The properties to be unset/cleared.
+    func partialUpdate(
+        userId: UserId,
+        in cid: ChannelId,
+        request: UpdateMemberPartialRequest,
+        completion: @escaping (@Sendable (Result<ChatChannelMember, Error>) -> Void)
+    ) {
+        apiClient.request(
+            endpoint: .updateMemberPartial(
+                type: cid.type.rawValue,
+                id: cid.id,
+                updateMemberPartialRequest: request
+            )
+        ) { result in
+            switch result {
+            case .success(let response):
+                guard let channelMember = response.channelMember else {
+                    completion(.failure(ClientError.Unknown()))
+                    return
+                }
+                self.database.write { session in
+                    let member = try session.saveMember(payload: channelMember, channelId: cid).asModel()
+                    completion(.success(member))
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+    
+    func pinMemberChannel(
+        _ isPinned: Bool,
+        userId: UserId,
+        cid: ChannelId,
+        completion: @escaping @Sendable (Error?) -> Void
+    ) {
+        partialUpdate(
+            userId: userId,
+            in: cid,
+            request: UpdateMemberPartialRequest(
+                set: isPinned ? ["pinned": .bool(true)] : nil,
+                unset: isPinned ? nil : ["pinned"]
+            ),
+            completion: { completion($0.error) }
+        )
+    }
+    
+    func pinMemberChannel(
+        _ isPinned: Bool,
+        userId: UserId,
+        cid: ChannelId
+    ) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            pinMemberChannel(isPinned, userId: userId, cid: cid) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+    
+    func archiveMemberChannel(
+        _ isArchived: Bool,
+        userId: UserId,
+        cid: ChannelId,
+        completion: @escaping @Sendable (Error?) -> Void
+    ) {
+        partialUpdate(
+            userId: userId,
+            in: cid,
+            request: UpdateMemberPartialRequest(
+                set: isArchived ? ["archived": .bool(true)] : nil,
+                unset: isArchived ? nil : ["archived"]
+            ),
+            completion: { completion($0.error) }
+        )
+    }
+    
+    func archiveMemberChannel(
+        _ isArchived: Bool,
+        userId: UserId,
+        cid: ChannelId
+    ) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            archiveMemberChannel(isArchived, userId: userId, cid: cid) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+
+    /// Bans the user in the channel.
     /// - Parameters:
     ///   - userId: The user identifier to ban.
     ///   - cid: The channel identifier to ban in.
+    ///   - shadow: If true, it performs a shadow ban.
     ///   - timeoutInMinutes: The # of minutes the user should be banned for.
     ///   - reason: The ban reason.
     ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
     func banMember(
         _ userId: UserId,
         in cid: ChannelId,
+        shadow: Bool,
         for timeoutInMinutes: Int? = nil,
         reason: String? = nil,
-        completion: ((Error?) -> Void)? = nil
+        completion: (@Sendable (Error?) -> Void)? = nil
     ) {
-        apiClient.request(endpoint: .banMember(userId, cid: cid, timeoutInMinutes: timeoutInMinutes, reason: reason)) {
+        apiClient.request(
+            endpoint: .ban(
+                banRequest: BanRequest(
+                    channelCid: cid.rawValue,
+                    reason: reason,
+                    shadow: shadow,
+                    targetUserId: userId,
+                    timeout: timeoutInMinutes
+                )
+            )
+        ) {
             completion?($0.error)
         }
     }
-    
+
     /// Unbans the user in the channel.
     /// - Parameters:
     ///   - userId: The user identifier to unban.
@@ -32,10 +137,63 @@ class ChannelMemberUpdater: Worker {
     ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
     func unbanMember(
         _ userId: UserId,
-        in cid: ChannelId, completion: ((Error?) -> Void)? = nil
+        in cid: ChannelId,
+        completion: (@Sendable (Error?) -> Void)? = nil
     ) {
-        apiClient.request(endpoint: .unbanMember(userId, cid: cid)) {
+        apiClient.request(endpoint: .unban(targetUserId: userId, channelCid: cid.rawValue)) {
             completion?($0.error)
+        }
+    }
+
+    func queryBannedUsers(
+        query: BannedUserListQuery,
+        completion: @escaping @Sendable (Result<[BannedUser], Error>) -> Void
+    ) {
+        apiClient.request(endpoint: .queryBannedUsers(payload: query.asQueryBannedUsersPayload())) { result in
+            switch result {
+            case .success(let response):
+                completion(.success(response.bans.compactMap { $0.asModel() }))
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+}
+
+extension ChannelMemberUpdater {
+    func banMember(
+        _ userId: UserId,
+        in cid: ChannelId,
+        shadow: Bool,
+        for timeoutInMinutes: Int?,
+        reason: String?
+    ) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            banMember(
+                userId,
+                in: cid,
+                shadow: shadow,
+                for: timeoutInMinutes,
+                reason: reason
+            ) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+    
+    func unbanMember(_ userId: UserId, in cid: ChannelId) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            unbanMember(userId, in: cid) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+
+    func queryBannedUsers(query: BannedUserListQuery) async throws -> [BannedUser] {
+        try await withCheckedThrowingContinuation { continuation in
+            queryBannedUsers(query: query) { result in
+                continuation.resume(with: result)
+            }
         }
     }
 }

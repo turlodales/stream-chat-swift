@@ -1,13 +1,14 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
 @testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import XCTest
 
-final class ChatMessageReactionAuthorsVC_Tests: XCTestCase {
+@MainActor final class ChatMessageReactionAuthorsVC_Tests: XCTestCase {
     var vc: ChatMessageReactionAuthorsVC!
     var messageControllerMock: ChatMessageController_Mock!
 

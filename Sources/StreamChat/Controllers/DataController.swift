@@ -1,13 +1,13 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
 /// The base class for controllers which represent and control a data entity. Not meant to be used directly.
-public class DataController: Controller {
+public class DataController: Controller, @unchecked Sendable {
     /// Describes the possible states of `DataController`
-    public enum State: Equatable {
+    public enum State: Equatable, Sendable {
         /// The controller is created but no data fetched.
         case initialized
         /// The controllers already fetched local data if any.
@@ -19,10 +19,14 @@ public class DataController: Controller {
         /// The controller failed to fetch remote data.
         case remoteDataFetchFailed(ClientError)
     }
-    
+
+    @Atomic private var _state: State = .initialized
+
     /// The current state of the controller.
-    public internal(set) var state: State = .initialized {
-        didSet {
+    public internal(set) var state: State {
+        get { _state }
+        set {
+            _state = newValue
             callback {
                 self.stateMulticastDelegate.invoke { $0.controller(self, didChangeState: self.state) }
             }
@@ -39,7 +43,7 @@ public class DataController: Controller {
             return false
         }
     }
-    
+
     /// Synchronize local data with remote.
     ///
     /// **Asynchronously** fetches the latest version of the data from the servers. Once the remote fetch is completed,
@@ -50,22 +54,19 @@ public class DataController: Controller {
     /// the `error` variable contains more details about the problem.
     ///
     // swiftlint:disable unavailable_function
-    public func synchronize(_ completion: ((_ error: Error?) -> Void)? = nil) {
-        fatalError("`synchronize` method must be overriden by the subclass.")
+    public func synchronize(_ completion: (@MainActor (_ error: Error?) -> Void)? = nil) {
+        fatalError("`synchronize` method must be overridden by the subclass.")
     }
 
     // swiftlint:enable unavailable_function
 
-    /// The queue which is used to perform callback calls. The default value is `.main`.
-    public var callbackQueue: DispatchQueue = .main
-    
     /// The delegate use for controller state update callbacks.
     internal var stateMulticastDelegate: MulticastDelegate<DataControllerStateDelegate> = .init()
 }
 
 /// A delegate protocol some Controllers use to propagate the information about controller `state` changes. You can use it to let
 /// users know a certain activity is happening in the background, i.e. using a non-blocking activity indicator.
-public protocol DataControllerStateDelegate: AnyObject {
+@MainActor public protocol DataControllerStateDelegate: AnyObject {
     /// Called when the observed controller changed it's state.
     ///
     /// - Parameters:
@@ -80,17 +81,17 @@ public extension DataControllerStateDelegate {
 }
 
 /// A helper protocol allowing calling delegate using existing `callback` method.
-protocol DelegateCallable {
+protocol DelegateCallable: Sendable {
     associatedtype Delegate
-    func callback(_ action: @escaping () -> Void)
-    
+    func callback(_ action: @escaping @MainActor () -> Void)
+
     /// The multicast delegate wrapper for all delegates of the controller
     var multicastDelegate: MulticastDelegate<Delegate> { get }
 }
 
 extension DelegateCallable {
     /// A helper function to ensure the delegate callback is performed using the `callback` method.
-    func delegateCallback(_ callback: @escaping (Delegate) -> Void) {
+    func delegateCallback(_ callback: @escaping @MainActor (Delegate) -> Void) {
         self.callback {
             self.multicastDelegate.invoke(callback)
         }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -7,21 +7,10 @@
 import XCTest
 
 final class CustomDataHashMap_Tests: XCTestCase {
-    func test_UserWebSocketPayloadEncodeWithCustomMap() throws {
-        let extraData: [String: RawJSON] = ["how-many-roads": .number(42)]
-        let imageURL = URL.unique()
-        let userInfo = UserInfo(id: "44", name: "tommaso", imageURL: imageURL, extraData: extraData)
-        let payload = UserWebSocketPayload(userInfo: userInfo)
-        let encoded = try! JSONEncoder.default.encode(payload)
-        let jsonStr = String(data: encoded, encoding: .utf8)
-        let imageStr = imageURL.debugDescription.replacingOccurrences(of: "/", with: "\\/")
-        XCTAssertEqual(jsonStr, "{\"id\":\"44\",\"name\":\"tommaso\",\"image\":\"\(imageStr)\",\"how-many-roads\":42}")
-    }
-
     func test_channelDetailJSONDecodeWithoutAnyCustomData() throws {
         try! assertEmptyCustomData(ChannelDetailPayload.self, "ChannelPayload")
     }
-    
+
     func test_channelDetailJSONDecodeWithCustomData() throws {
         try! assertCustomData(ChannelDetailPayload.self, "ChannelPayloadWithCustom")
     }
@@ -29,15 +18,15 @@ final class CustomDataHashMap_Tests: XCTestCase {
     func test_messageJSONDecodeWithoutAnyCustomData() throws {
         try! assertEmptyCustomData(MessagePayload.self, "MessagePayload")
     }
-    
+
     func test_messageJSONDecodeWithCustomData() throws {
         try! assertCustomData(MessagePayload.self, "MessagePayloadWithCustom")
     }
-    
+
     func test_messageReactionJSONDecodeWithoutAnyCustomData() throws {
         try! assertEmptyCustomData(MessageReactionPayload.self, "MessageReactionPayload")
     }
-    
+
     func test_messageReactionJSONDecodeWithCustomData() throws {
         try! assertCustomData(MessageReactionPayload.self, "MessageReactionPayloadWithCustom")
     }
@@ -45,15 +34,15 @@ final class CustomDataHashMap_Tests: XCTestCase {
     func test_userJSONDecodeWithoutAnyCustomData() throws {
         try! assertEmptyCustomData(UserPayload.self, "UserPayload")
     }
-    
+
     func test_userJSONDecodeWithCustomData() throws {
         try! assertCustomData(UserPayload.self, "UserPayloadWithCustom")
     }
-    
+
     func test_currentUserJSONDecodeWithoutAnyCustomData() throws {
         try! assertEmptyCustomData(CurrentUserPayload.self, "CurrentUserPayload")
     }
-    
+
     func test_currentUserJSONDecodeWithCustomData() throws {
         try! assertCustomData(CurrentUserPayload.self, "CurrentUserPayloadWithCustom")
     }

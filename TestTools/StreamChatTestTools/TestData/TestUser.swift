@@ -1,10 +1,10 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
-public struct TestUser: Codable, Equatable {
+public struct TestUser: Codable, Equatable, Sendable {
     public let name: String
     public let age: Int
 

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -7,7 +7,7 @@
 import XCTest
 
 final class UnknownUserEvent_Tests: XCTestCase {
-    func test_unkownEvent_decoding() throws {
+    func test_unknownEvent_decoding() throws {
         // Create event fields
         let userId: UserId = .unique
         let ideaPayload: IdeaEventPayload = .unique
@@ -17,6 +17,9 @@ final class UnknownUserEvent_Tests: XCTestCase {
         let json = """
         {
             "user" : {
+                "custom" : {},
+                "language" : "",
+                "teams" : [],
                 "id" : "\(userId)",
                 "banned" : false,
                 "unread_channels" : 0,
@@ -34,63 +37,65 @@ final class UnknownUserEvent_Tests: XCTestCase {
             },
             "created_at" : "\(createdAt)",
             "type" : "\(IdeaEventPayload.eventType.rawValue)",
-            "idea" : "\(ideaPayload.idea)"
+            "custom" : {
+                "idea" : "\(ideaPayload.idea)"
+            }
         }
         """.data(using: .utf8)!
-    
-        // Decode unkown event from JSON.
+
+        // Decode unknown event from JSON.
         let unknownEvent = try JSONDecoder.default.decode(UnknownUserEvent.self, from: json)
         let payload = try JSONDecoder.default.decode([String: RawJSON].self, from: json)
-        
+
         // Assert all fields are correct.
         XCTAssertEqual(unknownEvent.userId, userId)
         XCTAssertEqual(unknownEvent.createdAt, createdAt.toDate())
         XCTAssertEqual(unknownEvent.type, IdeaEventPayload.eventType)
         XCTAssertEqual(unknownEvent.payload, payload)
     }
-    
+
     func test_whenAllFieldsArePresentedAndTypeMatches_customPayloadIsDecoded() throws {
         // Create custom event payload.
         let payload = IdeaEventPayload.unique
-        
+
         // Create event with `IdeaEventPayload` payload.
-        let unkownEvent = UnknownUserEvent(
+        let unknownEvent = UnknownUserEvent(
             type: IdeaEventPayload.eventType,
             userId: .unique,
             createdAt: .unique,
-            payload: ["idea": .string(payload.idea)]
+            payload: ["custom": .dictionary(["idea": .string(payload.idea)])]
         )
-        
+
         // Assert payload is decoded.
-        XCTAssertEqual(unkownEvent.payload(ofType: IdeaEventPayload.self), payload)
+        XCTAssertEqual(unknownEvent.payload(ofType: IdeaEventPayload.self), payload)
     }
-    
+
     func test_whenFieldsAreMissing_customPayloadIsNotDecoded() throws {
         // Create event with `IdeaEventPayload` fields missing.
-        let unkownEvent = UnknownUserEvent(
+        let unknownEvent = UnknownUserEvent(
             type: IdeaEventPayload.eventType,
             userId: .unique,
             createdAt: .unique,
             payload: [:]
         )
-        
+
         // Assert payload is not decoded because fields are missing.
-        XCTAssertNil(unkownEvent.payload(ofType: IdeaEventPayload.self))
+        XCTAssertNil(unknownEvent.payload(ofType: IdeaEventPayload.self))
     }
-    
+
     func test_whenAllFieldsArePresentedButTypeDoesNotMatch_customPayloadIsNotDecoded() throws {
         // Create random event type.
         let randomEventType = EventType(rawValue: .unique)
-        
+
         // Create event with `IdeaEventPayload` fields missing.
-        let unkownEvent = UnknownUserEvent(
+        let unknownEvent = UnknownUserEvent(
             type: randomEventType,
             userId: .unique,
             createdAt: .unique,
-            payload: ["idea": .string(.unique)]
+            payload: ["custom": .dictionary(["idea": .string(.unique)])]
         )
-        
+
         // Assert payload is not decoded because the type does not match.
-        XCTAssertNil(unkownEvent.payload(ofType: IdeaEventPayload.self))
+        XCTAssertNil(unknownEvent.payload(ofType: IdeaEventPayload.self))
     }
 }

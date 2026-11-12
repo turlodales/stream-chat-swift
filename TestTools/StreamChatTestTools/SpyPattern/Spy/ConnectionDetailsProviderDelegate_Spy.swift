@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -7,41 +7,45 @@ import Foundation
 
 // A concrete `ConnectionDetailsProviderDelegate` implementation allowing capturing the delegate calls
 final class ConnectionDetailsProviderDelegate_Spy: ConnectionDetailsProviderDelegate, Spy {
-    var recordedFunctions: [String] = []
+    let spyState = SpyState()
 
-    @Atomic var token: Token?
+    var provideTokenResult: Result<Token, Error>?
     @Atomic var tokenWaiters: [String: (Token?) -> Void] = [:]
 
-    @Atomic var connectionId: ConnectionId?
+    var provideConnectionIdResult: Result<ConnectionId, Error>?
     @Atomic var connectionWaiters: [String: (ConnectionId?) -> Void] = [:]
 
     func clear() {
-        recordedFunctions.removeAll()
+        spyState.clear()
         tokenWaiters.removeAll()
     }
 
-    func provideConnectionId(completion: @escaping (ConnectionId?) -> Void) -> WaiterToken {
+    func provideConnectionId(timeout: TimeInterval, completion: @escaping (Result<StreamChat.ConnectionId, Error>) -> Void) {
         let waiterToken = String.newUniqueId
+        let valueCompletion: (StreamChat.ConnectionId?) -> Void = { value in
+            completion(value.map { .success($0) } ?? .failure(ClientError.MissingConnectionId()))
+        }
         _connectionWaiters.mutate {
-            $0[waiterToken] = completion
+            $0[waiterToken] = valueCompletion
         }
 
-        if let connectionId = connectionId {
-            completion(connectionId)
+        if let connectionIdResult = provideConnectionIdResult {
+            completion(connectionIdResult)
         }
-        return waiterToken
     }
 
-    func provideToken(completion: @escaping (Token?) -> Void) -> WaiterToken {
+    func provideToken(timeout: TimeInterval, completion: @escaping (Result<StreamChat.Token, Error>) -> Void) {
         let waiterToken = String.newUniqueId
+        let valueCompletion: (StreamChat.Token?) -> Void = { value in
+            completion(value.map { .success($0) } ?? .failure(ClientError.MissingToken()))
+        }
         _tokenWaiters.mutate {
-            $0[waiterToken] = completion
+            $0[waiterToken] = valueCompletion
         }
 
-        if let token = token {
-            completion(token)
+        if let tokenResult = provideTokenResult {
+            completion(tokenResult)
         }
-        return waiterToken
     }
 
     func invalidateTokenWaiter(_ waiter: WaiterToken) {}

@@ -1,9 +1,8 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Atlantis
-import Foundation
 import GDPerformanceView_Swift
 import Sentry
 import StreamChat
@@ -19,25 +18,14 @@ enum DemoAppConfiguration {
         #endif
     }
 
-    // MARK: Internal configuration
-
-    private static var isStreamInternalConfiguration: Bool {
-        ProcessInfo.processInfo.environment["STREAM_DEV"] != nil
-    }
-
     // This function is called from `DemoAppCoordinator` before the Chat UI is created
     static func setInternalConfiguration() {
-        StreamRuntimeCheck.assertionsEnabled = isStreamInternalConfiguration
-        StreamRuntimeCheck._isLazyMappingEnabled = !isStreamInternalConfiguration
-
         configureAtlantisIfNeeded()
-        trackPerformanceIfNeeded()
-        enableMessageDiffingIfNeeded()
     }
 
     // HTTP and WebSocket Proxy with Proxyman.app
     private static func configureAtlantisIfNeeded() {
-        if isStreamInternalConfiguration || AppConfig.shared.demoAppConfig.isAtlantisEnabled {
+        if AppConfig.shared.demoAppConfig.isAtlantisEnabled {
             Atlantis.start()
         } else {
             Atlantis.stop()
@@ -45,15 +33,12 @@ enum DemoAppConfiguration {
     }
 
     // Performance tracker
-    private static func trackPerformanceIfNeeded() {
-        if isStreamInternalConfiguration {
+    static func showPerformanceTracker() {
+        guard StreamRuntimeCheck.isStreamInternalConfiguration else { return }
+        // PerformanceMonitor seems to have a bug where it cannot find the hierarchy when trying to place its view
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             PerformanceMonitor.shared().performanceViewConfigurator.options = [.performance]
             PerformanceMonitor.shared().start()
         }
-    }
-
-    // Enable message diffing in Message List
-    private static func enableMessageDiffingIfNeeded() {
-        StreamChatWrapper.shared.setMessageDiffingEnabled(isStreamInternalConfiguration)
     }
 }

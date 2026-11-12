@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -10,21 +10,21 @@ final class CurrentUserUpdater_Tests: XCTestCase {
     var webSocketClient: WebSocketClient_Mock!
     var apiClient: APIClient_Spy!
     var database: DatabaseContainer_Spy!
-    
+
     var currentUserUpdater: CurrentUserUpdater!
-    
+
     // MARK: Setup
-    
+
     override func setUp() {
         super.setUp()
-        
+
         webSocketClient = WebSocketClient_Mock()
         apiClient = APIClient_Spy()
         database = DatabaseContainer_Spy()
-        
+
         currentUserUpdater = .init(database: database, apiClient: apiClient)
     }
-    
+
     override func tearDown() {
         apiClient.cleanUp()
         AssertAsync {
@@ -41,191 +41,330 @@ final class CurrentUserUpdater_Tests: XCTestCase {
 
         super.tearDown()
     }
-    
+
     // MARK: - updateUser
-    
+
     func test_updateUser_makesCorrectAPICall() throws {
         // Simulate user already set
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
         // Expected updated user data
         let expectedId = userPayload.id
         let expectedName = String.unique
         let expectedImageUrl = URL.unique()
-        
+        let expectedRole = UserRole.guest
+        let expectedNote = String.unique
+
         // Call update user
         currentUserUpdater.updateUserData(
             currentUserId: expectedId,
             name: expectedName,
             imageURL: expectedImageUrl,
+            privacySettings: .init(
+                typingIndicators: .init(enabled: true),
+                readReceipts: .init(enabled: true)
+            ),
+            role: expectedRole,
+            teamsRole: ["ios": "guest"],
+            userExtraData: ["secret_note": .string(expectedNote)],
+            unset: ["image"],
             completion: { error in
                 XCTAssertNil(error)
             }
         )
-        
+
         // Simulate API response
-        let currentUserUpdateResponse = UserUpdateResponse(
-            user: UserPayload.dummy(
-                userId: userPayload.id,
-                name: expectedName,
-                imageUrl: expectedImageUrl
+        let updatedUser = FullUserResponse.dummy(
+            userId: userPayload.id,
+            name: expectedName,
+            imageUrl: expectedImageUrl,
+            role: expectedRole,
+            teamsRole: ["ios": "guest"],
+            privacySettings: .init(
+                typingIndicators: .init(enabled: true),
+                readReceipts: .init(enabled: true)
             )
         )
+        let currentUserUpdateResponse = CurrentUserUpdateResponse(users: [updatedUser.id: updatedUser])
         apiClient.test_simulateResponse(.success(currentUserUpdateResponse))
-        
-        // Assert that request is made to the correct endpoint
-        let expectedEndpoint: Endpoint<UserUpdateResponse> = .updateUser(
-            id: expectedId,
-            payload: .init(name: expectedName, imageURL: expectedImageUrl)
-        )
-        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
+
+        // Assert that request is made to the correct endpoint with the correct body
+        let endpoint = try XCTUnwrap(apiClient.request_endpoint)
+        XCTAssertEqual(endpoint.path.value, EndpointPath.updateUsersPartial.value)
+        XCTAssertEqual(endpoint.method, .patch)
+        AssertDictionary(try endpoint.bodyAsDictionary(), [
+            "users": [
+                [
+                    "id": expectedId,
+                    "set": [
+                        "name": expectedName,
+                        "image": expectedImageUrl.absoluteString,
+                        "privacy_settings": [
+                            "typing_indicators": ["enabled": true],
+                            "read_receipts": ["enabled": true]
+                        ],
+                        "role": expectedRole.rawValue,
+                        "teams_role": ["ios": "guest"],
+                        "secret_note": expectedNote
+                    ],
+                    "unset": ["image"]
+                ]
+            ]
+        ])
     }
     
+    func test_updateUser_makesCorrectAPICall_whenOnlyUnsetProperties() throws {
+        // Simulate user already set
+        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: userPayload)
+        }
+        
+        currentUserUpdater.updateUserData(
+            currentUserId: userPayload.id,
+            name: nil,
+            imageURL: nil,
+            privacySettings: nil,
+            role: nil,
+            teamsRole: nil,
+            userExtraData: nil,
+            unset: ["image"],
+            completion: { _ in }
+        )
+        
+        // Assert that request is made to the correct endpoint with the correct body
+        let endpoint = try XCTUnwrap(apiClient.request_endpoint)
+        XCTAssertEqual(endpoint.path.value, EndpointPath.updateUsersPartial.value)
+        XCTAssertEqual(endpoint.method, .patch)
+        AssertDictionary(try endpoint.bodyAsDictionary(), [
+            "users": [
+                [
+                    "id": userPayload.id,
+                    "set": [String: Any](),
+                    "unset": ["image"]
+                ]
+            ]
+        ])
+    }
+
     func test_updateUser_updatesCurrentUserToDatabase() throws {
         // Simulate user already set
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
         // Expected updated user data
         let expectedId = userPayload.id
         let expectedName = String.unique
         let expectedImageUrl = URL.unique()
-        
+        let expectedRole = UserRole.anonymous
+
         // Call update user
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         currentUserUpdater.updateUserData(
             currentUserId: expectedId,
             name: expectedName,
             imageURL: expectedImageUrl,
+            privacySettings: .init(
+                typingIndicators: .init(enabled: false),
+                readReceipts: .init(enabled: false)
+            ),
+            role: expectedRole,
+            teamsRole: nil,
+            userExtraData: nil,
+            unset: [],
             completion: { _ in
                 completionCalled = true
             }
         )
-        
+
         // Simulate API response
-        let currentUserUpdateResponse = UserUpdateResponse(
-            user: UserPayload.dummy(
-                userId: userPayload.id,
-                name: expectedName,
-                imageUrl: expectedImageUrl
+        let updatedUser = FullUserResponse.dummy(
+            userId: userPayload.id,
+            name: expectedName,
+            imageUrl: expectedImageUrl,
+            role: expectedRole,
+            privacySettings: .init(
+                typingIndicators: .init(enabled: false),
+                readReceipts: .init(enabled: false)
             )
         )
+        let currentUserUpdateResponse = CurrentUserUpdateResponse(users: [updatedUser.id: updatedUser])
         apiClient.test_simulateResponse(.success(currentUserUpdateResponse))
-        
+
         var currentUser: CurrentChatUser? {
             try? database.viewContext.currentUser?.asModel()
         }
-        
+
         // Check the completion is called and the current user model was updated
         AssertAsync {
             Assert.willBeTrue(completionCalled)
             Assert.willBeEqual(currentUser?.id, expectedId)
             Assert.willBeEqual(currentUser?.name, expectedName)
             Assert.willBeEqual(currentUser?.imageURL, expectedImageUrl)
+            Assert.willBeEqual(currentUser?.privacySettings.readReceipts?.enabled, false)
+            Assert.willBeEqual(currentUser?.privacySettings.typingIndicators?.enabled, false)
         }
     }
-    
+
+    func test_updateUser_keepsPushPreferenceAndPerTeamUnreadCounts() throws {
+        // Simulate user already set, carrying data the users endpoint does not return
+        let userPayload = CurrentUserPayload.dummy(
+            userPayload: .dummy(userId: .unique),
+            totalUnreadCountByTeam: ["ios": 3],
+            pushPreference: .init(level: .allMentions)
+        )
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: userPayload)
+        }
+
+        // Call update user
+        let completionCalled = expectation(description: "completion called")
+        currentUserUpdater.updateUserData(
+            currentUserId: userPayload.id,
+            name: .unique,
+            imageURL: nil,
+            privacySettings: nil,
+            role: nil,
+            teamsRole: nil,
+            userExtraData: nil,
+            unset: [],
+            completion: { error in
+                XCTAssertNil(error)
+                completionCalled.fulfill()
+            }
+        )
+
+        // Simulate API response, which never contains push preferences nor per team unread counts
+        let updatedUser = FullUserResponse.dummy(userId: userPayload.id, role: .user)
+        apiClient.test_simulateResponse(
+            .success(CurrentUserUpdateResponse(users: [updatedUser.id: updatedUser]))
+        )
+        wait(for: [completionCalled], timeout: defaultTimeout)
+
+        let currentUser = try database.readSynchronously { try XCTUnwrap($0.currentUser?.asModel()) }
+        XCTAssertEqual(currentUser.name, updatedUser.name)
+        XCTAssertEqual(currentUser.totalUnreadCountByTeam, ["ios": 3])
+        XCTAssertEqual(currentUser.pushPreference?.level, .allMentions)
+    }
+
     func test_updateUser_propogatesNetworkError() throws {
         // Simulate user already set
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
         // Call update user
-        var completionError: Error?
+        nonisolated(unsafe) var completionError: Error?
         currentUserUpdater.updateUserData(
             currentUserId: userPayload.id,
             name: .unique,
             imageURL: nil,
+            privacySettings: nil,
+            role: nil,
+            teamsRole: nil,
+            userExtraData: nil,
+            unset: [],
             completion: { error in
                 completionError = error
             }
         )
-        
+
         // Simulate API error
         let error = TestError()
         apiClient
             .test_simulateResponse(
-                Result<UserUpdateResponse, Error>.failure(error)
+                Result<CurrentUserUpdateResponse, Error>.failure(error)
             )
         apiClient
             .cleanUp()
-        
+
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionError as? TestError, error)
     }
-    
+
     func test_updateUser_whenNoDataProvided_shouldNotMakeAPICall() throws {
         // Simulate user already set
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
         let error = try waitFor {
             currentUserUpdater.updateUserData(
                 currentUserId: .unique,
                 name: nil,
                 imageURL: nil,
+                privacySettings: nil,
+                role: nil,
+                teamsRole: nil,
+                userExtraData: nil,
+                unset: [],
                 completion: $0
             )
         }
-        
+
         XCTAssertNil(error)
         XCTAssertNil(apiClient.request_endpoint)
     }
-    
+
     func test_updateUser_propogatesDatabaseError() throws {
         // Simulate user already set
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
         // Simulate the DB failing with `TestError`
         let testError = TestError()
         database.write_errorResponse = testError
-        
+
         // Call update user
-        var completionError: Error?
+        nonisolated(unsafe) var completionError: Error?
         currentUserUpdater.updateUserData(
-            currentUserId: .unique,
+            currentUserId: userPayload.id,
             name: .unique,
             imageURL: nil,
+            privacySettings: nil,
+            role: nil,
+            teamsRole: nil,
+            userExtraData: nil,
+            unset: [],
             completion: { error in
                 completionError = error
             }
         )
-        
+
         // Simulate API response
-        let currentUserUpdateResponse = UserUpdateResponse(
-            user: userPayload
-        )
+        let updatedUser = FullUserResponse.dummy(userId: userPayload.id, role: .user)
+        let currentUserUpdateResponse = CurrentUserUpdateResponse(users: [updatedUser.id: updatedUser])
         apiClient.test_simulateResponse(.success(currentUserUpdateResponse))
-        
+
         // Check returned error
         AssertAsync.willBeEqual(completionError as? TestError, testError)
     }
-    
+
     // MARK: addDevice
-    
+
     func test_addDevice_makesCorrectAPICall() throws {
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
         let deviceId = "test"
         let pushProvider = PushProvider.apn
         let providerName = "APN Configuration"
-        
+
         // Save user to the db
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
+        // Mock successful API response
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+
         // Call addDevice
         currentUserUpdater.addDevice(
             deviceId: deviceId,
@@ -236,27 +375,33 @@ final class CurrentUserUpdater_Tests: XCTestCase {
             // No error should be returned
             XCTAssertNil($0)
         }
-        
+
         // Assert that request is made to the correct endpoint
-        let expectedEndpoint: Endpoint<EmptyResponse> = .addDevice(
-            userId: userPayload.id,
-            deviceId: deviceId,
-            pushProvider: pushProvider,
-            providerName: providerName
+        let expectedEndpoint = Endpoint<EmptyResponse>.createDevice(
+            createDeviceRequest: CreateDeviceRequest(
+                id: deviceId,
+                pushProvider: .apn,
+                pushProviderName: providerName
+            )
         )
-        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
+
+        AssertAsync.willBeEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
     }
-    
+
     func test_addDevice_forwardsNetworkError() throws {
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
-        
+
         // Save user to the db
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
+        // Mock failure API response
+        let error = TestError()
+        apiClient.test_mockResponseResult(Result<EmptyResponse, Error>.failure(error))
+
         // Call addDevice
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         currentUserUpdater.addDevice(
             deviceId: "test",
             pushProvider: .apn,
@@ -265,47 +410,13 @@ final class CurrentUserUpdater_Tests: XCTestCase {
             completionCalledError = $0
         }
 
-        // Simulate API error
-        let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
-        apiClient.cleanUp()
-        
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
-    func test_addDevice_forwardsDatabaseError() throws {
-        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
-        
-        // Save user to the db
-        try database.writeSynchronously {
-            try $0.saveCurrentUser(payload: userPayload)
-        }
-        
-        // Simulate the DB failing with `TestError`
-        let testError = TestError()
-        database.write_errorResponse = testError
-        
-        // Call fetchDevices
-        var completionCalledError: Error?
-        currentUserUpdater.addDevice(
-            deviceId: "test",
-            pushProvider: .apn,
-            currentUserId: .unique
-        ) {
-            completionCalledError = $0
-        }
-        
-        // Simulate successful API response
-        apiClient.test_simulateResponse(.success(EmptyResponse()))
-        
-        // Check returned error
-        AssertAsync.willBeEqual(completionCalledError as? TestError, testError)
-    }
-    
+
     func test_addDevice_successfulResponse_isSavedToDB() throws {
-        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user, devices: [.dummy])
-        
+        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user, devices: [.dummy()])
+
         // Save user to the db
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
@@ -321,6 +432,9 @@ final class CurrentUserUpdater_Tests: XCTestCase {
         assert(currentUser?.devices.count == 1)
         assert(currentUser?.currentDevice == nil)
 
+        // Mock successful API response
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+
         // Call addDevice
         currentUserUpdater.addDevice(
             deviceId: "test",
@@ -330,10 +444,7 @@ final class CurrentUserUpdater_Tests: XCTestCase {
             // No error should be returned
             XCTAssertNil($0)
         }
-        
-        // Simulate API response with devices data
-        apiClient.test_simulateResponse(.success(EmptyResponse()))
-        
+
         AssertAsync {
             // Assert the new device is added to devices
             Assert.willBeEqual(currentUser?.devices.count, 2)
@@ -341,188 +452,332 @@ final class CurrentUserUpdater_Tests: XCTestCase {
             Assert.willBeTrue(currentUser?.currentDevice != nil)
         }
     }
-    
+
+    func test_addDevice_whenCallingFromBackgroundThread_doesNotCrash() throws {
+        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
+        let deviceId = "test"
+        let pushProvider = PushProvider.apn
+        let providerName = "APN Configuration"
+
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: userPayload)
+        }
+
+        // Mock successful API response
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+
+        let exp = expectation(description: "should complete addDevice call")
+
+        DispatchQueue.global().async {
+            self.currentUserUpdater.addDevice(
+                deviceId: deviceId,
+                pushProvider: pushProvider,
+                providerName: providerName,
+                currentUserId: userPayload.id
+            ) { _ in
+                exp.fulfill()
+            }
+        }
+
+        waitForExpectations(timeout: defaultTimeout)
+    }
+
+    func test_addDevice_whenDeviceIsAlreadyRegistered_doesNotMakeAPICall() throws {
+        let userId = UserId.unique
+        let device = Device(createdAt: .unique, id: "test", pushProvider: "apn", pushProviderName: "APN Configuration", userId: userId)
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: userId, role: .user, devices: [device]))
+        }
+
+        let error = try waitFor { completion in
+            currentUserUpdater.addDevice(
+                deviceId: device.id,
+                pushProvider: .apn,
+                providerName: "APN Configuration",
+                currentUserId: userId,
+                completion: completion
+            )
+        }
+
+        XCTAssertNil(error)
+        XCTAssertTrue(apiClient.request_allRecordedCalls.isEmpty)
+        let currentDeviceId = try database.readSynchronously { $0.currentUser?.currentDevice?.id }
+        XCTAssertEqual(currentDeviceId, device.id)
+    }
+
+    func test_addDevice_whenDeviceIsRegisteredWithDifferentProviderName_makesAPICall() throws {
+        let userId = UserId.unique
+        let device = Device(createdAt: .unique, id: "test", pushProvider: "apn", pushProviderName: "Old Configuration", userId: userId)
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: userId, role: .user, devices: [device]))
+        }
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+
+        let error = try waitFor { completion in
+            currentUserUpdater.addDevice(
+                deviceId: device.id,
+                pushProvider: .apn,
+                providerName: "New Configuration",
+                currentUserId: userId,
+                completion: completion
+            )
+        }
+
+        XCTAssertNil(error)
+        XCTAssertEqual(apiClient.request_allRecordedCalls.count, 1)
+        let savedProviderName = try database.readSynchronously { $0.currentUser?.devices.first?.pushProviderName }
+        XCTAssertEqual(savedProviderName, "New Configuration")
+    }
+
+    func test_addDevice_whenDeviceIsRegisteredForAnotherUser_makesAPICall() throws {
+        let storedUserId = UserId.unique
+        let device = Device(createdAt: .unique, id: "test", pushProvider: "apn", userId: storedUserId)
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: storedUserId, role: .user, devices: [device]))
+        }
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+
+        let error = try waitFor { completion in
+            currentUserUpdater.addDevice(deviceId: device.id, pushProvider: .apn, currentUserId: .unique, completion: completion)
+        }
+
+        XCTAssertNil(error)
+        XCTAssertEqual(apiClient.request_allRecordedCalls.count, 1)
+    }
+
+    func test_addDevice_whenForceRegistration_makesAPICallForRegisteredDevice() throws {
+        let userId = UserId.unique
+        let device = Device(createdAt: .unique, id: "test", pushProvider: "apn", userId: userId)
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: userId, role: .user, devices: [device]))
+        }
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+
+        let error = try waitFor { completion in
+            currentUserUpdater.addDevice(
+                deviceId: device.id,
+                pushProvider: .apn,
+                currentUserId: userId,
+                forceRegistration: true,
+                completion: completion
+            )
+        }
+
+        XCTAssertNil(error)
+        XCTAssertEqual(apiClient.request_allRecordedCalls.count, 1)
+    }
+
+    func test_addDevice_whenDeviceWasRegisteredBefore_doesNotMakeAPICallAgain() throws {
+        let userId = UserId.unique
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: userId, role: .user))
+        }
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+        let firstError = try waitFor { completion in
+            currentUserUpdater.addDevice(deviceId: "test", pushProvider: .apn, currentUserId: userId, completion: completion)
+        }
+
+        let secondError = try waitFor { completion in
+            currentUserUpdater.addDevice(deviceId: "test", pushProvider: .apn, currentUserId: userId, completion: completion)
+        }
+
+        XCTAssertNil(firstError)
+        XCTAssertNil(secondError)
+        XCTAssertEqual(apiClient.request_allRecordedCalls.count, 1)
+        let savedDevice = try database.readSynchronously { try $0.currentUser?.devices.first?.asModel() }
+        XCTAssertEqual(savedDevice?.pushProvider, PushProvider.apn.rawValue)
+        XCTAssertEqual(savedDevice?.userId, userId)
+    }
+
+    func test_addDevice_whenPreviousRegistrationFailed_makesAPICallAgain() throws {
+        let userId = UserId.unique
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: userId, role: .user))
+        }
+        apiClient.test_mockResponseResult(Result<EmptyResponse, Error>.failure(TestError()))
+        let firstError = try waitFor { completion in
+            currentUserUpdater.addDevice(deviceId: "test", pushProvider: .apn, currentUserId: userId, completion: completion)
+        }
+
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+        let secondError = try waitFor { completion in
+            currentUserUpdater.addDevice(deviceId: "test", pushProvider: .apn, currentUserId: userId, completion: completion)
+        }
+
+        XCTAssertNotNil(firstError)
+        XCTAssertNil(secondError)
+        XCTAssertEqual(apiClient.request_allRecordedCalls.count, 2)
+    }
+
     // MARK: removeDevice
-    
+
     func test_removeDevice_makesCorrectAPICall() throws {
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
-        
+
         // Save user to the db
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
+
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+        let expectation = XCTestExpectation()
         
         // Call removeDevice
         currentUserUpdater.removeDevice(id: "01", currentUserId: userPayload.id) {
             // No error should be returned
             XCTAssertNil($0)
+            expectation.fulfill()
         }
+
+        wait(for: [expectation], timeout: defaultTimeout)
         
         // Assert that request is made to the correct endpoint
-        let expectedEndpoint: Endpoint<EmptyResponse> = .removeDevice(userId: userPayload.id, deviceId: "01")
+        let expectedEndpoint = Endpoint<EmptyResponse>.deleteDevice(id: "01")
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
     }
-    
+
     func test_removeDevice_forwardsNetworkError() throws {
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
-        
+
         // Save user to the db
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
         
+        apiClient.test_mockResponseResult(.success(EmptyResponse()))
+        let expectation = XCTestExpectation()
+
         // Call removeDevice
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         currentUserUpdater.removeDevice(id: "", currentUserId: .unique) {
             completionCalledError = $0
+            expectation.fulfill()
         }
+
+        wait(for: [expectation], timeout: defaultTimeout)
         
         // Simulate API error
         let error = TestError()
         apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
         apiClient.cleanUp()
-        
+
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
-    func test_removeDevice_forwardsDatabaseError() throws {
-        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user, devices: [.dummy])
-        let deviceId = userPayload.devices.first!.id
-        
-        // Save user to the db
-        try database.writeSynchronously {
-            try $0.saveCurrentUser(payload: userPayload)
-        }
-        
-        // Simulate the DB failing with `TestError`
-        let testError = TestError()
-        database.write_errorResponse = testError
-        
-        // Call fetchDevices
-        var completionCalledError: Error?
-        currentUserUpdater.removeDevice(id: deviceId, currentUserId: .unique) {
-            completionCalledError = $0
-        }
-        
-        // Simulate successful API response
-        apiClient.test_simulateResponse(.success(EmptyResponse()))
-        
-        // Check returned error
-        AssertAsync.willBeEqual(completionCalledError as? TestError, testError)
-    }
-    
+
     func test_removeDevice_successfulResponse_isSavedToDB() throws {
-        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user, devices: [.dummy])
+        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user, devices: [.dummy()])
         let deviceId = userPayload.devices.first!.id
-        
+
         // Save user to the db
         try database.writeSynchronously {
             let dto = try $0.saveCurrentUser(payload: userPayload)
             dto.currentDevice = dto.devices.first
         }
-        
+
         // Call fetchDevices
         currentUserUpdater.removeDevice(id: deviceId, currentUserId: .unique) {
             // No error should be returned
             XCTAssertNil($0)
         }
-        
+
         // Simulate API response with devices data
         apiClient.test_simulateResponse(.success(EmptyResponse()))
-        
+
         // Assert data is stored in the DB
         var currentUser: CurrentChatUser? {
             try? database.viewContext.currentUser?.asModel()
         }
-        
+
         AssertAsync {
             Assert.willBeEqual(currentUser?.devices.count, 0)
             Assert.willBeEqual(currentUser?.currentDevice, nil)
         }
     }
-    
+
     // MARK: fetchDevices
-    
+
     func test_fetchDevices_makesCorrectAPICall() throws {
-        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
-        
+        let expectedDevices: [Device] = [.dummy(), .dummy()]
+        let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user, devices: expectedDevices)
+
         // Save user to the db
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
         // Call updateDevices
         currentUserUpdater.fetchDevices(currentUserId: userPayload.id) {
             // No error should be returned
-            XCTAssertNil($0)
+            XCTAssertNil($0.error)
+            XCTAssertEqual($0, success: expectedDevices)
         }
-        
+
         // Assert that request is made to the correct endpoint
-        let expectedEndpoint: Endpoint<DeviceListPayload> = .devices(userId: userPayload.id)
+        let expectedEndpoint = Endpoint<ListDevicesResponse>.listDevices()
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
     }
-    
+
     func test_fetchDevices_forwardsNetworkError() throws {
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
-        
+
         // Save user to the db
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
         // Call updateDevices
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         currentUserUpdater.fetchDevices(currentUserId: .unique) {
-            completionCalledError = $0
+            completionCalledError = $0.error
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakcurrentUserUpdater = currentUserUpdater
-        
+
         // (Try to) deallocate the currentUserUpdater
         // by not keeping any references to it
         currentUserUpdater = nil
-        
+
         // Simulate API error
         let error = TestError()
-        apiClient.test_simulateResponse(Result<DeviceListPayload, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<ListDevicesResponse, Error>.failure(error))
         apiClient.cleanUp()
-        
+
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
         // `weakcurrentUserUpdater` should be deallocated too
         AssertAsync.canBeReleased(&weakcurrentUserUpdater)
     }
-    
+
     func test_fetchDevices_forwardsDatabaseError() throws {
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
-        
+
         // Save user to the db
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
         }
-        
+
         // Simulate the DB failing with `TestError`
         let testError = TestError()
         database.write_errorResponse = testError
-        
+
         // Call updateDevices
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         currentUserUpdater.fetchDevices(currentUserId: .unique) {
-            completionCalledError = $0
+            completionCalledError = $0.error
         }
-        
+
         // Simulate successful API response
-        apiClient.test_simulateResponse(.success(DeviceListPayload.dummy))
-        
+        apiClient.test_simulateResponse(.success(ListDevicesResponse.dummy()))
+
         // Check returned error
         AssertAsync.willBeEqual(completionCalledError as? TestError, testError)
     }
-    
+
     func test_fetchDevices_successfulResponse_isSavedToDB() throws {
         let userPayload: CurrentUserPayload = .dummy(userId: .unique, role: .user)
-        
+
         // Save user to the db
         try database.writeSynchronously {
             try $0.saveCurrentUser(payload: userPayload)
@@ -539,19 +794,20 @@ final class CurrentUserUpdater_Tests: XCTestCase {
         // Save previous device to the db
         try database.writeSynchronously {
             // Simulate 4 devices exist in the DB
-            try $0.saveCurrentUserDevices([.dummy, .dummy, .dummy, .dummy])
+            try $0.saveCurrentUserDevices([.dummy(), .dummy(), .dummy(), .dummy()])
         }
 
+        let dummyDevices = ListDevicesResponse.dummy()
+        let apiDevices = dummyDevices.devices
+
         // Call updateDevices
-        var callbackCalled = false
-        currentUserUpdater.fetchDevices(currentUserId: .unique) {
-            // No error should be returned
-            XCTAssertNil($0)
+        nonisolated(unsafe) var callbackCalled = false
+        currentUserUpdater.fetchDevices(currentUserId: .unique) { result in
+            XCTAssertEqual(result, success: apiDevices)
             callbackCalled = true
         }
-        
+
         // Simulate API response with devices data
-        let dummyDevices = DeviceListPayload.dummy
         assert(dummyDevices.devices.isEmpty == false)
         apiClient.test_simulateResponse(.success(dummyDevices))
 
@@ -564,46 +820,697 @@ final class CurrentUserUpdater_Tests: XCTestCase {
             Assert.willBeTrue(callbackCalled)
         }
     }
-    
+
     // MARK: - Mark all read
-    
+
     func test_markAllRead_makesCorrectAPICall() {
         // GIVEN
-        let referenceEndpoint = Endpoint<EmptyResponse>.markAllRead()
-        
+        let referenceEndpoint = Endpoint<EmptyResponse>.markChannelsRead(markChannelsReadRequest: MarkChannelsReadRequest())
+
         // WHEN
         currentUserUpdater.markAllRead()
-        
+
         // THEN
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(referenceEndpoint))
     }
-    
+
     func test_markAllRead_successfulResponse_isPropagatedToCompletion() {
         // GIVEN
-        var completionCalled = false
-        
+        nonisolated(unsafe) var completionCalled = false
+
         // WHEN
         currentUserUpdater.markAllRead { error in
             XCTAssertNil(error)
             completionCalled = true
         }
-        
+
         apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
-        
+
         // THEN
         AssertAsync.willBeTrue(completionCalled)
     }
-    
+
     func test_markAllRead_errorResponse_isPropagatedToCompletion() {
         // GIVEN
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         let error = TestError()
-        
+
         // WHEN
         currentUserUpdater.markAllRead { completionCalledError = $0 }
         apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
-        
+
         // THEN
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+    }
+    
+    // MARK: - Delete Local Downloads
+    
+    func test_deleteAllLocalAttachmentDownloads_success() throws {
+        let storedFileCount: () -> Int = {
+            let paths = try? FileManager.default.subpathsOfDirectory(atPath: URL.streamAttachmentDownloadsDirectory().path)
+            return paths?.count ?? 0
+        }
+        if FileManager.default.fileExists(atPath: URL.streamAttachmentDownloadsDirectory().path) {
+            try FileManager.default.removeItem(at: URL.streamAttachmentDownloadsDirectory())
+        }
+        
+        let attachmentIds = try (0..<5).map { _ in try setUpDownloadedAttachment(with: .mockFile) }
+        XCTAssertEqual(5, storedFileCount())
+        
+        let error = try waitFor { currentUserUpdater.deleteAllLocalAttachmentDownloads(completion: $0) }
+        XCTAssertNil(error)
+        XCTAssertEqual(0, storedFileCount())
+        
+        try database.readSynchronously { session in
+            for attachmentId in attachmentIds {
+                guard let dto = session.attachment(id: attachmentId) else {
+                    throw ClientError.AttachmentDoesNotExist(id: attachmentId)
+                }
+                XCTAssertEqual(nil, dto.localState)
+                XCTAssertEqual(nil, dto.localRelativePath)
+                XCTAssertEqual(nil, dto.localURL)
+            }
+        }
+    }
+    
+    // MARK: - Load All Unreads
+    
+    func test_loadAllUnreads_makesCorrectAPICall() {
+        // Call loadAllUnreads
+        nonisolated(unsafe) var receivedUnreads: CurrentUserUnreads?
+        currentUserUpdater.loadAllUnreads { result in
+            receivedUnreads = try? result.get()
+        }
+        
+        // Assert request is made to the correct endpoint
+        XCTAssertNotNil(apiClient.request_endpoint)
+        let endpoint = apiClient.request_endpoint
+        XCTAssertEqual(endpoint?.path.value, "/api/v2/chat/unread")
+        XCTAssertEqual(endpoint?.method, .get)
+
+        // Create test payload for the response
+        let payload = CurrentUserUnreads(
+            channelType: [
+                UnreadChannelByType(
+                    channelCount: 2,
+                    channelType: .messaging,
+                    unreadCount: 10
+                )
+            ],
+            channels: [
+                UnreadChannel(
+                    channelId: .init(type: .messaging, id: "channel1"),
+                    lastRead: Date(),
+                    unreadCount: 5
+                ),
+                UnreadChannel(
+                    channelId: .init(type: .messaging, id: "channel2"),
+                    lastRead: Date(),
+                    unreadCount: 5
+                )
+            ],
+            threads: [
+                UnreadThread(
+                    lastRead: Date(),
+                    lastReadMessageId: "message1",
+                    parentMessageId: "thread1",
+                    unreadCount: 3
+                )
+            ],
+            totalUnreadCount: 10,
+            totalUnreadCountByTeam: ["Benfica": 3],
+            totalUnreadThreadsCount: 3
+        )
+        
+        // Simulate API response
+        apiClient.test_simulateResponse(.success(payload))
+        
+        // Verify the result is correctly transformed into the model
+        XCTAssertEqual(receivedUnreads?.totalUnreadMessagesCount, payload.totalUnreadCount)
+        XCTAssertEqual(receivedUnreads?.totalUnreadChannelsCount, payload.channels.count)
+        XCTAssertEqual(receivedUnreads?.totalUnreadThreadsCount, payload.totalUnreadThreadsCount)
+        XCTAssertEqual(receivedUnreads?.unreadChannels.count, payload.channels.count)
+        XCTAssertEqual(receivedUnreads?.unreadThreads.count, payload.threads.count)
+        XCTAssertEqual(receivedUnreads?.unreadChannelsByType.count, payload.channelType.count)
+        XCTAssertEqual(receivedUnreads?.totalUnreadCountByTeam?["Benfica"], 3)
+    }
+    
+    func test_loadAllUnreads_propagatesNetworkError() {
+        // Call loadAllUnreads
+        nonisolated(unsafe) var receivedError: Error?
+        currentUserUpdater.loadAllUnreads { result in
+            if case let .failure(error) = result {
+                receivedError = error
+            }
+        }
+        
+        // Simulate API error
+        let expectedError = TestError()
+        apiClient.test_simulateResponse(Result<CurrentUserUnreads, Error>.failure(expectedError))
+        
+        // Verify the error is propagated
+        XCTAssertEqual(receivedError as? TestError, expectedError)
+    }
+    
+    // MARK: - Load Active Live Locations
+    
+    func test_loadActiveLiveLocations_makesCorrectAPICall() {
+        // WHEN
+        currentUserUpdater.loadActiveLiveLocations { _ in }
+        
+        // THEN
+        let endpoint = apiClient.request_endpoint
+        XCTAssertEqual(endpoint?.path.value, "/api/v2/users/live_locations")
+        XCTAssertEqual(endpoint?.method, .get)
+    }
+    
+    func test_loadActiveLiveLocations_successfulResponse_savesToDBAndReturnsModels() throws {
+        // GIVEN
+        let payloads = [
+            SharedLocation.dummy(endAt: Date().addingTimeInterval(100), latitude: 10, longitude: 20),
+            SharedLocation.dummy(endAt: Date().addingTimeInterval(200), latitude: 30, longitude: 40)
+        ]
+        let response = SharedLocationsResponse.dummy(activeLiveLocations: payloads)
+        nonisolated(unsafe) var result: Result<[SharedLocation], Error>?
+        
+        // WHEN
+        let expectation = self.expectation(description: "loadActiveLiveLocations")
+        currentUserUpdater.loadActiveLiveLocations {
+            result = $0
+            expectation.fulfill()
+        }
+        apiClient.test_simulateResponse(.success(response))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        // THEN
+        let sharedLocations = try result?.get()
+        XCTAssertEqual(sharedLocations?.count, payloads.count)
+        for (model, payload) in zip(sharedLocations ?? [], payloads) {
+            XCTAssertEqual(model.messageId, payload.messageId)
+            XCTAssertEqual(model.channelId, payload.channelCid)
+            XCTAssertEqual(model.latitude, payload.latitude)
+            XCTAssertEqual(model.longitude, payload.longitude)
+            XCTAssertEqual(model.endAt?.timeIntervalSince1970, payload.endAt?.timeIntervalSince1970)
+            XCTAssertEqual(model.createdByDeviceId, payload.createdByDeviceId)
+        }
+    }
+    
+    func test_loadActiveLiveLocations_propagatesNetworkError() {
+        // GIVEN
+        let expectedError = TestError()
+        nonisolated(unsafe) var result: Result<[SharedLocation], Error>?
+        
+        // WHEN
+        currentUserUpdater.loadActiveLiveLocations {
+            result = $0
+        }
+        apiClient.test_simulateResponse(Result<SharedLocationsResponse, Error>.failure(expectedError))
+        
+        // THEN
+        switch result {
+        case .failure(let error as TestError):
+            XCTAssertEqual(error, expectedError)
+        default:
+            XCTFail("Expected TestError")
+        }
+    }
+
+    // MARK: -
+    
+    private func setUpDownloadedAttachment(with payload: AnyAttachmentPayload, messageId: MessageId = .unique, cid: ChannelId = .unique) throws -> AttachmentId {
+        let attachmentId: AttachmentId = .init(cid: cid, messageId: messageId, index: 0)
+        try FileManager.default.createDirectory(at: URL.streamAttachmentDownloadsDirectory(), withIntermediateDirectories: true)
+        try database.createChannel(cid: cid, withMessages: false)
+        try database.createMessage(id: messageId, cid: cid)
+        try database.writeSynchronously { session in
+            let dto = try session.createNewAttachment(attachment: payload, id: attachmentId)
+            let localRelativePath = messageId + "-file.txt"
+            dto.localDownloadState = .downloaded
+            dto.localRelativePath = localRelativePath
+            let localFileURL = URL.streamAttachmentLocalStorageURL(forRelativePath: localRelativePath)
+            try FileManager.default.createDirectory(at: localFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try UUID().uuidString.write(to: localFileURL, atomically: false, encoding: .utf8)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: localFileURL.path))
+        }
+        return attachmentId
+    }
+
+    // MARK: - setPushPreference
+
+    func test_setPushPreference_makesCorrectAPICall() throws {
+        // GIVEN
+        let preference = PushPreferenceInput(chatLevel: .directMentions, removeDisable: true)
+
+        // WHEN
+        currentUserUpdater.setPushPreference(preference) { _ in }
+
+        // THEN
+        let expectedEndpoint: Endpoint<UpsertPushPreferencesResponse> = .updatePushNotificationPreferences(upsertPushPreferencesRequest: .init(preferences: [preference]))
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
+    }
+
+    func test_setPushPreference_successfulResponse_savesToDatabase() throws {
+        // GIVEN
+        let userId: UserId = .unique
+        let userPayload: CurrentUserPayload = .dummy(userId: userId, role: .user)
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: userPayload)
+        }
+
+        let preference = PushPreferenceInput(chatLevel: .all, removeDisable: true)
+
+        let response = UpsertPushPreferencesResponse(
+            userChannelPreferences: [:],
+            userPreferences: [
+                "userId": PushPreference(level: "all")
+            ]
+        )
+
+        // WHEN
+        let completionResult: Result<PushPreference, Error> = try waitFor { done in
+            currentUserUpdater.setPushPreference(preference, completion: done)
+            apiClient.test_simulateResponse(.success(response))
+        }
+
+        // THEN
+        XCTAssertNil(completionResult.error)
+        AssertAsync {
+            Assert.willBeEqual(self.database.viewContext.currentUser?.pushPreference?.id, userId)
+            Assert.willBeEqual(self.database.viewContext.currentUser?.pushPreference?.chatLevel, "all")
+        }
+
+        // Regression: the DTO must not be saved under the literal "currentUserId" string.
+        XCTAssertNil(PushPreferenceDTO.load(id: "currentUserId", context: database.viewContext))
+    }
+
+    func test_setPushPreference_withSchedule_savesAndRemovesScheduleInDatabase() throws {
+        // GIVEN
+        let userId: UserId = .unique
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: userId, role: .user))
+        }
+        let schedule = PushSchedule(
+            quietHours: [QuietHoursRule(days: QuietHoursDay.weekdays, start: "18:00", end: "09:00")],
+            timezone: TimeZone(identifier: "Europe/Amsterdam")!
+        )
+
+        // WHEN
+        let setResult: Result<PushPreference, Error> = try waitFor { done in
+            currentUserUpdater.setPushPreference(PushPreferenceInput(schedule: PushScheduleInput(schedule)), completion: done)
+            apiClient.test_simulateResponse(.success(UpsertPushPreferencesResponse(
+                userChannelPreferences: [:],
+                userPreferences: [userId: PushPreference(level: "all", schedule: schedule)]
+            )))
+        }
+
+        // THEN
+        XCTAssertEqual(setResult.value?.schedule, schedule)
+        AssertAsync.willBeEqual(try? self.database.viewContext.currentUser?.pushPreference?.asModel().schedule, schedule)
+
+        // WHEN
+        let removeResult: Result<PushPreference, Error> = try waitFor { done in
+            currentUserUpdater.setPushPreference(PushPreferenceInput(removeSchedule: true), completion: done)
+            apiClient.test_simulateResponse(.success(UpsertPushPreferencesResponse(
+                userChannelPreferences: [:],
+                userPreferences: [userId: PushPreference(level: "all")]
+            )))
+        }
+
+        // THEN
+        XCTAssertNil(removeResult.error)
+        AssertAsync.willBeNil(self.database.viewContext.currentUser?.pushPreference?.scheduleData)
+    }
+
+    func test_setPushPreference_whenSavingFails_propagatesDatabaseError() throws {
+        // GIVEN
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: .unique, role: .user))
+        }
+        let testError = TestError()
+        database.write_errorResponse = testError
+
+        // WHEN
+        let result: Result<PushPreference, Error> = try waitFor { done in
+            currentUserUpdater.setPushPreference(PushPreferenceInput(removeSchedule: true), completion: done)
+            apiClient.test_simulateResponse(.success(UpsertPushPreferencesResponse(
+                userChannelPreferences: [:],
+                userPreferences: ["userId": PushPreference(level: "all")]
+            )))
+        }
+
+        // THEN
+        XCTAssertEqual(result.error as? TestError, testError)
+    }
+
+    func test_setPushPreference_successfulResponse_whenNoCurrentUser_doesNotCrashOrSave() throws {
+        // GIVEN — no current user seeded in the database
+        let preference = PushPreferenceInput(chatLevel: .all, removeDisable: true)
+
+        let response = UpsertPushPreferencesResponse(
+            userChannelPreferences: [:],
+            userPreferences: [
+                "userId": PushPreference(level: "all")
+            ]
+        )
+
+        // WHEN
+        let completionResult: Result<PushPreference, Error> = try waitFor { done in
+            currentUserUpdater.setPushPreference(preference, completion: done)
+            apiClient.test_simulateResponse(.success(response))
+        }
+
+        // THEN — completion still propagates the API success, but nothing is written to the DB.
+        XCTAssertNil(completionResult.error)
+        XCTAssertNil(PushPreferenceDTO.load(id: "currentUserId", context: database.viewContext))
+        XCTAssertNil(database.viewContext.currentUser)
+    }
+
+    func test_setPushPreference_propagatesNetworkError() {
+        // GIVEN
+        let preference = PushPreferenceInput(chatLevel: .directMentions, removeDisable: true)
+
+        // WHEN
+        nonisolated(unsafe) var completionError: Error?
+        currentUserUpdater.setPushPreference(preference) { result in
+            if case let .failure(error) = result {
+                completionError = error
+            }
+        }
+
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<UpsertPushPreferencesResponse, Error>.failure(error))
+
+        // THEN
+        AssertAsync.willBeEqual(completionError as? TestError, error)
+    }
+
+    func test_setPushPreference_whenNoUserPreferences_returnsError() {
+        // GIVEN
+        let preference = PushPreferenceInput(chatLevel: .directMentions, removeDisable: true)
+
+        let response = UpsertPushPreferencesResponse(
+            userChannelPreferences: [:],
+            userPreferences: [:]
+        )
+
+        // WHEN
+        nonisolated(unsafe) var completionError: Error?
+        currentUserUpdater.setPushPreference(preference) { result in
+            if case let .failure(error) = result {
+                completionError = error
+            }
+        }
+
+        apiClient.test_simulateResponse(.success(response))
+
+        // THEN
+        AssertAsync.willBeTrue(completionError is ClientError.CurrentUserDoesNotExist)
+    }
+
+    // MARK: - Mark Channels Delivered
+
+    func test_markMessagesAsDelivered_makesCorrectAPICall() {
+        // GIVEN
+        let deliveredMessages = [
+            MessageDeliveryInfo(channelId: .init(type: .messaging, id: "channel1"), messageId: .unique),
+            MessageDeliveryInfo(channelId: .init(type: .livestream, id: "channel2"), messageId: .unique)
+        ]
+
+        // WHEN
+        currentUserUpdater.markMessagesAsDelivered(deliveredMessages)
+
+        // THEN
+        let expectedPayload = ChannelDeliveredRequestPayload(
+            latestDeliveredMessages: deliveredMessages.map { $0.asPayload }
+        )
+        let expectedEndpoint: Endpoint<EmptyResponse> = .markDelivered(markDeliveredRequest: expectedPayload)
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
+    }
+
+    func test_markMessagesAsDelivered_successfulResponse_isPropagatedToCompletion() {
+        // GIVEN
+        let deliveredMessages = [
+            MessageDeliveryInfo(channelId: .init(type: .messaging, id: "channel1"), messageId: .unique)
+        ]
+        nonisolated(unsafe) var completionCalled = false
+
+        // WHEN
+        currentUserUpdater.markMessagesAsDelivered(deliveredMessages) { error in
+            XCTAssertNil(error)
+            completionCalled = true
+        }
+
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+
+        // THEN
+        AssertAsync.willBeTrue(completionCalled)
+    }
+
+    func test_markMessagesAsDelivered_errorResponse_isPropagatedToCompletion() {
+        // GIVEN
+        let deliveredMessages = [
+            MessageDeliveryInfo(channelId: .init(type: .messaging, id: "channel1"), messageId: .unique)
+        ]
+        nonisolated(unsafe) var completionCalledError: Error?
+        let error = TestError()
+
+        // WHEN
+        currentUserUpdater.markMessagesAsDelivered(
+            deliveredMessages
+        ) {
+            completionCalledError = $0
+        }
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+
+        // THEN
+        AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+    }
+
+    // MARK: - Load Blocked Users
+
+    func test_loadBlockedUsers_makesCorrectAPICall() {
+        // Simulate `loadBlockedUsers` call
+        currentUserUpdater.loadBlockedUsers { _ in }
+
+        // Assert correct endpoint is called
+        XCTAssertEqual(
+            apiClient.request_endpoint,
+            AnyEndpoint(Endpoint<GetBlockedUsersResponse>.getBlockedUsers())
+        )
+    }
+
+    func test_loadBlockedUsers_propagatesSuccessfulResponse() throws {
+        // Simulate current user already set
+        let currentUserId: UserId = .unique
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: currentUserId, role: .user))
+        }
+
+        // Mock the API response before the call so the completion is invoked
+        let blockedUserId: UserId = .unique
+        let createdAt: Date = .unique
+        let payload = GetBlockedUsersResponse(
+            blocks: [
+                BlockedUserResponse(
+                    blockedUser: .dummy(userId: blockedUserId),
+                    blockedUserId: blockedUserId,
+                    createdAt: createdAt,
+                    user: .dummy(userId: currentUserId),
+                    userId: currentUserId
+                )
+            ]
+        )
+        apiClient.test_mockResponseResult(Result<GetBlockedUsersResponse, Error>.success(payload))
+        let expectation = XCTestExpectation()
+
+        // Simulate `loadBlockedUsers` call
+        nonisolated(unsafe) var result: [BlockedUserDetails]?
+        currentUserUpdater.loadBlockedUsers {
+            result = try? $0.get()
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: defaultTimeout)
+
+        // Assert the returned details map the generated response
+        XCTAssertEqual(result?.map(\.userId), [blockedUserId])
+        XCTAssertEqual(result?.first?.blockedAt, createdAt)
+        XCTAssertEqual(result?.first?.blockedUser.id, blockedUserId)
+    }
+
+    func test_loadBlockedUsers_propagatesError() {
+        // Mock the API failure before the call so the completion is invoked synchronously
+        let error = TestError()
+        apiClient.test_mockResponseResult(Result<GetBlockedUsersResponse, Error>.failure(error))
+
+        // Simulate `loadBlockedUsers` call
+        nonisolated(unsafe) var completionCalledError: Error?
+        currentUserUpdater.loadBlockedUsers { completionCalledError = $0.error }
+
+        // Assert the completion is called with the error
+        XCTAssertEqual(completionCalledError as? TestError, error)
+    }
+
+    // MARK: - Mute Users
+
+    func test_muteUsers_makesCorrectAPICall() {
+        let userIds: Set<UserId> = ["b-user", "a-user"]
+
+        // Simulate `muteUsers` call
+        currentUserUpdater.muteUsers(userIds, expiration: 15) { _ in }
+
+        // Assert correct endpoint is called with sorted target ids
+        XCTAssertEqual(
+            apiClient.request_endpoint,
+            AnyEndpoint(Endpoint<MuteResponse>.mute(muteRequest: .init(targetIds: ["a-user", "b-user"], timeout: 15)))
+        )
+    }
+
+    func test_muteUsers_propagatesSuccessfulResponse() throws {
+        // Simulate current user already set
+        let currentUserId: UserId = .unique
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: currentUserId, role: .user))
+        }
+
+        // Mock the API response before the call so the completion is invoked
+        let mutedUserId: UserId = .unique
+        let nonExistingUserId: UserId = .unique
+        let mute = MutedUserPayload.dummy(userId: mutedUserId)
+        let payload = MuteResponse(
+            mutes: [mute],
+            nonExistingUsers: [nonExistingUserId]
+        )
+        apiClient.test_mockResponseResult(Result<MuteResponse, Error>.success(payload))
+        let expectation = XCTestExpectation()
+
+        // Simulate `muteUsers` call
+        nonisolated(unsafe) var result: MuteUsersResponse?
+        currentUserUpdater.muteUsers([mutedUserId]) {
+            result = try? $0.get()
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: defaultTimeout)
+
+        // Assert the returned details map the generated response, taking the user from `target`
+        XCTAssertEqual(result?.mutes?.map { $0.user?.id }, [mutedUserId])
+        XCTAssertEqual(result?.mutes?.first?.createdAt, mute.createdAt)
+        XCTAssertEqual(result?.mutes?.first?.updatedAt, mute.updatedAt)
+        XCTAssertEqual(result?.nonExistingUsers, [nonExistingUserId])
+    }
+
+    func test_muteUsers_savesMutedUsersToDatabase() throws {
+        // Simulate current user already set
+        let currentUserId: UserId = .unique
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: currentUserId, role: .user))
+        }
+
+        // Mock the API response before the call so the completion is invoked
+        let mutedUserId: UserId = .unique
+        apiClient.test_mockResponseResult(
+            Result<MuteResponse, Error>.success(
+                .init(mutes: [.dummy(userId: mutedUserId)])
+            )
+        )
+        let expectation = XCTestExpectation()
+
+        // Simulate `muteUsers` call
+        currentUserUpdater.muteUsers([mutedUserId]) { _ in expectation.fulfill() }
+
+        wait(for: [expectation], timeout: defaultTimeout)
+
+        // Assert only the target is saved to the database
+        let mutedUserIds = try database.readSynchronously { $0.currentUser?.mutedUsers.map(\.id) }
+        XCTAssertEqual(mutedUserIds, [mutedUserId])
+    }
+
+    func test_muteUsers_whenResponseContainsOwnUserOnly_savesMutedUsersToDatabase() throws {
+        // Simulate current user already set
+        let currentUserId: UserId = .unique
+        try database.writeSynchronously {
+            try $0.saveCurrentUser(payload: .dummy(userId: currentUserId, role: .user))
+        }
+
+        // Mock the API response where the mute already existed, therefore only `own_user` carries it
+        let mutedUserId: UserId = .unique
+        apiClient.test_mockResponseResult(
+            Result<MuteResponse, Error>.success(
+                .init(
+                    mutes: nil,
+                    ownUser: .dummy(
+                        userId: currentUserId,
+                        role: .user,
+                        mutedUsers: [.dummy(userId: mutedUserId)]
+                    )
+                )
+            )
+        )
+        let expectation = XCTestExpectation()
+
+        // Simulate `muteUsers` call
+        currentUserUpdater.muteUsers([mutedUserId]) { _ in expectation.fulfill() }
+
+        wait(for: [expectation], timeout: defaultTimeout)
+
+        // Assert the muted user from `own_user` is saved to the database
+        let mutedUserIds = try database.readSynchronously { $0.currentUser?.mutedUsers.map(\.id) }
+        XCTAssertEqual(mutedUserIds, [mutedUserId])
+    }
+
+    func test_unmuteUsers_makesCorrectAPICall() {
+        let userIds: Set<UserId> = [.unique, .unique]
+
+        // Simulate `unmuteUsers` call
+        currentUserUpdater.unmuteUsers(userIds) { _ in }
+
+        // Assert correct endpoint is called
+        XCTAssertEqual(
+            apiClient.request_endpoint,
+            AnyEndpoint(.unmute(unmuteRequest: .init(targetIds: userIds.sorted())))
+        )
+    }
+
+    func test_unmuteUsers_propagatesSuccessfulResponse() throws {
+        let nonExistingUserId: UserId = .unique
+
+        // Mock the API response before the call so the completion is invoked
+        apiClient.test_mockResponseResult(
+            Result<UnmuteUsersResponse, Error>.success(.init(nonExistingUsers: [nonExistingUserId]))
+        )
+
+        // Simulate `unmuteUsers` call
+        let result: Result<UnmuteUsersResponse, Error> = try waitFor { currentUserUpdater.unmuteUsers([.unique], completion: $0) }
+
+        // Assert the returned details map the generated response
+        XCTAssertEqual(result.value?.nonExistingUsers, [nonExistingUserId])
+    }
+
+    func test_unmuteUsers_propagatesError() throws {
+        let error = TestError()
+
+        // Mock the API failure before the call so the completion is invoked
+        apiClient.test_mockResponseResult(Result<UnmuteUsersResponse, Error>.failure(error))
+
+        // Simulate `unmuteUsers` call
+        let result: Result<UnmuteUsersResponse, Error> = try waitFor { currentUserUpdater.unmuteUsers([.unique], completion: $0) }
+
+        // Assert the completion is called with the error
+        XCTAssertEqual(result.error as? TestError, error)
+    }
+
+    func test_muteUsers_propagatesError() {
+        // Mock the API failure before the call so the completion is invoked synchronously
+        let error = TestError()
+        apiClient.test_mockResponseResult(Result<MuteResponse, Error>.failure(error))
+
+        // Simulate `muteUsers` call
+        nonisolated(unsafe) var completionCalledError: Error?
+        currentUserUpdater.muteUsers([.unique]) { completionCalledError = $0.error }
+
+        // Assert the completion is called with the error
+        XCTAssertEqual(completionCalledError as? TestError, error)
     }
 }

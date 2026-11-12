@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -10,8 +10,8 @@ class EventObserver {
 
     init<EventType>(
         notificationCenter: NotificationCenter,
-        transform: @escaping (Event) -> EventType?,
-        callback: @escaping (EventType) -> Void
+        transform: @escaping @Sendable (Event) -> EventType?,
+        callback: @escaping @Sendable (EventType) -> Void
     ) {
         let observer = notificationCenter.addObserver(forName: .NewEventReceived, object: nil, queue: nil) {
             guard let event = $0.event.flatMap(transform) else { return }
@@ -22,7 +22,7 @@ class EventObserver {
             notificationCenter?.removeObserver(observer)
         }
     }
-
+    
     deinit {
         stopObserving()
     }

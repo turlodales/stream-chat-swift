@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -13,7 +13,12 @@ protocol IdentifiablePayload {
 
 extension IdentifiablePayload {
     func addId(cache: inout [String: Set<String>]) {
-        guard let databaseId = databaseId, let modelClassName = Self.modelClass?.className else { return }
+        guard let databaseId = databaseId else { return }
+        addId(databaseId: databaseId, cache: &cache)
+    }
+
+    func addId(databaseId: DatabaseId, cache: inout [DatabaseType: Set<DatabaseId>]) {
+        guard let modelClassName = Self.modelClass?.className else { return }
         var ids = (cache[modelClassName] ?? Set<String>())
         ids.insert(databaseId)
         cache[modelClassName] = ids
@@ -44,6 +49,12 @@ extension IdentifiablePayload {
                     return MemberDTO.self
                 case ChannelReadDTO.className:
                     return ChannelReadDTO.self
+                case ThreadDTO.className:
+                    return ThreadDTO.self
+                case ThreadParticipantDTO.className:
+                    return ThreadParticipantDTO.self
+                case ThreadReadDTO.className:
+                    return ThreadReadDTO.self
                 default:
                     return nil
                 }
@@ -52,18 +63,16 @@ extension IdentifiablePayload {
             guard let modelClass = modelClass, let keyPath = modelClass.idKeyPath else { continue }
 
             let values = Array(identifiableValues)
-            var results: [NSManagedObject]?
+            nonisolated(unsafe) var modelMapping: [DatabaseId: NSManagedObjectID] = [:]
             context.performAndWait {
-                results = modelClass.batchFetch(keyPath: keyPath, equalTo: values, context: context)
-            }
-            guard let results = results else { continue }
-
-            var modelMapping: [DatabaseId: NSManagedObjectID] = [:]
-            results.forEach {
-                if let id = modelClass.id(for: $0) {
-                    modelMapping[id] = $0.objectID
+                let results = modelClass.batchFetch(keyPath: keyPath, equalTo: values, context: context)
+                results.forEach {
+                    if let id = modelClass.id(for: $0) {
+                        modelMapping[id] = $0.objectID
+                    }
                 }
             }
+
             cache[modelClass.className] = modelMapping
         }
 
@@ -78,7 +87,7 @@ extension IdentifiablePayloadProxy {
     static var modelClass: (IdentifiableDatabaseObject).Type? { nil }
 }
 
-extension Array where Element: IdentifiablePayload {
+extension Array: IdentifiablePayload where Element: IdentifiablePayload {
     var databaseId: DatabaseId? { nil }
     static var modelClass: (IdentifiableDatabaseObject).Type? { nil }
 
@@ -89,15 +98,9 @@ extension Array where Element: IdentifiablePayload {
     }
 }
 
-extension UserListPayload: IdentifiablePayloadProxy {
+extension QueryUsersResponse: IdentifiablePayloadProxy {
     func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
         users.fillIds(cache: &cache)
-    }
-}
-
-extension MessageListPayload: IdentifiablePayloadProxy {
-    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
-        messages.fillIds(cache: &cache)
     }
 }
 
@@ -107,21 +110,15 @@ extension MessageReactionsPayload: IdentifiablePayloadProxy {
     }
 }
 
-extension MessageSearchResultsPayload: IdentifiablePayloadProxy {
+extension SearchResponse: IdentifiablePayloadProxy {
     func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
         results.fillIds(cache: &cache)
     }
 }
 
-extension MessagePayload.Boxed: IdentifiablePayloadProxy {
+extension SearchResult: IdentifiablePayloadProxy {
     func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
         message.fillIds(cache: &cache)
-    }
-}
-
-extension ChannelMemberListPayload: IdentifiablePayloadProxy {
-    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
-        members.fillIds(cache: &cache)
     }
 }
 
@@ -139,7 +136,8 @@ extension ChannelPayload: IdentifiablePayloadProxy {
         membership?.fillIds(cache: &cache)
         messages.fillIds(cache: &cache)
         pinnedMessages.fillIds(cache: &cache)
-        channelReads.fillIds(cache: &cache)
+        read?.fillIds(cache: &cache, channelCid: channel.cid)
+        threads.fillIds(cache: &cache)
     }
 }
 
@@ -150,8 +148,60 @@ extension ChannelDetailPayload: IdentifiablePayload {
     func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
         addId(cache: &cache)
         createdBy?.fillIds(cache: &cache)
+        truncatedBy?.fillIds(cache: &cache)
         members?.fillIds(cache: &cache)
-        invitedMembers.fillIds(cache: &cache)
+    }
+}
+
+extension QueryThreadsResponse: IdentifiablePayloadProxy {
+    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
+        threads.fillIds(cache: &cache)
+    }
+}
+
+extension ThreadStateResponse: IdentifiablePayloadProxy {
+    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
+        addId(cache: &cache)
+        parentMessage?.fillIds(cache: &cache)
+        channel?.fillIds(cache: &cache)
+        createdBy?.fillIds(cache: &cache)
+        latestReplies.fillIds(cache: &cache)
+        threadParticipants?.fillIds(cache: &cache)
+        read?.fillIds(cache: &cache)
+    }
+}
+
+extension ReadStateResponse: IdentifiablePayload {
+    var databaseId: DatabaseId? { nil } // Cannot build id without channel id
+    static let modelClass: (IdentifiableDatabaseObject).Type? = ChannelReadDTO.self
+
+    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
+        addId(cache: &cache)
+        user.fillIds(cache: &cache)
+    }
+
+    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>], channelCid: ChannelId) {
+        user.fillIds(cache: &cache)
+        addId(
+            databaseId: ChannelReadDTO.createId(cid: channelCid, userId: user.id),
+            cache: &cache
+        )
+    }
+}
+
+extension ThreadParticipantPayload: IdentifiablePayloadProxy {
+    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
+        addId(cache: &cache)
+        user?.fillIds(cache: &cache)
+    }
+}
+
+extension FullUserResponse: IdentifiablePayload {
+    var databaseId: DatabaseId? { id }
+    static let modelClass: (IdentifiableDatabaseObject).Type? = UserDTO.self
+
+    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
+        addId(cache: &cache)
     }
 }
 
@@ -164,7 +214,7 @@ extension UserPayload: IdentifiablePayload {
     }
 }
 
-extension MessagePayload: IdentifiablePayload {
+extension MessageResponse: IdentifiablePayload {
     var databaseId: DatabaseId? { id }
     static let modelClass: (IdentifiableDatabaseObject).Type? = MessageDTO.self
 
@@ -173,10 +223,27 @@ extension MessagePayload: IdentifiablePayload {
         user.fillIds(cache: &cache)
         quotedMessage?.fillIds(cache: &cache)
         mentionedUsers.fillIds(cache: &cache)
-        threadParticipants.fillIds(cache: &cache)
+        threadParticipants?.fillIds(cache: &cache)
         latestReactions.fillIds(cache: &cache)
         ownReactions.fillIds(cache: &cache)
         pinnedBy?.fillIds(cache: &cache)
+        pinnedBy?.fillIds(cache: &cache)
+    }
+}
+
+extension SearchResultMessage: IdentifiablePayload {
+    var databaseId: DatabaseId? { id }
+    static let modelClass: (IdentifiableDatabaseObject).Type? = MessageDTO.self
+
+    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
+        addId(cache: &cache)
+        channel?.fillIds(cache: &cache)
+        user.fillIds(cache: &cache)
+        quotedMessage?.fillIds(cache: &cache)
+        mentionedUsers.fillIds(cache: &cache)
+        threadParticipants?.fillIds(cache: &cache)
+        latestReactions.fillIds(cache: &cache)
+        ownReactions.fillIds(cache: &cache)
         pinnedBy?.fillIds(cache: &cache)
     }
 }
@@ -200,17 +267,13 @@ extension MemberPayload: IdentifiablePayload {
 
     func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
         addId(cache: &cache)
-        user.fillIds(cache: &cache)
+        user?.fillIds(cache: &cache)
     }
 }
 
-extension ChannelReadPayload: IdentifiablePayload {
-    var databaseId: DatabaseId? { nil } // Needs a composed predicate 'channel.cid == %@ && user.id == %@'
-    static let modelClass: (IdentifiableDatabaseObject).Type? = ChannelReadDTO.self
-
-    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>]) {
-        addId(cache: &cache)
-        user.fillIds(cache: &cache)
+extension Array where Element == ChannelReadPayload {
+    func fillIds(cache: inout [DatabaseType: Set<DatabaseId>], channelCid: ChannelId) {
+        forEach { $0.fillIds(cache: &cache, channelCid: channelCid) }
     }
 }
 

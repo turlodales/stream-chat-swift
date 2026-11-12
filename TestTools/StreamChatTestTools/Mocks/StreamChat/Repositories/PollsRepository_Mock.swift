@@ -1,0 +1,81 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+@testable import StreamChat
+
+final class PollsRepository_Mock: PollsRepository, Spy, @unchecked Sendable {
+    @Atomic var getQueryPollVotes_completion: ((Result<VotePaginationResponse, Error>) -> Void)?
+    @Atomic var castPollVote_completion: ((Error?) -> Void)?
+    @Atomic var removePollVote_completion: ((Error?) -> Void)?
+    @Atomic var closePoll_completion: ((Error?) -> Void)?
+    @Atomic var suggestPollOption_completion: ((Error?) -> Void)?
+    @Atomic var deletePoll_completion: ((Error?) -> Void)?
+    @Atomic var castPollVote_optionId: String?
+    @Atomic var removePollVote_voteId: String?
+    @Atomic var closePoll_pollId: String?
+    
+    var recordedFunctions: [String] = []
+    let spyState: SpyState = .init()
+    
+    // Mock for link method
+    var link: ((PollVote, PollVoteListQuery) -> Void)?
+
+    override func queryPollVotes(
+        query: PollVoteListQuery,
+        completion: ((Result<VotePaginationResponse, Error>) -> Void)? = nil
+    ) {
+        getQueryPollVotes_completion = completion
+    }
+    
+    override func castPollVote(
+        messageId: MessageId,
+        pollId: String,
+        answerText: String?,
+        optionId: String?,
+        currentUserId: String?,
+        query: PollVoteListQuery?,
+        deleteExistingVotes: [PollVote] = [],
+        completion: ((Error?) -> Void)? = nil
+    ) {
+        castPollVote_optionId = optionId
+        castPollVote_completion = completion
+    }
+    
+    override func removePollVote(
+        messageId: MessageId,
+        pollId: String,
+        voteId: String,
+        completion: ((Error?) -> Void)? = nil
+    ) {
+        removePollVote_voteId = voteId
+        removePollVote_completion = completion
+    }
+    
+    override func closePoll(pollId: String, completion: ((Error?) -> Void)? = nil) {
+        closePoll_pollId = pollId
+        closePoll_completion = completion
+    }
+    
+    override func suggestPollOption(
+        pollId: String,
+        text: String,
+        position: Int? = nil,
+        custom: [String: RawJSON]? = nil,
+        completion: ((Error?) -> Void)? = nil
+    ) {
+        suggestPollOption_completion = completion
+    }
+    
+    override func deletePoll(
+        pollId: String,
+        completion: ((Error?) -> Void)? = nil
+    ) {
+        deletePoll_completion = completion
+    }
+    
+    override func link(pollVote: PollVote, to query: PollVoteListQuery) {
+        link?(pollVote, query)
+    }
+}

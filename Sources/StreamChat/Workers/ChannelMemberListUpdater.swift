@@ -1,54 +1,77 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
 
 /// Makes a channel members query call to the backend and updates the local storage with the results.
-class ChannelMemberListUpdater: Worker {
+class ChannelMemberListUpdater: Worker, @unchecked Sendable {
     /// Makes a channel members query call to the backend and updates the local storage with the results.
     /// - Parameters:
     ///   - query: The query used in the request.
     ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
-    func load(_ query: ChannelMemberListQuery, completion: ((Error?) -> Void)? = nil) {
+    func load(_ query: ChannelMemberListQuery, completion: (@Sendable (Result<[ChatChannelMember], Error>) -> Void)? = nil) {
         fetchAndSaveChannelIfNeeded(query.cid) { [weak self] error in
-            guard error == nil else {
-                completion?(error)
+            if let error {
+                completion?(.failure(error))
                 return
             }
-            
-            let membersEndpoint: Endpoint<ChannelMemberListPayload> = .channelMembers(query: query)
-            self?.apiClient.request(endpoint: membersEndpoint) { membersResult in
+
+            let membersEndpoint: Endpoint<MembersResponse> = .queryMembers(payload: query.asQueryMembersPayload())
+            self?.apiClient.request(endpoint: membersEndpoint) { [weak self] membersResult in
                 switch membersResult {
-                case let .success(memberListPayload):
+                case let .success(response):
+                    nonisolated(unsafe) var members = [ChatChannelMember]()
                     self?.database.write({ session in
-                        session.saveMembers(payload: memberListPayload, channelId: query.cid, query: query)
+                        members = try session.saveMembers(
+                            response: response,
+                            channelId: query.cid,
+                            query: query
+                        )
+                        .map { try $0.asModel() }
                     }, completion: { error in
                         if let error = error {
                             log.error("Failed to save `ChannelMemberListQuery` related data to the database. Error: \(error)")
+                            completion?(.failure(error))
+                        } else {
+                            completion?(.success(members))
                         }
-                        completion?(error)
                     })
                 case let .failure(error):
-                    completion?(error)
+                    completion?(.failure(error))
                 }
             }
         }
     }
 }
 
+extension ChannelMemberListUpdater {
+    func load(_ query: ChannelMemberListQuery) async throws -> [ChatChannelMember] {
+        try await withCheckedThrowingContinuation { continuation in
+            load(query) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+    
+    func member(with userId: UserId, cid: ChannelId) async throws -> ChatChannelMember {
+        let members = try await load(.channelMember(userId: userId, cid: cid))
+        guard let member = members.first else { throw ClientError.MemberDoesNotExist(userId: userId, cid: cid) }
+        return member
+    }
+}
+
 // MARK: - Private
 
 private extension ChannelMemberListUpdater {
-    func fetchAndSaveChannelIfNeeded(_ cid: ChannelId, completion: @escaping (Error?) -> Void) {
+    func fetchAndSaveChannelIfNeeded(_ cid: ChannelId, completion: @escaping @Sendable (Error?) -> Void) {
         checkChannelExistsLocally(with: cid) { [weak self] exists in
             exists ? completion(nil) : self?.fetchAndSaveChannel(with: cid, completion: completion)
         }
     }
-    
-    func fetchAndSaveChannel(with cid: ChannelId, completion: @escaping (Error?) -> Void) {
-        let query = ChannelQuery(cid: cid)
-        apiClient.request(endpoint: .updateChannel(query: query)) { [weak self] in
+
+    func fetchAndSaveChannel(with cid: ChannelId, completion: @escaping @Sendable (Error?) -> Void) {
+        apiClient.request(endpoint: ChannelQuery(cid: cid).endpoint) { [weak self] in
             switch $0 {
             case let .success(payload):
                 self?.database.write({ session in
@@ -64,8 +87,8 @@ private extension ChannelMemberListUpdater {
             }
         }
     }
-    
-    func checkChannelExistsLocally(with cid: ChannelId, completion: @escaping (Bool) -> Void) {
+
+    func checkChannelExistsLocally(with cid: ChannelId, completion: @escaping @Sendable (Bool) -> Void) {
         let context = database.backgroundReadOnlyContext
         context.perform {
             let exists = context.channel(cid: cid) != nil

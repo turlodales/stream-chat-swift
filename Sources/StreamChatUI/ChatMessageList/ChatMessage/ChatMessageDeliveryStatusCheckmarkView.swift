@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -11,42 +11,44 @@ open class ChatMessageDeliveryStatusCheckmarkView: _View, ThemeProvider {
     public struct Content {
         public var deliveryStatus: MessageDeliveryStatus
     }
-    
+
     /// The data this view component shows.
     open var content: Content? {
         didSet { updateContentIfNeeded() }
     }
-    
+
     /// The image view showing read state of the message.
     open private(set) lazy var imageView = UIImageView()
         .withoutAutoresizingMaskConstraints
-    
+
+    /// The size of the checkmark icon.
+    open var checkmarkSize: CGSize { CGSize(width: 16, height: 16) }
+
     override open func setUpAppearance() {
         super.setUpAppearance()
-        
+
         imageView.contentMode = .scaleAspectFit
     }
-    
+
     override open func setUpLayout() {
         super.setUpLayout()
-        
-        let size: CGFloat = 14
-        widthAnchor.pin(equalToConstant: size).isActive = true
-        heightAnchor.pin(equalToConstant: size).isActive = true
-        
+
         embed(imageView)
+        imageView
+            .width(checkmarkSize.width)
+            .height(checkmarkSize.height)
     }
-    
+
     override open func updateContent() {
         super.updateContent()
-        
+
         imageView.image = content.flatMap {
             switch $0.deliveryStatus {
             case .pending:
                 return appearance.images.messageDeliveryStatusSending
             case .sent:
                 return appearance.images.messageDeliveryStatusSent
-            case .read:
+            case .read, .delivered:
                 return appearance.images.messageDeliveryStatusRead
             case .failed:
                 return appearance.images.messageDeliveryStatusFailed
@@ -54,30 +56,30 @@ open class ChatMessageDeliveryStatusCheckmarkView: _View, ThemeProvider {
                 return nil
             }
         }
-                
+
         imageView.tintColor = content.map {
             switch $0.deliveryStatus {
             case .read:
                 return appearance.colorPalette.accentPrimary
             case .failed:
-                return appearance.colorPalette.alert
+                return appearance.colorPalette.accentError
             default:
-                return appearance.colorPalette.textLowEmphasis
+                return appearance.colorPalette.textTertiary
             }
         }
-        
+
         imageView.accessibilityIdentifier = imageViewAccessibilityIdentifier
     }
-    
+
     // MARK: - Private
-    
+
     private var imageViewAccessibilityIdentifier: String {
         let prefix = "imageView"
-        
+
         guard let status = content?.deliveryStatus else {
             return prefix
         }
-        
+
         return "\(prefix)_\(status.rawValue)"
     }
 }

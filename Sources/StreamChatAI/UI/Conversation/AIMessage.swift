@@ -1,0 +1,75 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+/// A message ``AIConversationView`` can show by itself: the person's in a bubble with its
+/// attachments, and the agent's as its steps, its answer and then its attachments. A message of
+/// another role shows as the agent's.
+///
+/// ```swift
+/// struct Message: AIMessage {
+///     var id: String
+///     var role: AIMessageRole
+///     var text: String
+///     var isGenerating = false
+/// }
+/// ```
+@available(iOS 15.0, macOS 12.0, *)
+public protocol AIMessage: Identifiable, Sendable {
+    /// Who wrote it.
+    var role: AIMessageRole { get }
+    /// What it says. A reply's text is Markdown.
+    var text: String { get }
+    /// Whether the agent is still writing it.
+    var isGenerating: Bool { get }
+    /// The steps the agent took for it, in order: reasoning, tool calls, and kinds of its own.
+    var parts: [AIMessagePart] { get }
+    /// What it carries besides its text, such as images and files.
+    var attachments: [AIMessageAttachment] { get }
+    /// The UI the agent generated for a reply, shown in place of its text when the
+    /// conversation's ``AIUIHost`` can, such as `AIUIDocument(customData: message.extraData)`.
+    var uiDocument: AIUIDocument? { get }
+    /// How the person rated a reply, as your backend has it. ``AIConversation`` shows it until
+    /// the person rates the reply on this device.
+    var rating: AIMessageRating? { get }
+    /// The whole of a reasoning step's thinking when the app has it, such as from live
+    /// updates. Without it, the step shows its own excerpt. It is read each time the
+    /// conversation updates, so look it up rather than work it out.
+    func reasoningText(for step: AIReasoningPart) -> String?
+}
+
+@available(iOS 15.0, macOS 12.0, *)
+public extension AIMessage {
+    var isGenerating: Bool { false }
+    var parts: [AIMessagePart] { [] }
+    var attachments: [AIMessageAttachment] { [] }
+    var uiDocument: AIUIDocument? { nil }
+    var rating: AIMessageRating? { nil }
+    func reasoningText(for step: AIReasoningPart) -> String? { nil }
+}
+
+/// Who wrote a message. It is an open set: compare against the roles you know.
+@available(iOS 15.0, macOS 12.0, *)
+public struct AIMessageRole: RawRepresentable, Hashable, Sendable, ExpressibleByStringLiteral, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) { self.rawValue = rawValue }
+    public init(stringLiteral value: String) { rawValue = value }
+    public var description: String { rawValue }
+
+    /// The person using the app. Each of their messages starts a turn.
+    public static let user: AIMessageRole = "user"
+    /// The agent.
+    public static let assistant: AIMessageRole = "assistant"
+}
+
+@available(iOS 15.0, macOS 12.0, *)
+extension AIMessage {
+    // A reply the agent has started with no text, steps or attachments yet. Its generated UI can
+    // still show, when the conversation's host reads it.
+    var hasEmptyContent: Bool {
+        role != .user && text.isEmpty && parts.isEmpty && attachments.isEmpty
+    }
+}

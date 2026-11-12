@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -13,13 +13,13 @@ import Foundation
 ///     config.channel.keystrokeEventTimeout = 15
 ///   ```
 ///
-public struct ChatClientConfig {
+public struct ChatClientConfig: Sendable {
     /// The `APIKey` unique for your chat app.
     ///
     /// The API key can be obtained by registering on [our website](https://getstream.io/chat/\).
     ///
     public let apiKey: APIKey
-    
+
     /// The security application group ID to use for the local storage. This is needed if you want to share offline storage between
     /// your chat application and extensions. More information is available [here](https://developer.apple.com/documentation/bundleresources/entitlements/com_apple_security_application-groups)
     /// and [here](https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/EnablingAppSandbox.html#//apple_ref/doc/uid/TP40011195-CH4-SW19)
@@ -30,8 +30,30 @@ public struct ChatClientConfig {
     }
 
     /// The folder `ChatClient` uses to store its local cache files.
+    ///
+    /// On tvOS this defaults to `Library/Caches`, the only writable location for tvOS apps. The system may purge it
+    /// while the app isn't running. The SDK then starts with an empty cache, and local changes that weren't sent yet are lost.
     public var localStorageFolderURL: URL? = {
         Self.initLocalStorageFolderURL(groupIdentifier: nil)
+    }()
+
+    /// The base folder `ChatClient` uses to store attachments downloaded to local storage.
+    ///
+    /// Downloaded attachments are stored inside a `StreamAttachmentDownloads` subfolder created within this location.
+    /// By default this points to the user's `Documents` directory, which is user-visible when the app enables file
+    /// sharing (`UIFileSharingEnabled` / `LSSupportsOpeningDocumentsInPlace`) and is included in device backups.
+    ///
+    /// Set this to a non-user-visible location such as `Library/Application Support` or `Library/Caches` to keep
+    /// downloaded attachments out of the Files app and, optionally, out of backups. When `nil`, the SDK falls back
+    /// to the default `Documents` directory (`Library/Caches` on tvOS).
+    ///
+    /// On tvOS the default is `Library/Caches`, because tvOS apps can't write to `Documents`. The system may purge it
+    /// while the app isn't running, and purged attachments can be downloaded again.
+    ///
+    /// - Important: Relative download paths are resolved against this URL on each launch, so changing it between
+    /// launches means previously downloaded files stored under the old location won't be found.
+    public var localAttachmentDownloadsFolderURL: URL? = {
+        FileManager.default.streamStorageDirectory
     }()
 
     static func initLocalStorageFolderURL(groupIdentifier: String?) -> URL? {
@@ -41,34 +63,44 @@ public struct ChatClientConfig {
         #else
         if let groupIdentifier = groupIdentifier {
             if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupIdentifier) {
+                #if os(tvOS)
+                // tvOS allows writing only to the Caches folder of an app group container.
+                return url.appendingPathComponent("Library/Caches", isDirectory: true)
+                #else
                 return url
+                #endif
             }
             log
                 .error(
                     "Chat is configured to use the App Group: \(groupIdentifier) but the target seems to be not configured correctly"
                 )
         }
-        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        return FileManager.default.streamStorageDirectory
         #endif
     }
 
     /// The datacenter `ChatClient` uses for connecting.
     public var baseURL: BaseURL = .default
-    
+
     /// Determines whether `ChatClient` caches the data locally. This makes it possible to browse the existing chat data also
     /// when the internet connection is not available.
     public var isLocalStorageEnabled: Bool = true
-    
+
     /// If set to `true`, `ChatClient` resets the local cache on the start.
     ///
     /// You should set `shouldFlushLocalStorageOnStart = true` every time the changes in your code makes the local cache invalid.
-    ///
-    ///
     public var shouldFlushLocalStorageOnStart: Bool = false
-    
+
+    /// An object that provides a way to transform Stream Chat models.
+    public var modelsTransformer: StreamModelsTransformer?
+
+    /// A factory to create an interceptor with the goal of intercepting messages
+    /// before sending them to the server.
+    public var sendMessageInterceptorFactory: SendMessageInterceptorFactory?
+
     /// Advanced settings for the local caching and model serialization.
     public var localCaching = LocalCaching()
-    
+
     /// Flag for setting a ChatClient instance in connection-less mode.
     /// A connection-less client is not able to connect to websocket and will not
     /// receive websocket events. It can still observe and mutate database.
@@ -76,20 +108,6 @@ public struct ChatClientConfig {
     /// **Warning**: There should be at max 1 active client at the same time, else it can lead to undefined behavior.
     public var isClientInActiveMode: Bool
 
-    /// If set to `true` the `ChatClient` will automatically establish a web-socket
-    /// connection to listen to the updates when `reloadUserIfNeeded` is called.
-    ///
-    /// If set to `false` the connection won't be established automatically
-    /// but has to be initiated manually by calling `connect`.
-    ///
-    /// Is `true` by default.
-    @available(
-        *,
-        deprecated,
-        message: "This flag has no effect anymore. The flow for setting and for connecting the user has been unified to the `connectUser` set of methods."
-    )
-    public var shouldConnectAutomatically = true
-    
     /// If set to `true`, the `ChatClient` will try to stay connected while app is backgrounded.
     /// If set to `false`, websocket disconnects immediately when app is backgrounded.
     ///
@@ -106,58 +124,110 @@ public struct ChatClientConfig {
     ///
     /// Default value is `true`
     public var staysConnectedInBackground = true
-    
+
     /// Creates a new instance of `ChatClientConfig`.
     ///
     /// - Parameter apiKey: The API key of the chat app the `ChatClient` connects to.
     ///
-    
-    /// Allows to inject a custom API client for uploading attachments, if not specified `StreamCDNClient` is used
-    public var customCDNClient: CDNClient?
-    
-    /// Returns max possible attachment size in bytes.
-    /// The value is taken from custom `maxAttachmentSize` type custom `CDNClient` type.
-    /// The default value is 20 MiB.
-    public var maxAttachmentSize: Int64 {
-        if let customCDNClient = customCDNClient {
-            return type(of: customCDNClient).maxAttachmentSize
-        } else {
-            return StreamCDNClient.maxAttachmentSize
-        }
-    }
-    
+
+    /// Allows injecting a custom CDN storage for uploading and deleting attachments.
+    /// If not specified, Stream's default CDN storage is used.
+    public var cdnStorage: CDNStorage?
+
+    /// A component that can be used to change an attachment which was successfully uploaded.
+    public var uploadedAttachmentPostProcessor: UploadedAttachmentPostProcessor?
+
     /// Returns max number of attachments that can be attached to a message.
     ///
-    /// The current limit is `10`.
-    public let maxAttachmentCountPerMessage = 10
+    /// The current limit on the backend is `30`. You can only configure a value below `30`.
+    public var maxAttachmentCountPerMessage = 30
 
-    /// Specifies the visibility of deleted messages.
-    public enum DeletedMessageVisibility: String, CustomStringConvertible, CustomDebugStringConvertible {
-        /// All deleted messages are always hidden.
-        case alwaysHidden
-        /// Deleted message by current user are visible, other deleted messages are hidden.
-        case visibleForCurrentUser
-        /// Deleted messages are always visible.
-        case alwaysVisible
-
-        public var description: String {
-            rawValue
-        }
-
-        public var debugDescription: String {
-            rawValue
-        }
-    }
-
-    /// Specifies the visibility of deleted messages.
-    /// By default, all deleted messages are visible with their content hidden.
-    public var deletedMessagesVisibility: DeletedMessageVisibility = .alwaysVisible
-    
     /// Specifies whether `shadowed` messages should be shown in Message list.
     /// For more information, please check "Shadow Bans" docs.
     public var shouldShowShadowedMessages = false
 
-    public init(apiKey: APIKey) {
+    /// The timeout interval determines the network request timeout interval for all tasks within sessions based on this configuration.
+    /// It controls how long (in seconds) a network task should wait for additional data to arrive before giving up
+    public var timeoutIntervalForRequest: TimeInterval = 30
+
+    /// The maximum time in seconds the SDK will wait until it reconnects successfully, in case it was disconnected by a recoverable error.
+    /// By default there is no timeout, so the SDK will keep trying to connect for an undetermined time.
+    public var reconnectionTimeout: TimeInterval?
+
+    /// Enable/Disable local filtering for Channel lists. When enabled,
+    /// whenever a new channel is created,/updated the SDK will try to
+    /// match the channel list filter automatically.
+    public var isChannelAutomaticFilteringEnabled: Bool = true
+    
+    /// The `URLSessionConfiguration` being used as default configuration for the `APIClient` and
+    /// `WebSocketClient`
+    public var urlSessionConfiguration: URLSessionConfiguration = .default
+    
+    /// How many hours the unsent actions should be queued for sending when the internet connection is available.
+    public var queuedActionsMaxHoursThreshold: Int = 12
+    
+    /// Specifies, if local data is updated with subscribing to web-socket events after reconnection.
+    ///
+    /// When turning this off it is up for SDK user to observe web-socket connection state for reconnection
+    /// and syncing data by calling, for example, controller's `synchronize` or state-layer's `get` methods.
+    /// Note that, these calls fetch the latest state and also subscribe to web-socket events if query's `watch` is true.
+    ///
+    /// Web-socket connection status can be updated either with subscribe method or through ``ChatConnectionController``.
+    /// ```swift
+    /// connectionCancellable = chatClient.subscribe(
+    ///     toEvent: ConnectionStatusUpdated.self,
+    ///     handler: { connectionEvent in
+    ///         switch connectionEvent.connectionStatus {
+    ///         case .connected:
+    ///             // Data can be updated and watching can be resumed
+    ///         default:
+    ///             break
+    ///         }
+    ///     }
+    /// )
+    /// ```
+    ///
+    /// - SeeAlso: Query option``QueryOptions/watch`` used by ``ChannelListQuery`` and ``ChannelQuery``.
+    public var isAutomaticSyncOnReconnectEnabled = true
+
+    /// The maximum number of events that may be replayed from a single `/sync` response.
+    ///
+    /// When a `/sync` payload exceeds this count (or the backend returns HTTP 400 for too many events),
+    /// the SDK skips event replay and refreshes actively watched channels via `queryChannels` instead.
+    ///
+    /// This property is intentionally `internal`. Customers should not tune it; the default (`250`) is
+    /// chosen to keep reconnect recovery safe and performant. Override only in SDK tests or local
+    /// debugging.
+    ///
+    /// Defaults to `250`.
+    var syncEventReplayMaximumEventCount: Int = 250
+
+    /// When enabled, the per-channel unread count is tracked locally for channels where server-side
+    /// read events are disabled (i.e. ``ChannelConfig/readEventsEnabled`` is `false`, typical for
+    /// livestream channels).
+    ///
+    /// While the server normally records who has read what, some channel types (e.g. livestreams)
+    /// turn this off to reduce load. With this flag set to `true`:
+    /// - New messages that arrive while the channel is not active increment a local unread counter.
+    /// - Calling ``markRead`` updates the local last-read timestamp only, without making a network
+    ///   request, so the unread count is reset immediately on-device.
+    ///
+    /// The total unread count (``CurrentChatUser/unreadCount``) is **not** affected; only the
+    /// per-channel ``ChatChannel/unreadCount`` is tracked locally.
+    ///
+    /// Defaults to `false`.
+    public var isLocalUnreadCountEnabled: Bool = false
+
+    /// The protocol that the server uses for the events it sends over the WebSocket connection.
+    ///
+    /// Use ``WebSocketEventProtocol/v3`` to reduce bandwidth in apps with large channels.
+    ///
+    /// Defaults to ``WebSocketEventProtocol/v2``.
+    public var webSocketEventProtocol: WebSocketEventProtocol = .v2
+
+    public init(
+        apiKey: APIKey
+    ) {
         self.apiKey = apiKey
         isClientInActiveMode = !Bundle.main.isAppExtension
     }
@@ -177,36 +247,18 @@ extension ChatClientConfig {
 
 extension ChatClientConfig {
     /// Advanced settings for the local caching and model serialization.
-    public struct LocalCaching: Equatable {
+    public struct LocalCaching: Equatable, Sendable {
         /// `ChatChannel` specific local caching and model serialization settings.
         public var chatChannel = ChatChannel()
     }
-    
+
     /// `ChatChannel` specific local caching and model serialization settings.
-    public struct ChatChannel: Equatable {
+    public struct ChatChannel: Equatable, Sendable {
         /// Limit the max number of watchers included in `ChatChannel.lastActiveWatchers`.
         public var lastActiveWatchersLimit = 100
         /// Limit the max number of members included in `ChatChannel.lastActiveMembers`.
         public var lastActiveMembersLimit = 100
         /// Limit the max number of messages included in `ChatChannel.latestMessages`.
         public var latestMessagesLimit = 5
-    }
-}
-
-/// A struct representing an API key of the chat app.
-///
-/// An API key can be obtained by registering on [our website](https://getstream.io/chat/trial/\).
-///
-public struct APIKey: Equatable {
-    /// The string representation of the API key
-    public let apiKeyString: String
-    
-    /// Creates a new `APIKey` from the provided string. Fails, if the string is empty.
-    ///
-    /// - Warning: The `apiKeyString` must be a non-empty value, otherwise an assertion failure is raised.
-    ///
-    public init(_ apiKeyString: String) {
-        log.assert(apiKeyString.isEmpty == false, "APIKey can't be initialize with an empty string.")
-        self.apiKeyString = apiKeyString
     }
 }

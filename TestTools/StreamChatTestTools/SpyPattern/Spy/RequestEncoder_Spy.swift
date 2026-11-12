@@ -1,21 +1,22 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
 import XCTest
 
-final class RequestEncoder_Spy: RequestEncoder, Spy {
-    var recordedFunctions: [String] = []
+final class RequestEncoder_Spy: RequestEncoder, Spy, @unchecked Sendable {
+    let spyState = SpyState()
     let init_baseURL: URL
     let init_apiKey: APIKey
 
     weak var connectionDetailsProviderDelegate: ConnectionDetailsProviderDelegate?
 
-    var encodeRequest: Result<URLRequest, Error>? = .success(URLRequest(url: .unique()))
-    var encodeRequest_endpoints: [AnyEndpoint] = []
-    var encodeRequest_completion: ((Result<URLRequest, Error>) -> Void)?
+    @Atomic var encodeRequest: Result<URLRequest, Error>? = .success(URLRequest(url: .unique()))
+    @Atomic var onEncodeRequestCall: (() -> Void)?
+    @Atomic var encodeRequest_endpoints: [AnyEndpoint] = []
+    @Atomic var encodeRequest_completion: ((Result<URLRequest, Error>) -> Void)?
 
     func encodeRequest<ResponsePayload>(
         for endpoint: Endpoint<ResponsePayload>,
@@ -28,6 +29,7 @@ final class RequestEncoder_Spy: RequestEncoder, Spy {
         if let result = encodeRequest {
             completion(result)
         }
+        onEncodeRequestCall?()
     }
 
     required init(baseURL: URL, apiKey: APIKey) {

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -7,8 +7,8 @@ import UIKit
 
 public protocol AttachmentPreviewProvider {
     /// The view representing the attachment.
-    func previewView(components: Components) -> UIView
-    
+    @MainActor func previewView(components: Components) -> UIView
+
     /// The preferred axis to be used for attachment previews in attachments view.
     static var preferredAxis: NSLayoutConstraint.Axis { get }
 }
@@ -17,9 +17,9 @@ extension ImageAttachmentPayload: AttachmentPreviewProvider {
     public static var preferredAxis: NSLayoutConstraint.Axis { .horizontal }
 
     /// The view representing the attachment.
-    public func previewView(components: Components) -> UIView {
+    @MainActor public func previewView(components: Components) -> UIView {
         let view = components.imageAttachmentComposerPreview.init()
-        view.content = imagePreviewURL
+        view.content = imageURL
         return view
     }
 }
@@ -28,7 +28,7 @@ extension FileAttachmentPayload: AttachmentPreviewProvider {
     public static var preferredAxis: NSLayoutConstraint.Axis { .vertical }
 
     /// The view representing the attachment.
-    public func previewView(components: Components) -> UIView {
+    @MainActor public func previewView(components: Components) -> UIView {
         let view = components.messageComposerFileAttachmentView.init()
         view.content = .init(
             title: title ?? "",
@@ -39,13 +39,44 @@ extension FileAttachmentPayload: AttachmentPreviewProvider {
     }
 }
 
+extension AudioAttachmentPayload: AttachmentPreviewProvider {
+    public static var preferredAxis: NSLayoutConstraint.Axis { .vertical }
+
+    /// The view representing the audio attachment.
+    @MainActor public func previewView(components: Components) -> UIView {
+        let view = components.messageComposerFileAttachmentView.init()
+        view.content = .init(
+            title: title ?? "",
+            size: file.size,
+            iconName: audioURL.pathExtension
+        )
+        return view
+    }
+}
+
 extension VideoAttachmentPayload: AttachmentPreviewProvider {
     public static var preferredAxis: NSLayoutConstraint.Axis { .horizontal }
 
     /// The view representing the video attachment.
-    public func previewView(components: Components) -> UIView {
+    @MainActor public func previewView(components: Components) -> UIView {
         let preview = components.videoAttachmentComposerPreview.init()
         preview.content = videoURL
+        return preview
+    }
+}
+
+extension VoiceRecordingAttachmentPayload: AttachmentPreviewProvider {
+    public static var preferredAxis: NSLayoutConstraint.Axis { .vertical }
+
+    /// The view representing the voiceRecording attachment.
+    @MainActor public func previewView(components: Components) -> UIView {
+        let preview = components.voiceRecordingAttachmentComposerPreview.init()
+        preview.content = .init(
+            title: title ?? "",
+            size: file.size,
+            duration: duration ?? 0,
+            audioAssetURL: voiceRecordingURL
+        )
         return preview
     }
 }

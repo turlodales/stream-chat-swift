@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -46,13 +46,13 @@ open class ChatReactionsBubbleView: ChatReactionBubbleBaseView {
     open var maskingPath: UIBezierPath {
         bubblePath(withRadiiIncreasedBy: 4)
     }
-    
+
     /// Bubble's background color.
     open var fillColor: UIColor? {
         tailDirection.map {
             $0 == .toTrailing ?
-                appearance.colorPalette.popoverBackground :
-                appearance.colorPalette.background2
+                appearance.colorPalette.reactionBackground :
+                appearance.colorPalette.backgroundCoreSurfaceStrong
         }
     }
 
@@ -60,11 +60,11 @@ open class ChatReactionsBubbleView: ChatReactionBubbleBaseView {
     open var strokeColor: UIColor? {
         tailDirection.map {
             $0 == .toTrailing ?
-                appearance.colorPalette.border :
-                appearance.colorPalette.background2
+                appearance.colorPalette.reactionBorder :
+                appearance.colorPalette.backgroundCoreSurfaceStrong
         }
     }
-    
+
     /// The center of bubble's body.
     open var bubbleBodyCenter: CGPoint {
         bounds
@@ -74,16 +74,18 @@ open class ChatReactionsBubbleView: ChatReactionBubbleBaseView {
 
     /// The center of a big circle which is a part of the bubble's tail .
     open var bigTailCircleCenter: CGPoint {
-        bubbleBodyCenter.offsetBy(
-            dx: tailDirection == .toTrailing ? 10 : -10,
+        let layoutDirectionMultiplier: CGFloat = effectiveUserInterfaceLayoutDirection == .leftToRight ? 1 : -1
+        return bubbleBodyCenter.offsetBy(
+            dx: (tailDirection == .toTrailing ? 10 : -10) * layoutDirectionMultiplier,
             dy: 14
         )
     }
 
     /// The center of a small circle which is a part of the bubble's tail .
     open var smallTailCircleCenter: CGPoint {
-        bigTailCircleCenter.offsetBy(
-            dx: tailDirection == .toTrailing ? 4 : -4,
+        let layoutDirectionMultiplier: CGFloat = effectiveUserInterfaceLayoutDirection == .leftToRight ? 1 : -1
+        return bigTailCircleCenter.offsetBy(
+            dx: (tailDirection == .toTrailing ? 4 : -4) * layoutDirectionMultiplier,
             dy: 6
         )
     }

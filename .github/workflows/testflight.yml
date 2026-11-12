@@ -4,38 +4,55 @@ on:
   pull_request:
     branches:
       - 'main'
+
   release:
     types: [published]
 
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Build configuration'
+        required: true
+        default: 'Debug'
+        type: choice
+        options:
+          - Debug
+          - Release
 
 env:
   HOMEBREW_NO_INSTALL_CLEANUP: 1
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   deploy:
-    runs-on: macos-12
+    runs-on: macos-15
     steps:
-    - name: Install Bot SSH Key
-      uses: webfactory/ssh-agent@v0.4.1
+    - name: Connect Bot
+      uses: webfactory/ssh-agent@v0.10.0
       with:
         ssh-private-key: ${{ secrets.BOT_SSH_PRIVATE_KEY }}
-    - uses: actions/checkout@v2
-    - uses: ./.github/actions/bootstrap
+    - uses: actions/checkout@v7
+    - uses: ./.github/actions/ruby-cache
+    - uses: ./.github/actions/xcode-cache
     - name: Deploy Demo app
       env:
         MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-        MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
         APPSTORE_API_KEY: ${{ secrets.APPSTORE_API_KEY }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITHUB_EVENT: ${{ toJson(github.event) }}
-      run: bundle exec fastlane testflight_build
-    - uses: 8398a7/action-slack@v3
-      with:
-        status: ${{ job.status }}
-        text: "You shall not pass!"
-        fields: message,commit,author,action,workflow,job,took
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        MATRIX_CONTEXT: ${{ toJson(matrix) }}
+        GITHUB_PR_NUM: ${{ github.event.number }}
+      run: bundle exec fastlane uikit_testflight_build configuration:"${{ github.event.inputs.release }}"
+    - uses: slackapi/slack-github-action@v4
       if: failure()
+      with:
+        webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+        webhook-type: incoming-webhook
+        payload: |
+          text: ${{ toJSON('You shall not pass!') }}
+          attachments:
+            - color: danger
+              title: ${{ toJSON(format('{0}: {1} ({2})', github.workflow, github.job, job.status)) }}
+              text: ${{ toJSON(format('Repository: {0} | Commit: {1} | Actor: {2}', github.repository, github.sha, github.actor)) }}
+              footer: ${{ toJSON(format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id)) }}

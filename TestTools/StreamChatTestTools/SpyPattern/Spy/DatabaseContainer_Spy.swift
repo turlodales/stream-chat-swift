@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -7,8 +7,8 @@ import CoreData
 import XCTest
 
 /// A testable subclass of DatabaseContainer allowing response simulation.
-public final class DatabaseContainer_Spy: DatabaseContainer, Spy {
-    @Atomic public var recordedFunctions: [String] = []
+public final class DatabaseContainer_Spy: DatabaseContainer, Spy, @unchecked Sendable {
+    public let spyState = SpyState()
 
     /// If set, the `write` completion block is called with this value.
     @Atomic var write_errorResponse: Error?
@@ -25,37 +25,67 @@ public final class DatabaseContainer_Spy: DatabaseContainer, Spy {
     /// Every time a write session finishes this counter is increased
     @Atomic var writeSessionCounter: Int = 0
     
+    @Atomic var didWrite: (() -> Void)?
+
     /// If set to `true` and the mock will remove its database files once deinited.
     var shouldCleanUpTempDBFiles = false
-    
+
+    private(set) var sessionMock: DatabaseSession_Mock?
+
     public convenience init(localCachingSettings: ChatClientConfig.LocalCaching? = nil) {
-        self.init(kind: .onDisk(databaseFileURL: .newTemporaryFileURL()), localCachingSettings: localCachingSettings)
-        shouldCleanUpTempDBFiles = true
+        var config = ChatClientConfig(apiKeyString: .unique)
+        if let localCachingSettings = localCachingSettings {
+            config.localCaching = localCachingSettings
+        }
+        self.init(kind: .inMemory, chatClientConfig: config)
     }
-    
-    override public init(
+
+    convenience init(
         kind: DatabaseContainer.Kind,
         shouldFlushOnStart: Bool = false,
         shouldResetEphemeralValuesOnStart: Bool = true,
-        modelName: String = "StreamChatModel",
-        bundle: Bundle? = nil,
         localCachingSettings: ChatClientConfig.LocalCaching? = nil,
-        deletedMessagesVisibility: ChatClientConfig.DeletedMessageVisibility? = nil,
-        shouldShowShadowedMessages: Bool? = nil
+        shouldShowShadowedMessages: Bool? = nil,
+        modelName: String = "StreamChatModel",
+        bundle: Bundle? = nil
     ) {
-        init_kind = kind
-        super.init(
+        var config = ChatClientConfig(apiKeyString: .unique)
+        if let localCachingSettings = localCachingSettings {
+            config.localCaching = localCachingSettings
+        }
+        if let shouldShowShadowedMessages = shouldShowShadowedMessages {
+            config.shouldShowShadowedMessages = shouldShowShadowedMessages
+        }
+        if shouldFlushOnStart {
+            config.shouldFlushLocalStorageOnStart = shouldFlushOnStart
+        }
+        config.isClientInActiveMode = shouldResetEphemeralValuesOnStart
+        self.init(
             kind: kind,
-            shouldFlushOnStart: shouldFlushOnStart,
-            shouldResetEphemeralValuesOnStart: shouldResetEphemeralValuesOnStart,
             modelName: modelName,
             bundle: bundle,
-            localCachingSettings: localCachingSettings,
-            deletedMessagesVisibility: deletedMessagesVisibility,
-            shouldShowShadowedMessages: shouldShowShadowedMessages
+            chatClientConfig: config
         )
     }
-    
+
+    override init(
+        kind: DatabaseContainer.Kind,
+        modelName: String = "StreamChatModel",
+        bundle: Bundle? = .streamChat,
+        chatClientConfig: ChatClientConfig = .init(apiKeyString: .unique)
+    ) {
+        init_kind = kind
+        if case .onDisk = kind {
+            shouldCleanUpTempDBFiles = true
+        }
+        super.init(kind: kind, modelName: modelName, bundle: bundle, chatClientConfig: chatClientConfig)
+    }
+
+    convenience init(sessionMock: DatabaseSession_Mock) {
+        self.init(kind: .inMemory)
+        self.sessionMock = sessionMock
+    }
+
     deinit {
         // Remove the database file if the container requests that
         if shouldCleanUpTempDBFiles, case let .onDisk(databaseFileURL: url) = init_kind {
@@ -70,8 +100,8 @@ public final class DatabaseContainer_Spy: DatabaseContainer, Spy {
             }
         }
     }
-    
-    override public func removeAllData(force: Bool = true, completion: ((Error?) -> Void)? = nil) {
+
+    override public func removeAllData(completion: (@Sendable (Error?) -> Void)? = nil) {
         removeAllData_called = true
 
         if let error = removeAllData_errorResponse {
@@ -79,29 +109,34 @@ public final class DatabaseContainer_Spy: DatabaseContainer, Spy {
             return
         }
 
-        super.removeAllData(force: force, completion: completion)
+        super.removeAllData(completion: completion)
     }
-    
+
     override public func recreatePersistentStore(completion: ((Error?) -> Void)? = nil) {
         recreatePersistentStore_called = true
-        
+
         if let error = recreatePersistentStore_errorResponse {
             completion?(error)
             return
         }
-        
+
         super.recreatePersistentStore(completion: completion)
     }
-    
-    override public func write(_ actions: @escaping (DatabaseSession) throws -> Void, completion: @escaping (Error?) -> Void) {
+
+    override public func write(_ actions: @escaping @Sendable (DatabaseSession) throws -> Void, completion: @escaping @Sendable (Error?) -> Void) {
         record()
-        let wrappedActions: ((DatabaseSession) throws -> Void) = { session in
+        let wrappedActions: (@Sendable (DatabaseSession) throws -> Void) = { session in
             self.isWriteSessionInProgress = true
-            try actions(session)
+            try actions(self.sessionMock ?? session)
             self.isWriteSessionInProgress = false
-            self._writeSessionCounter { $0 += 1 }
         }
-        
+
+        let completion: @Sendable (Error?) -> Void = { error in
+            completion(error)
+            self._writeSessionCounter.mutate { $0 += 1 }
+            self.didWrite?()
+        }
+
         if let error = write_errorResponse {
             super.write(wrappedActions, completion: { _ in
                 completion(error)
@@ -110,7 +145,7 @@ public final class DatabaseContainer_Spy: DatabaseContainer, Spy {
             super.write(wrappedActions, completion: completion)
         }
     }
-    
+
     override public func resetEphemeralValues() {
         record()
         resetEphemeralValues_called = true
@@ -119,8 +154,21 @@ public final class DatabaseContainer_Spy: DatabaseContainer, Spy {
 }
 
 extension DatabaseContainer {
+    /// Reads changes from the DB synchronously. Only for test purposes!
+    func readSynchronously<T>(_ actions: @escaping @Sendable (DatabaseSession) throws -> T) throws -> T {
+        let result = try waitFor { completion in
+            self.read(actions, completion: completion)
+        }
+        switch result {
+        case .success(let values):
+            return values
+        case .failure(let error):
+            throw error
+        }
+    }
+    
     /// Writes changes to the DB synchronously. Only for test purposes!
-    func writeSynchronously(_ actions: @escaping (DatabaseSession) throws -> Void) throws {
+    func writeSynchronously(_ actions: @escaping @Sendable (DatabaseSession) throws -> Void) throws {
         let error = try waitFor { completion in
             self.write(actions, completion: completion)
         }
@@ -132,12 +180,16 @@ extension DatabaseContainer {
     /// Synchronously creates a new UserDTO in the DB with the given id.
     func createUser(id: UserId = .unique, updatedAt: Date = .unique, extraData: [String: RawJSON] = [:]) throws {
         try writeSynchronously { session in
-            try session.saveUser(payload: .dummy(userId: id, extraData: extraData, updatedAt: updatedAt))
+            try session.saveUser(payload: UserPayload.dummy(userId: id, extraData: extraData, updatedAt: updatedAt))
         }
     }
 
     /// Synchronously creates a new CurrentUserDTO in the DB with the given id.
-    func createCurrentUser(id: UserId = .unique, name: String = .unique) throws {
+    func createCurrentUser(
+        id: UserId = .unique,
+        currentDeviceId: DeviceId? = nil,
+        name: String = .unique
+    ) throws {
         try writeSynchronously { session in
             let payload: CurrentUserPayload = .dummy(
                 userId: id,
@@ -146,16 +198,18 @@ extension DatabaseContainer {
                 extraData: [:]
             )
             try session.saveCurrentUser(payload: payload)
+            if let currentDeviceId = currentDeviceId {
+                try session.saveCurrentDevice(currentDeviceId)
+            }
         }
     }
-    
+
     /// Synchronously creates a new ChannelDTO in the DB with the given cid.
     func createChannel(
         cid: ChannelId = .unique,
         withMessages: Bool = true,
         withQuery: Bool = false,
         isHidden: Bool = false,
-        channelReads: Set<ChannelReadDTO> = [],
         channelExtraData: [String: RawJSON] = [:],
         truncatedAt: Date? = nil
     ) throws {
@@ -167,14 +221,13 @@ extension DatabaseContainer {
                 )
 
             dto.isHidden = isHidden
-            dto.reads = channelReads
             // Delete possible messages from the payload if `withMessages` is false
             if !withMessages {
                 let context = session as! NSManagedObjectContext
                 dto.messages.forEach { context.delete($0) }
                 dto.oldestMessageAt = Date.distantPast.bridgeDate
             }
-            
+
             if withQuery {
                 let filter: Filter<ChannelListFilterScope> = .equal(.name, to: "luke:skywalker")
                 let queryDTO = NSEntityDescription.insertNewObject(
@@ -187,7 +240,7 @@ extension DatabaseContainer {
             }
         }
     }
-    
+
     func createChannelListQuery(
         filter: Filter<ChannelListFilterScope> = .query(.cid, text: .unique)
     ) throws {
@@ -201,7 +254,7 @@ extension DatabaseContainer {
             dto.filterJSONData = try JSONEncoder.default.encode(filter)
         }
     }
-    
+
     func createUserListQuery(filter: Filter<UserListFilterScope> = .query(.id, text: .unique)) throws {
         try writeSynchronously { session in
             let dto = NSEntityDescription
@@ -213,19 +266,18 @@ extension DatabaseContainer {
             dto.filterJSONData = try JSONEncoder.default.encode(filter)
         }
     }
-    
+
     func createMemberListQuery(query: ChannelMemberListQuery) throws {
         try writeSynchronously { session in
             try session.saveQuery(query)
         }
     }
-    
+
     /// Synchronously creates a new MessageDTO in the DB with the given id.
     func createMessage(
         id: MessageId = .unique,
         authorId: UserId = .unique,
         cid: ChannelId = .unique,
-        channel: ChannelDTO? = nil,
         text: String = .unique,
         extraData: [String: RawJSON] = [:],
         pinned: Bool = false,
@@ -238,18 +290,19 @@ extension DatabaseContainer {
         attachments: [MessageAttachmentPayload] = [],
         reactionScores: [MessageReactionType: Int] = [:],
         reactionCounts: [MessageReactionType: Int] = [:],
+        reactionGroups: [MessageReactionType: MessageReactionGroupPayload] = [:],
+        location: SharedLocation? = nil,
         localState: LocalMessageState? = nil,
         type: MessageType? = nil,
         numberOfReplies: Int = 0,
         quotedMessageId: MessageId? = nil
     ) throws {
         try writeSynchronously { session in
-            guard let channelDTO = channel ??
-                (try? session.saveChannel(payload: XCTestCase().dummyPayload(with: cid, numberOfMessages: 0))) else {
+            guard let channelDTO = (try? session.saveChannel(payload: XCTestCase().dummyPayload(with: cid, numberOfMessages: 0))) else {
                 XCTFail("Failed to fetch channel when creating message")
                 return
             }
-            
+
             let message: MessagePayload = .dummy(
                 type: type,
                 messageId: id,
@@ -261,19 +314,31 @@ extension DatabaseContainer {
                 latestReactions: latestReactions,
                 ownReactions: ownReactions,
                 updatedAt: updatedAt,
+                cid: cid,
                 pinned: pinned,
                 pinnedByUserId: pinnedByUserId,
                 pinnedAt: pinnedAt,
                 pinExpires: pinExpires,
                 reactionScores: reactionScores,
-                reactionCounts: reactionCounts
+                reactionCounts: reactionCounts,
+                sharedLocation: location
             )
-            
-            let messageDTO = try session.saveMessage(payload: message, channelDTO: channelDTO, syncOwnReactions: true, cache: nil)
+
+            let messageDTO = try session.saveMessage(
+                payload: message,
+                channelDTO: channelDTO,
+                syncOwnReactions: true,
+                skipDraftUpdate: true,
+                cache: nil
+            )
+
             messageDTO.localMessageState = localState
             messageDTO.reactionCounts = reactionCounts.mapKeys(\.rawValue)
             messageDTO.reactionScores = reactionScores.mapKeys(\.rawValue)
-            
+            messageDTO.reactionGroups = Set(reactionGroups.map { type, groupPayload in
+                MessageReactionGroupDTO(type: type, payload: groupPayload, context: self.viewContext)
+            })
+
             for idx in 0..<numberOfReplies {
                 let reply: MessagePayload = .dummy(
                     type: .reply,
@@ -281,15 +346,21 @@ extension DatabaseContainer {
                     parentId: id,
                     authorUserId: authorId,
                     text: "Reply \(idx)",
-                    extraData: extraData
+                    extraData: extraData,
+                    cid: cid
                 )
-                
-                let replyDTO = try session.saveMessage(payload: reply, for: cid, syncOwnReactions: true, cache: nil)
+
+                let replyDTO = try session.saveMessage(
+                    payload: reply,
+                    syncOwnReactions: true,
+                    skipDraftUpdate: true,
+                    cache: nil
+                )
                 messageDTO.replies.insert(replyDTO)
             }
         }
     }
-    
+
     func createMessage(
         id: MessageId = .unique,
         cid: ChannelId = .unique,
@@ -301,21 +372,21 @@ extension DatabaseContainer {
                 let searchDTO = session.saveQuery(query: searchQuery)
                 searchDTO.messages.removeAll()
             }
-            
+
             let channelPayload = XCTestCase().dummyPayload(with: cid)
-            
+
             try session.saveChannel(payload: channelPayload)
-            
-            let message: MessagePayload = .dummy(
+
+            let message: SearchResultMessage = .dummy(
                 messageId: id,
-                authorUserId: .unique,
+                cid: cid,
                 channel: channelPayload.channel
             )
-            
+
             try session.saveMessage(payload: message, for: searchQuery, cache: nil)
         }
     }
-    
+
     func createMessages(
         ids: [MessageId] = [.unique],
         cid: ChannelId = .unique,
@@ -327,30 +398,31 @@ extension DatabaseContainer {
                 let searchDTO = session.saveQuery(query: searchQuery)
                 searchDTO.messages.removeAll()
             }
-            
+
             let channelPayload = XCTestCase().dummyPayload(with: cid)
-            
+
             try session.saveChannel(payload: channelPayload)
-            
+
             try ids.forEach {
-                let message: MessagePayload = .dummy(
+                let message: SearchResultMessage = .dummy(
                     messageId: $0,
-                    authorUserId: .unique,
+                    cid: cid,
                     channel: channelPayload.channel
                 )
-                
+
                 try session.saveMessage(payload: message, for: searchQuery, cache: nil)
             }
         }
     }
-    
+
     func createMember(
         userId: UserId = .unique,
         role: MemberRole = .member,
         cid: ChannelId,
         query: ChannelMemberListQuery? = nil,
         isMemberBanned: Bool = false,
-        isGloballyBanned: Bool = false
+        isGloballyBanned: Bool = false,
+        archivedAt: Date? = nil
     ) throws {
         try writeSynchronously { session in
             try session.saveMember(
@@ -360,12 +432,19 @@ extension DatabaseContainer {
                         isBanned: isGloballyBanned
                     ),
                     role: role,
-                    isMemberBanned: isMemberBanned
+                    isMemberBanned: isMemberBanned,
+                    archivedAt: archivedAt
                 ),
                 channelId: query?.cid ?? cid,
                 query: query,
                 cache: nil
             )
+        }
+    }
+    
+    func createPoll(id: String = .unique, createdBy: UserPayload? = nil) throws {
+        try writeSynchronously { session in
+            try session.savePoll(payload: XCTestCase().dummyPollPayload(id: id, user: createdBy), cache: nil)
         }
     }
 }

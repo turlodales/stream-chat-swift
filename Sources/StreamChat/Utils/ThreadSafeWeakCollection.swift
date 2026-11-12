@@ -1,12 +1,12 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
-final class ThreadSafeWeakCollection<T: AnyObject> {
-    private let queue = DispatchQueue(label: "io.stream.com.weak-collection")
-    private let storage = NSHashTable<T>.weakObjects()
+final class ThreadSafeWeakCollection<T: AnyObject & Sendable>: Sendable {
+    private let queue = DispatchQueue(label: "io.stream.com.weak-collection", attributes: .concurrent)
+    private nonisolated(unsafe) let storage = NSHashTable<T>.weakObjects()
 
     var allObjects: [T] {
         var objects: [T]!
@@ -24,9 +24,15 @@ final class ThreadSafeWeakCollection<T: AnyObject> {
         return count
     }
 
-    func add(_ object: T?) {
+    func add(_ object: T) {
         queue.async(flags: .barrier) {
             self.storage.add(object)
+        }
+    }
+
+    func remove(_ object: T) {
+        queue.async(flags: .barrier) {
+            self.storage.remove(object)
         }
     }
 

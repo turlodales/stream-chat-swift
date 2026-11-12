@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -19,25 +19,36 @@ extension Error {
             self.has(parameters: $0) || (engineError?.has(parameters: $0) ?? false)
         }
     }
-    
+
     private func has(parameters: (domain: String, errorCode: Int)) -> Bool {
         let error = self as NSError
         return error.domain == parameters.domain && error.code == parameters.errorCode
     }
-    
+
     var isBackendErrorWith400StatusCode: Bool {
-        if let error = (self as? ClientError)?.underlyingError as? ErrorPayload,
+        if let error = (self as? ClientError)?.apiError,
            error.statusCode == 400 {
             return true
         }
         return false
     }
     
-    var isRateLimitError: Bool {
-        if let error = (self as? ClientError)?.underlyingError as? ErrorPayload,
-           error.statusCode == 429 {
+    var isBackendNotFound404StatusCode: Bool {
+        if let error = (self as? ClientError)?.apiError,
+           error.statusCode == 404 {
             return true
         }
         return false
+    }
+
+    var isClientError: Bool {
+        if let error = (self as? ClientError)?.apiError {
+            return error.isClientError
+        }
+        return false
+    }
+
+    var isSocketNotConnectedError: Bool {
+        has(parameters: (NSPOSIXErrorDomain, 57))
     }
 }

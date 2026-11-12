@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -30,9 +30,10 @@ extension NSFetchRequestGettable where Self: NSManagedObject {
     static func fetchRequest(id: String) -> NSFetchRequest<Self> {
         fetchRequest(keyPath: idKey, equalTo: id)
     }
-    
+
     static func fetchRequest(keyPath: String, equalTo value: String) -> NSFetchRequest<Self> {
         let request = NSFetchRequest<Self>(entityName: entityName)
+        Self.applyPrefetchingState(to: request)
         request.predicate = NSPredicate(format: "%K == %@", keyPath, value)
         return request
     }
@@ -40,19 +41,46 @@ extension NSFetchRequestGettable where Self: NSManagedObject {
 
 extension NSManagedObject: NSFetchRequestGettable {}
 
+// MARK: - Fetch Request Prefetching
+
+protocol NSFetchRequestPrefetching {}
+
+extension NSFetchRequestPrefetching where Self: NSManagedObject {
+    /// Turns off Core Data object faulting and sets prefetched relationship keypaths.
+    ///
+    /// Note: Reduces additional Core Data fetches when most of the data is accessed from fetched objects.
+    static func applyPrefetchingState(to request: NSFetchRequest<Self>) {
+        guard StreamRuntimeCheck._isDatabasePrefetchingEnabled else { return }
+        request.returnsObjectsAsFaults = false
+        request.relationshipKeyPathsForPrefetching = Self.prefetchedRelationshipKeyPaths()
+    }
+}
+
+extension NSManagedObject: NSFetchRequestPrefetching {}
+
+extension NSManagedObject {
+    @objc class func prefetchedRelationshipKeyPaths() -> [String] {
+        []
+    }
+}
+
+// MARK: - Loading Objects
+
 extension NSManagedObject {
     static func load<T: NSManagedObject>(by id: String, context: NSManagedObjectContext) -> [T] {
         load(keyPath: idKey, equalTo: id, context: context)
     }
-    
+
     static func load<T: NSManagedObject>(keyPath: String, equalTo value: String, context: NSManagedObjectContext) -> [T] {
         let request = NSFetchRequest<T>(entityName: entityName)
+        T.applyPrefetchingState(to: request)
         request.predicate = NSPredicate(format: "%K == %@", keyPath, value)
         return load(by: request, context: context)
     }
-    
+
     static func load<T: NSManagedObject>(by request: NSFetchRequest<T>, context: NSManagedObjectContext) -> [T] {
-        request.entity = NSEntityDescription.entity(forEntityName: T.entityName, in: context)!
+        let entityName = request.entityName ?? T.entityName
+        request.entity = NSEntityDescription.entity(forEntityName: entityName, in: context)!
         do {
             return try context.fetch(request, using: FetchCache.shared)
         } catch {
@@ -60,49 +88,105 @@ extension NSManagedObject {
             return []
         }
     }
+    
+    static func load<T: NSManagedObject>(_ request: NSFetchRequest<T>, context: NSManagedObjectContext) throws -> [T] {
+        request.entity = NSEntityDescription.entity(forEntityName: T.entityName, in: context)!
+        return try context.fetch(request, using: FetchCache.shared)
+    }
 }
 
-class FetchCache {
-    fileprivate static let shared = FetchCache()
-    private let queue = DispatchQueue(label: "io.stream.com.fetch-cache", qos: .userInitiated, attributes: .concurrent)
-    private var cache = [NSFetchRequest<NSFetchRequestResult>: [NSManagedObjectID]]()
+final class FetchCache: @unchecked Sendable {
+    /// We use this wrapper to have a custom implementation of both Equatable and Hashable.
+    /// This is because when using NSFetchRequest directly, its implementation of `hash` uses `entity`, which is a property that crashes on access
+    /// when it is not yet set
+    struct FetchRequestWrapper<T: NSFetchRequestResult>: Equatable, Hashable, @unchecked Sendable {
+        let request: NSFetchRequest<T>
 
-    fileprivate func set<T>(_ request: NSFetchRequest<T>, objectIds: [NSManagedObjectID]) where T: NSFetchRequestResult {
+        static func == (lhs: FetchRequestWrapper<T>, rhs: FetchRequestWrapper<T>) -> Bool {
+            switch (lhs.request.predicate, rhs.request.predicate) {
+            case let (.some(lhsPredicate), .some(rhsPredicate)) where lhsPredicate == rhsPredicate:
+                break
+            case (.none, .none):
+                break
+            default:
+                return false
+            }
+
+            return lhs.request.sortDescriptors == rhs.request.sortDescriptors
+                && lhs.request.entityName == rhs.request.entityName
+                && lhs.request.fetchLimit == rhs.request.fetchLimit
+        }
+
+        func hash(into hasher: inout Hasher) {
+            if let predicate = request.predicate {
+                hasher.combine(predicate)
+            }
+            if let sortDescriptors = request.sortDescriptors {
+                sortDescriptors.forEach {
+                    hasher.combine($0.key)
+                    hasher.combine($0.ascending)
+                }
+            }
+            if let entityName = request.entityName {
+                hasher.combine(entityName)
+            }
+            hasher.combine(request.fetchLimit)
+        }
+    }
+
+    fileprivate static let shared = FetchCache()
+
+    // Guarded by a lock rather than a concurrent queue: `get` is reached from inside
+    // `NSManagedObjectContext.performAndWait`, so the calling thread is already blocked. A `sync` on a
+    // concurrent queue has to wait out any pending barrier, which needs a libdispatch worker thread —
+    // and with several contexts blocked in `performAndWait` at once that thread may never arrive.
+    // Keep the `withLock` bodies to plain dictionary work: the lock is not reentrant, and nothing
+    // inside may block or call back into the cache.
+    private let cache = AllocatedUnfairLock([FetchRequestWrapper<NSFetchRequestResult>: [NSManagedObjectID]]())
+
+    var cacheEntriesCount: Int {
+        cache.withLock { $0.count }
+    }
+
+    func set<T>(_ request: NSFetchRequest<T>, objectIds: [NSManagedObjectID]) where T: NSFetchRequestResult {
         guard let request = request as? NSFetchRequest<NSFetchRequestResult> else {
             log.assertionFailure("Request should have a generic type conforming to NSFetchRequestResult")
             return
         }
-        queue.async(flags: .barrier) {
-            self.cache[request] = objectIds
-        }
+
+        let wrapper = FetchRequestWrapper(request: request)
+        cache.withLock { $0[wrapper] = objectIds }
     }
-    
-    fileprivate func get<T>(_ request: NSFetchRequest<T>) -> [NSManagedObjectID]? where T: NSFetchRequestResult {
+
+    func get<T>(_ request: NSFetchRequest<T>) -> [NSManagedObjectID]? where T: NSFetchRequestResult {
         guard let request = request as? NSFetchRequest<NSFetchRequestResult> else {
             log.assertionFailure("Request should have a generic type conforming to NSFetchRequestResult")
             return nil
         }
-        var objectIDs: [NSManagedObjectID]?
-        queue.sync {
-            objectIDs = cache[request]
-        }
-        return objectIDs
+        let wrapper = FetchRequestWrapper(request: request)
+        return cache.withLock { $0[wrapper] }
     }
-    
+
     static func clear() {
         Self.shared.clear()
     }
 
     private func clear() {
-        queue.async(flags: .barrier) {
-            self.cache.removeAll()
-        }
+        cache.withLock { $0.removeAll() }
     }
 }
 
 extension NSManagedObjectContext {
     func fetch<T>(_ request: NSFetchRequest<T>, using cache: FetchCache) throws -> [T] where T: NSFetchRequestResult {
-        if let objectIds = cache.get(request) {
+        func canUseCachedIds(_ objectIds: [NSManagedObjectID]) -> Bool {
+            // Ignore cache when inserted (but not yet saved) object id is present
+            guard !objectIds.contains(where: { $0.isTemporaryID }) else { return false }
+            // Context has pending inserted or deleted objects of this type (can affect ids returned by the fetch request)
+            guard !insertedObjects.contains(where: { $0 is T }) && !deletedObjects.contains(where: { $0 is T }) else { return false }
+            return true
+        }
+        
+        if let objectIds = cache.get(request), canUseCachedIds(objectIds) {
             return try objectIds.compactMap { try existingObject(with: $0) as? T }
         }
 

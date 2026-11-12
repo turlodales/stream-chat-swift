@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -9,7 +9,7 @@ import UIKit
 public struct TypingSuggestionOptions {
     /// The symbol that typing suggester will use to recognise a suggestion.
     public var symbol: String
-    /// Wether the suggester should only be recognising at the start of the input.
+    /// whether the suggester should only be recognising at the start of the input.
     public var shouldTriggerOnlyAtStart: Bool
     /// The minimum required characters for the suggester to start recognising a suggestion.
     public var minimumRequiredCharacters: Int
@@ -62,7 +62,7 @@ public struct TypingSuggester {
     /// Checks if the user typed the recognising symbol and returns the typing suggestion.
     /// - Parameter textView: The `UITextView` the user is currently typing.
     /// - Returns: The typing suggestion if it was recognised, `nil` otherwise.
-    public func typingSuggestion(in textView: UITextView) -> TypingSuggestion? {
+    @MainActor public func typingSuggestion(in textView: UITextView) -> TypingSuggestion? {
         let text = textView.text as NSString
         let caretLocation = textView.selectedRange.location
 
@@ -83,7 +83,7 @@ public struct TypingSuggester {
         let charIndexBeforeSymbol = firstSymbolBeforeCaret.lowerBound - 1
         let charRangeBeforeSymbol = NSRange(location: charIndexBeforeSymbol, length: 1)
         let textBeforeSymbol = charIndexBeforeSymbol >= 0 ? text.substring(with: charRangeBeforeSymbol) : ""
-        guard textBeforeSymbol.isEmpty || textBeforeSymbol == " " else {
+        guard textBeforeSymbol.isEmpty || textBeforeSymbol == " " || textBeforeSymbol == "\n" else {
             return nil
         }
 
@@ -100,17 +100,10 @@ public struct TypingSuggester {
             return nil
         }
 
-        // Fetch the suggestion text. The suggestions can't have spaces.
-        // valid example: "@luke_skywa..."
-        // invalid example: "@luke skywa..."
-        let suggestionLocation = NSRange(location: suggestionStart, length: suggestionEnd - suggestionStart)
-        let suggestionText = text.substring(with: suggestionLocation)
-        guard !suggestionText.contains(" ") else {
-            return nil
-        }
-
         // A minimum number of characters can be provided to only show
         // suggestions after the customer has input enough characters.
+        let suggestionLocation = NSRange(location: suggestionStart, length: suggestionEnd - suggestionStart)
+        let suggestionText = text.substring(with: suggestionLocation)
         guard suggestionText.count >= options.minimumRequiredCharacters else {
             return nil
         }

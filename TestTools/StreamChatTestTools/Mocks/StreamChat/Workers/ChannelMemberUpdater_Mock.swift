@@ -1,48 +1,77 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
 import XCTest
 
 /// Mock implementation of `ChannelMemberUpdater`
-final class ChannelMemberUpdater_Mock: ChannelMemberUpdater {
+final class ChannelMemberUpdater_Mock: ChannelMemberUpdater, @unchecked Sendable {
     @Atomic var banMember_userId: UserId?
     @Atomic var banMember_cid: ChannelId?
+    @Atomic var banMember_shadow: Bool?
     @Atomic var banMember_timeoutInMinutes: Int??
     @Atomic var banMember_reason: String??
     @Atomic var banMember_completion: ((Error?) -> Void)?
-    
+    @Atomic var banMember_completion_result: Result<Void, Error>?
+
     @Atomic var unbanMember_userId: UserId?
     @Atomic var unbanMember_cid: ChannelId?
     @Atomic var unbanMember_completion: ((Error?) -> Void)?
-    
+    @Atomic var unbanMember_completion_result: Result<Void, Error>?
+
+    @Atomic var queryBannedUsers_query: BannedUserListQuery?
+    @Atomic var queryBannedUsers_completion: ((Result<[BannedUser], Error>) -> Void)?
+    @Atomic var queryBannedUsers_completion_result: Result<[BannedUser], Error>?
+
+    @Atomic var partialUpdate_userId: UserId?
+    @Atomic var partialUpdate_cid: ChannelId?
+    @Atomic var partialUpdate_request: UpdateMemberPartialRequest?
+    @Atomic var partialUpdate_completion: ((Result<ChatChannelMember, Error>) -> Void)?
+    @Atomic var partialUpdate_completion_result: Result<ChatChannelMember, Error>?
+
     func cleanUp() {
         banMember_userId = nil
         banMember_cid = nil
+        banMember_shadow = nil
         banMember_timeoutInMinutes = nil
         banMember_reason = nil
         banMember_completion = nil
-        
+        banMember_completion_result = nil
+
         unbanMember_userId = nil
         unbanMember_cid = nil
         unbanMember_completion = nil
+        unbanMember_completion_result = nil
+
+        queryBannedUsers_query = nil
+        queryBannedUsers_completion = nil
+        queryBannedUsers_completion_result = nil
+
+        partialUpdate_userId = nil
+        partialUpdate_cid = nil
+        partialUpdate_request = nil
+        partialUpdate_completion = nil
+        partialUpdate_completion_result = nil
     }
 
     override func banMember(
         _ userId: UserId,
         in cid: ChannelId,
+        shadow: Bool,
         for timeoutInMinutes: Int? = nil,
         reason: String? = nil,
         completion: ((Error?) -> Void)? = nil
     ) {
         banMember_userId = userId
         banMember_cid = cid
+        banMember_shadow = shadow
         banMember_timeoutInMinutes = timeoutInMinutes
         banMember_reason = reason
         banMember_completion = completion
+        banMember_completion_result?.invoke(with: completion)
     }
-    
+
     override func unbanMember(
         _ userId: UserId,
         in cid: ChannelId, completion: ((Error?) -> Void)? = nil
@@ -50,5 +79,28 @@ final class ChannelMemberUpdater_Mock: ChannelMemberUpdater {
         unbanMember_userId = userId
         unbanMember_cid = cid
         unbanMember_completion = completion
+        unbanMember_completion_result?.invoke(with: completion)
+    }
+
+    override func queryBannedUsers(
+        query: BannedUserListQuery,
+        completion: @escaping ((Result<[BannedUser], Error>) -> Void)
+    ) {
+        queryBannedUsers_query = query
+        queryBannedUsers_completion = completion
+        queryBannedUsers_completion_result?.invoke(with: completion)
+    }
+
+    override func partialUpdate(
+        userId: UserId,
+        in cid: ChannelId,
+        request: UpdateMemberPartialRequest,
+        completion: @escaping ((Result<ChatChannelMember, Error>) -> Void)
+    ) {
+        partialUpdate_userId = userId
+        partialUpdate_cid = cid
+        partialUpdate_request = request
+        partialUpdate_completion = completion
+        partialUpdate_completion_result?.invoke(with: completion)
     }
 }

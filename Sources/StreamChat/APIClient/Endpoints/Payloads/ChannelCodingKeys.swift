@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -32,16 +32,24 @@ public enum ChannelCodingKeys: String, CodingKey, CaseIterable {
     case hidden
     /// A channel config.
     case config
+    /// The channel own capabilities.
+    case ownCapabilities = "own_capabilities"
     /// A frozen flag.
     case frozen
+    /// A disabled flag.
+    case disabled
     /// Members.
     case members
     /// Invites.
     case invites
+    case filterTags = "filter_tags"
     /// The team the channel belongs to.
     case team
     case memberCount = "member_count"
+    case messageCount = "message_count"
     /// Cooldown duration for the channel, if it's in slow mode.
     /// This value will be 0 if the channel is not in slow mode.
     case cooldownDuration = "cooldown"
+    /// Blocked flag.
+    case blocked
 }

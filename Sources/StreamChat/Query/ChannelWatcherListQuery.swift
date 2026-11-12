@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -8,20 +8,20 @@ import Foundation
 ///
 /// Learn more about watchers in our documentation [here](https://getstream.io/chat/docs/ios/watch_channel/?language=swift)
 ///
-public struct ChannelWatcherListQuery: Encodable {
+public struct ChannelWatcherListQuery: Encodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case watchers
     }
-    
+
     /// A pagination for watchers (see `Pagination`).
     public var pagination: Pagination
-    
+
     /// `ChannelId` this query handles.
     public var cid: ChannelId
-    
+
     /// Query options. We want to get the current state and watch the channel automatically.
     private let options: QueryOptions = [.watch, .state]
-    
+
     /// Creates new `ChannelWatcherListQuery` instance.
     /// - Parameters:
     ///   - cid: The channel identifier.
@@ -30,10 +30,20 @@ public struct ChannelWatcherListQuery: Encodable {
         self.cid = cid
         self.pagination = pagination
     }
-    
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try options.encode(to: encoder)
         try container.encode(pagination, forKey: .watchers)
+    }
+}
+
+extension ChannelWatcherListQuery {
+    func toRequest() -> ChannelGetOrCreateRequest {
+        ChannelGetOrCreateRequest(
+            state: options.contains(.state),
+            watch: options.contains(.watch),
+            watchers: pagination.toPaginationParams()
+        )
     }
 }

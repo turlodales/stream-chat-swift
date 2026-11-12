@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -9,56 +9,56 @@ import XCTest
 
 final class MessageController_Tests: XCTestCase {
     private var env: TestEnvironment!
-    private var client: ChatClient!
-    
+    private var client: ChatClient_Mock!
+
     private var currentUserId: UserId!
     private var messageId: MessageId!
     private var cid: ChannelId!
-    
+    private var replyPaginationHandler: MessagesPaginationStateHandler_Mock!
+
     private var controller: ChatMessageController!
-    private var controllerCallbackQueueID: UUID!
-    private var callbackQueueID: UUID { controllerCallbackQueueID }
-    
+
     // MARK: - Setup
-    
+
     override func setUp() {
         super.setUp()
-        
+
         env = TestEnvironment()
         client = ChatClient.mock
-        
+
         currentUserId = .unique
         messageId = .unique
         cid = .unique
-        
-        controllerCallbackQueueID = UUID()
-        controller = ChatMessageController(client: client, cid: cid, messageId: messageId, environment: env.controllerEnvironment)
-        controller.callbackQueue = .testQueue(withId: controllerCallbackQueueID)
+        replyPaginationHandler = MessagesPaginationStateHandler_Mock()
+
+        controller = ChatMessageController(client: client, cid: cid, messageId: messageId, replyPaginationHandler: replyPaginationHandler, environment: env.controllerEnvironment)
     }
-    
+
     override func tearDown() {
         env.messageUpdater?.cleanUp()
-        
-        controllerCallbackQueueID = nil
+
         currentUserId = nil
         messageId = nil
         cid = nil
-        
+        replyPaginationHandler = nil
+
         AssertAsync {
             Assert.canBeReleased(&controller)
             Assert.canBeReleased(&client)
-            Assert.canBeReleased(&env)
         }
+
+        messageId = nil
+        cid = nil
 
         super.tearDown()
     }
-    
+
     // MARK: - Controller
-    
+
     func test_controllerIsCreatedCorrectly() {
         // Create a controller with specific `cid` and `messageId`
         let controller = client.messageController(cid: cid, messageId: messageId)
-        
+
         // Assert controller has correct `cid`
         XCTAssertEqual(controller.cid, cid)
         // Assert controller has correct `messageId`
@@ -68,27 +68,223 @@ final class MessageController_Tests: XCTestCase {
     func test_initialState() {
         // Assert client is assigned correctly
         XCTAssertTrue(controller.client === client)
-        
+
         // Assert initial state is correct
         XCTAssertEqual(controller.state, .initialized)
-        
+
         // Assert message is nil
         XCTAssertNil(controller.message)
     }
-    
+
+    // MARK: - hasLoadedAllPreviousReplies
+
+    func test_hasLoadedAllPreviousReplies_whenPaginationStateHasLoadedAllPreviousMessages_thenReturnsTrue() {
+        // Given
+        replyPaginationHandler.mockState.hasLoadedAllPreviousMessages = true
+
+        // When
+        let result = controller.hasLoadedAllPreviousReplies
+
+        // Then
+        XCTAssertTrue(result)
+    }
+
+    func test_hasLoadedAllPreviousReplies_whenPaginationStateHasNotLoadedAllPreviousMessages_thenReturnsFalse() {
+        // Given
+        replyPaginationHandler.mockState.hasLoadedAllPreviousMessages = false
+
+        // When
+        let result = controller.hasLoadedAllPreviousReplies
+
+        // Then
+        XCTAssertFalse(result)
+    }
+
+    // MARK: - hasLoadedAllNextReplies
+
+    func test_hasLoadedAllNextReplies_whenPaginationStateHasLoadedAllNextMessagesOrRepliesAreEmpty_thenReturnsTrue() throws {
+        // Given
+        replyPaginationHandler.mockState.hasLoadedAllNextMessages = true
+        try saveReplies(with: [MessageId]())
+
+        // When
+        let result = controller.hasLoadedAllNextReplies
+
+        // Then
+        XCTAssertTrue(result)
+    }
+
+    func test_hasLoadedAllNextReplies_whenPaginationStateHasNotLoadedAllNextMessagesAndRepliesAreNotEmpty_thenReturnsFalse() throws {
+        // Given
+        replyPaginationHandler.mockState.hasLoadedAllNextMessages = false
+        try saveReplies(with: [.unique, .unique])
+
+        // When
+        let result = controller.hasLoadedAllNextReplies
+
+        // Then
+        XCTAssertFalse(result)
+    }
+
+    // MARK: - isLoadingPreviousReplies
+
+    func test_isLoadingPreviousReplies_whenPaginationStateIsLoadingPreviousMessages_thenReturnsTrue() {
+        // Given
+        replyPaginationHandler.mockState.isLoadingPreviousMessages = true
+
+        // When
+        let result = controller.isLoadingPreviousReplies
+
+        // Then
+        XCTAssertTrue(result)
+    }
+
+    func test_isLoadingPreviousReplies_whenPaginationStateIsNotLoadingPreviousMessages_thenReturnsFalse() {
+        // Given
+        replyPaginationHandler.mockState.isLoadingPreviousMessages = false
+
+        // When
+        let result = controller.isLoadingPreviousReplies
+
+        // Then
+        XCTAssertFalse(result)
+    }
+
+    // MARK: - Tests for isLoadingNextReplies
+
+    func test_isLoadingNextReplies_whenPaginationStateIsLoadingNextMessages_thenReturnsTrue() {
+        // Given
+        replyPaginationHandler.mockState.isLoadingNextMessages = true
+
+        // When
+        let result = controller.isLoadingNextReplies
+
+        // Then
+        XCTAssertTrue(result)
+    }
+
+    func test_isLoadingNextReplies_whenPaginationStateIsNotLoadingNextMessages_thenReturnsFalse() {
+        // Given
+        replyPaginationHandler.mockState.isLoadingNextMessages = false
+
+        // When
+        let result = controller.isLoadingNextReplies
+
+        // Then
+        XCTAssertFalse(result)
+    }
+
+    // MARK: - Tests for isLoadingMiddleReplies
+
+    func test_isLoadingMiddleReplies_whenPaginationStateIsLoadingMiddleMessages_thenReturnsTrue() {
+        // Given
+        replyPaginationHandler.mockState.isLoadingMiddleMessages = true
+
+        // When
+        let result = controller.isLoadingMiddleReplies
+
+        // Then
+        XCTAssertTrue(result)
+    }
+
+    func test_isLoadingMiddleReplies_whenPaginationStateIsNotLoadingMiddleMessages_thenReturnsFalse() {
+        // Given
+        replyPaginationHandler.mockState.isLoadingMiddleMessages = false
+
+        // When
+        let result = controller.isLoadingMiddleReplies
+
+        // Then
+        XCTAssertFalse(result)
+    }
+
+    // MARK: - Tests for isJumpingToMessage
+
+    func test_isJumpingToMessage_whenPaginationStateIsJumpingToMessage_thenReturnsTrue() {
+        // Given
+        replyPaginationHandler.mockState.hasLoadedAllNextMessages = false
+
+        // When
+        let result = controller.isJumpingToMessage
+
+        // Then
+        XCTAssertTrue(result)
+    }
+
+    func test_isJumpingToMessage_whenPaginationStateIsNotJumpingToMessage_thenReturnsFalse() {
+        // Given
+        replyPaginationHandler.mockState.hasLoadedAllNextMessages = true
+
+        // When
+        let result = controller.isJumpingToMessage
+
+        // Then
+        XCTAssertFalse(result)
+    }
+
+    // MARK: - Tests for lastOldestReplyId
+
+    func test_lastOldestReplyId_whenPaginationStateHasOldestFetchedMessage_thenReturnsItsId() {
+        // Given
+        let oldestFetchedMessage = MessagePayload.dummy()
+        replyPaginationHandler.mockState.oldestFetchedMessage = oldestFetchedMessage
+
+        // When
+        let result = controller.lastOldestReplyId
+
+        // Then
+        XCTAssertEqual(result, oldestFetchedMessage.id)
+    }
+
+    func test_lastOldestReplyId_whenPaginationStateHasNoOldestFetchedMessage_thenReturnsNil() {
+        // Given
+        replyPaginationHandler.mockState.oldestFetchedMessage = nil
+
+        // When
+        let result = controller.lastOldestReplyId
+
+        // Then
+        XCTAssertNil(result)
+    }
+
+    // MARK: - Tests for lastNewestReplyId
+
+    func test_lastNewestReplyId_whenPaginationStateHasNewestFetchedMessage_thenReturnsItsId() {
+        // Given
+        let newestFetchedMessage = MessagePayload.dummy()
+        replyPaginationHandler.mockState.newestFetchedMessage = newestFetchedMessage
+
+        // When
+        let result = controller.lastNewestReplyId
+
+        // Then
+        XCTAssertEqual(result, newestFetchedMessage.id)
+    }
+
+    func test_lastNewestReplyId_whenPaginationStateHasNoNewestFetchedMessage_thenReturnsNil() {
+        // Given
+        replyPaginationHandler.mockState.newestFetchedMessage = nil
+
+        // When
+        let result = controller.lastNewestReplyId
+
+        // Then
+        XCTAssertNil(result)
+    }
+
     // MARK: - Synchronize
-    
+
     func test_synchronize_forwardsUpdaterError() throws {
         // Simulate `synchronize` call
-        var completionError: Error?
+        nonisolated(unsafe) var completionError: Error?
         controller.synchronize {
             completionError = $0
         }
-        
+
         // Simulate network response with the error
         let networkError = TestError()
         env.messageUpdater.getMessage_completion?(.failure(networkError))
-        
+
         AssertAsync {
             // Assert network error is propagated
             Assert.willBeEqual(completionError as? TestError, networkError)
@@ -96,31 +292,31 @@ final class MessageController_Tests: XCTestCase {
             Assert.willBeEqual(self.controller.state, .remoteDataFetchFailed(ClientError(with: networkError)))
         }
     }
-    
+
     func test_synchronize_changesStateCorrectly_ifNoErrorsHappen() throws {
         // Simulate `synchronize` call
-        var completionError: Error?
-        var completionCalled = false
+        nonisolated(unsafe) var completionError: Error?
+        nonisolated(unsafe) var completionCalled = false
         controller.synchronize {
             completionError = $0
             completionCalled = true
         }
-        
+
         // Assert controller is in `localDataFetched` state
         XCTAssertEqual(controller.state, .localDataFetched)
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate network response with the error
         env.messageUpdater.getMessage_completion?(.success(ChatMessage.unique))
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater.getMessage_completion = nil
-        
+
         AssertAsync {
             // Assert completion is called
             Assert.willBeTrue(completionCalled)
@@ -130,147 +326,121 @@ final class MessageController_Tests: XCTestCase {
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_messageIsUpToDate_withoutSynchronizeCall() throws {
         // Assert message is `nil` initially and start observing DB
         XCTAssertNil(controller.message)
-        
+
         let messageLocalText: String = .unique
-        
+
         // Create current user in the database
         try client.databaseContainer.createCurrentUser(id: currentUserId)
-        
+
         // Create message in that matches controller's `messageId`
         try client.databaseContainer.createMessage(id: messageId, authorId: currentUserId, cid: cid, text: messageLocalText)
-        
+
         // Assert message is fetched from the database and has correct field values
         var message = try XCTUnwrap(controller.message)
         XCTAssertEqual(message.id, messageId)
         XCTAssertEqual(message.text, messageLocalText)
-        
-        // Simulate response from the backend with updated `text`, update the local message in the databse
+
+        // Simulate response from the backend with updated `text`, update the local message in the database
         let messagePayload: MessagePayload = .dummy(
             messageId: messageId,
             authorUserId: currentUserId,
-            text: .unique
+            text: .unique,
+            cid: cid
         )
         try client.databaseContainer.writeSynchronously { session in
-            try session.saveMessage(payload: messagePayload, for: self.cid, syncOwnReactions: true, cache: nil)
+            try session.saveMessage(payload: messagePayload, syncOwnReactions: true, cache: nil)
         }
-        
+
         // Assert the controller's `message` is up-to-date
         message = try XCTUnwrap(controller.message)
         XCTAssertEqual(message.id, messageId)
         XCTAssertEqual(message.text, messagePayload.text)
     }
-    
+
     /// This test simulates a bug where the `message` and `replies` fields were not updated if they weren't
     /// touched before calling synchronize.
     func test_messagesAreFetched_afterCallingSynchronize() throws {
         // Simulate `synchronize` call
         controller.synchronize()
-        
+
         // Create the message and replies in the DB
-        try client.databaseContainer.createCurrentUser(id: currentUserId)
-        try client.databaseContainer.createChannel(cid: cid)
-        try client.databaseContainer.createMessage(
-            id: messageId,
-            authorId: currentUserId,
-            cid: cid,
-            text: "No, I am your father.",
-            numberOfReplies: 10
-        )
-        
+        let expectedReplies: [MessageId] = [.unique, .unique, .unique, .unique, .unique]
+        try saveReplies(with: expectedReplies)
+
         // Simulate updater completion call
         env.messageUpdater.getMessage_completion?(.success(ChatMessage.unique))
-        
+
         XCTAssertEqual(controller.message?.id, messageId)
-        XCTAssertEqual(controller.replies.count, 10)
+        XCTAssertEqual(controller.replies.count, expectedReplies.count)
     }
-    
+
     // MARK: - Order
-    
+
     func test_replies_haveCorrectOrder() throws {
-        // Insert parent message
-        try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
+        let delegate = TestDelegate()
+        controller.delegate = delegate
         
-        // Insert 2 replies for parent message
-        let reply1: MessagePayload = .dummy(
-            messageId: .unique,
-            parentId: messageId,
-            showReplyInChannel: false,
-            authorUserId: .unique
-        )
-        
-        let reply2: MessagePayload = .dummy(
-            messageId: .unique,
-            parentId: messageId,
-            showReplyInChannel: false,
-            authorUserId: .unique
-        )
-        
-        try client.databaseContainer.writeSynchronously {
-            try $0.saveMessage(payload: reply1, for: self.cid, syncOwnReactions: true, cache: nil)
-            try $0.saveMessage(payload: reply2, for: self.cid, syncOwnReactions: true, cache: nil)
-        }
-        
-        // Set top-to-bottom ordering
-        controller.listOrdering = .topToBottom
-        
-        // Check the order of replies is correct
-        let topToBottomIds = [reply1, reply2].sorted { $0.createdAt > $1.createdAt }.map(\.id)
-        XCTAssertEqual(controller.replies.map(\.id), topToBottomIds)
-        
-        // Set bottom-to-top ordering
-        controller.listOrdering = .bottomToTop
-        
-        // Check the order of replies is correct
-        let bottomToTopIds = [reply1, reply2].sorted { $0.createdAt < $1.createdAt }.map(\.id)
-        XCTAssertEqual(controller.replies.map(\.id), bottomToTopIds)
-    }
-    
-    /// This test was added because we forgot to exclude deleted messages when fetching replies.
-    /// Valid message for a thread is defined as:
-    /// - `parentId` correctly set,
-    /// - is not deleted, or current user owned non-ephemeral deleted,
-    /// - newer than channel's truncation date (if channel is truncated)
-    func test_replies_onlyIncludeValidMessages() throws {
-        // Create dummy channel
-        let cid = ChannelId.unique
-        let truncatedDate = Date.unique
-        let channel = dummyPayload(with: cid, truncatedAt: truncatedDate)
-
-        // Set the deleted messages visibility to hide the message
-        var config = ChatClient.defaultMockedConfig
-        config.deletedMessagesVisibility = .alwaysHidden
-        client = .mock(config: config)
-        controller = ChatMessageController(client: client, cid: cid, messageId: messageId, environment: env.controllerEnvironment)
-
-        // Save channel
-        var dto: ChannelDTO?
-        try client.databaseContainer.writeSynchronously {
-            dto = try $0.saveChannel(payload: channel)
-        }
-        
-        // Insert parent message
-        try client.databaseContainer.createMessage(
-            id: messageId,
-            authorId: .unique,
-            cid: cid,
-            channel: dto,
-            text: "Parent"
-        )
-        
-        // Insert replies for parent message
         let reply1: MessagePayload = .dummy(
             messageId: .unique,
             parentId: messageId,
             showReplyInChannel: false,
             authorUserId: .unique,
-            createdAt: .unique(after: truncatedDate)
+            cid: cid
         )
+
+        let reply2: MessagePayload = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: .unique,
+            cid: cid
+        )
+        try saveReplies(with: [reply1, reply2])
+        try waitForRepliesChange(count: 2)
+
+        // Set top-to-bottom ordering
+        controller.listOrdering = .topToBottom
+        try waitForRepliesChange(count: 2)
         
-        // Insert the 2nd reply as deleted
+        // Check the order of replies is correct
+        let topToBottomIds = [reply1, reply2].sorted { $0.createdAt > $1.createdAt }.map(\.id)
+        XCTAssertEqual(controller.replies.map(\.id), topToBottomIds)
+
+        // Set bottom-to-top ordering
+        controller.listOrdering = .bottomToTop
+        try waitForRepliesChange(count: 2)
+
+        // Check the order of replies is correct
+        let bottomToTopIds = [reply1, reply2].sorted { $0.createdAt < $1.createdAt }.map(\.id)
+        XCTAssertEqual(controller.replies.map(\.id), bottomToTopIds)
+    }
+
+    /// This test was added because we forgot to exclude deleted messages when fetching replies.
+    /// Valid message for a thread is defined as:
+    /// - `parentId` correctly set,
+    /// - current user owned non-ephemeral deleted,
+    /// - newer than channel's truncation date (if channel is truncated)
+    func test_replies_onlyIncludeValidMessages() throws {
+        // Create dummy channel
+        let truncatedDate = Date.unique
+        let channel = dummyPayload(with: cid, truncatedAt: truncatedDate)
+
+        client = ChatClient_Mock(config: ChatClient.defaultMockedConfig)
+        controller = ChatMessageController(client: client, cid: cid, messageId: messageId, replyPaginationHandler: replyPaginationHandler, environment: env.controllerEnvironment)
+
+        let reply1: MessagePayload = .dummy(
+            messageId: .unique,
+            parentId: messageId,
+            showReplyInChannel: false,
+            authorUserId: .unique,
+            createdAt: .unique(after: truncatedDate),
+            cid: cid
+        )
+
         let createdAt = Date.unique(after: truncatedDate)
         let reply2: MessagePayload = .dummy(
             messageId: .unique,
@@ -278,195 +448,48 @@ final class MessageController_Tests: XCTestCase {
             showReplyInChannel: false,
             authorUserId: .unique,
             createdAt: createdAt,
-            deletedAt: .unique(after: createdAt)
+            deletedAt: .unique(after: createdAt),
+            cid: cid
         )
-        
+
         // Insert 3rd reply before truncation date
         let reply3: MessagePayload = .dummy(
             messageId: .unique,
             parentId: messageId,
             showReplyInChannel: false,
             authorUserId: .unique,
-            createdAt: .unique(before: truncatedDate)
+            createdAt: .unique(before: truncatedDate),
+            cid: cid
         )
-        
+
         // Save messages
-        try client.databaseContainer.writeSynchronously {
-            try $0.saveMessage(payload: reply1, for: cid, syncOwnReactions: true, cache: nil)
-            try $0.saveMessage(payload: reply2, for: cid, syncOwnReactions: true, cache: nil)
-            try $0.saveMessage(payload: reply3, for: cid, syncOwnReactions: true, cache: nil)
-        }
-        
+        try saveReplies(with: [reply1, reply2, reply3], channelPayload: channel)
+
         // Check if the replies are correct
-        let ids = [reply1].map(\.id)
-        XCTAssertEqual(controller.replies.map(\.id), ids)
+        let ids = [reply1, reply2].map(\.id)
+        XCTAssertEqual(Set(controller.replies.map(\.id)), Set(ids))
     }
 
-    func test_replies_withVisibleForCurrentUser_messageVisibility() throws {
-        // Create dummy channel
-        let cid = ChannelId.unique
-        let channel = dummyPayload(with: cid)
-        let truncatedDate = Date.unique
-
-        try client.databaseContainer.createCurrentUser(id: currentUserId)
-        client.databaseContainer.viewContext.deletedMessagesVisibility = .visibleForCurrentUser
-
-        // Save channel
-        try client.databaseContainer.writeSynchronously {
-            let dto = try $0.saveChannel(payload: channel)
-            dto.truncatedAt = truncatedDate.bridgeDate
-        }
-
-        // Insert parent message
-        try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
-
-        // Insert own deleted reply
-        let ownReply: MessagePayload = .dummy(
-            messageId: .unique,
-            parentId: messageId,
-            showReplyInChannel: false,
-            authorUserId: currentUserId,
-            createdAt: .unique(after: truncatedDate),
-            deletedAt: .unique(after: truncatedDate)
-        )
-
-        // Insert deleted reply by another user
-        let createdAt = Date.unique(after: truncatedDate)
-        let otherReply: MessagePayload = .dummy(
-            messageId: .unique,
-            parentId: messageId,
-            showReplyInChannel: false,
-            authorUserId: .unique,
-            createdAt: createdAt,
-            deletedAt: .unique(after: createdAt)
-        )
-
-        // Save messages
-        try client.databaseContainer.writeSynchronously {
-            try $0.saveMessage(payload: ownReply, for: cid, syncOwnReactions: true, cache: nil)
-            try $0.saveMessage(payload: otherReply, for: cid, syncOwnReactions: true, cache: nil)
-        }
-
-        // Only own reply should be visible
-        XCTAssertEqual(controller.replies.map(\.id), [ownReply.id])
-    }
-
-    func test_replies_withAlwaysHidden_messageVisibility() throws {
-        // Create dummy channel
-        let cid = ChannelId.unique
-        let channel = dummyPayload(with: cid)
-        let truncatedDate = Date.unique
-
-        try client.databaseContainer.createCurrentUser(id: currentUserId)
-        client.databaseContainer.viewContext.deletedMessagesVisibility = .alwaysHidden
-
-        // Save channel
-        try client.databaseContainer.writeSynchronously {
-            let dto = try $0.saveChannel(payload: channel)
-            dto.truncatedAt = truncatedDate.bridgeDate
-        }
-
-        // Insert parent message
-        try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
-
-        // Insert own deleted reply
-        let ownReply: MessagePayload = .dummy(
-            messageId: .unique,
-            parentId: messageId,
-            showReplyInChannel: false,
-            authorUserId: currentUserId,
-            createdAt: .unique(after: truncatedDate),
-            deletedAt: .unique(after: truncatedDate)
-        )
-
-        // Insert deleted reply by another user
-        let createdAt = Date.unique(after: truncatedDate)
-        let otherReply: MessagePayload = .dummy(
-            messageId: .unique,
-            parentId: messageId,
-            showReplyInChannel: false,
-            authorUserId: .unique,
-            createdAt: createdAt,
-            deletedAt: .unique(after: createdAt)
-        )
-
-        // Save messages
-        try client.databaseContainer.writeSynchronously {
-            try $0.saveMessage(payload: ownReply, for: cid, syncOwnReactions: true, cache: nil)
-            try $0.saveMessage(payload: otherReply, for: cid, syncOwnReactions: true, cache: nil)
-        }
-
-        // both deleted replies should be hidden
-        XCTAssertTrue(controller.replies.isEmpty)
-    }
-
-    func test_replies_withAlwaysVisible_messageVisibility() throws {
-        // Create dummy channel
-        let cid = ChannelId.unique
-        let channel = dummyPayload(with: cid)
-        let truncatedDate = Date.unique
-
-        try client.databaseContainer.createCurrentUser(id: currentUserId)
-        client.databaseContainer.viewContext.deletedMessagesVisibility = .alwaysVisible
-
-        // Save channel
-        try client.databaseContainer.writeSynchronously {
-            let dto = try $0.saveChannel(payload: channel)
-            dto.truncatedAt = truncatedDate.bridgeDate
-        }
-
-        // Insert parent message
-        try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
-
-        // Insert own deleted reply
-        let ownReply: MessagePayload = .dummy(
-            messageId: .unique,
-            parentId: messageId,
-            showReplyInChannel: false,
-            authorUserId: currentUserId,
-            createdAt: .unique(after: truncatedDate),
-            deletedAt: .unique(after: truncatedDate)
-        )
-
-        // Insert deleted reply by another user
-        let createdAt = Date.unique(after: truncatedDate)
-        let otherReply: MessagePayload = .dummy(
-            messageId: .unique,
-            parentId: messageId,
-            showReplyInChannel: false,
-            authorUserId: .unique,
-            createdAt: createdAt,
-            deletedAt: .unique(after: createdAt)
-        )
-
-        // Save messages
-        try client.databaseContainer.writeSynchronously {
-            try $0.saveMessage(payload: ownReply, for: cid, syncOwnReactions: true, cache: nil)
-            try $0.saveMessage(payload: otherReply, for: cid, syncOwnReactions: true, cache: nil)
-        }
-
-        // both deleted replies should be visible
-        XCTAssertEqual(Set(controller.replies.map(\.id)), Set([ownReply.id, otherReply.id]))
-    }
-    
     func test_replies_whenShadowedMessagesVisible() throws {
         // Create dummy channel
-        let cid = ChannelId.unique
         let channel = dummyPayload(with: cid)
         let truncatedDate = Date.unique
-        
+
+        var config = ChatClientConfig(apiKeyString: .unique)
+        config.shouldShowShadowedMessages = true
+        client = .mock(config: config)
         try client.databaseContainer.createCurrentUser(id: currentUserId)
-        client.databaseContainer.viewContext.shouldShowShadowedMessages = true
-        
+        controller = ChatMessageController(client: client, cid: cid, messageId: messageId, replyPaginationHandler: replyPaginationHandler, environment: env.controllerEnvironment)
+
         // Save channel
         try client.databaseContainer.writeSynchronously {
             let dto = try $0.saveChannel(payload: channel)
             dto.truncatedAt = truncatedDate.bridgeDate
         }
-        
+
         // Insert parent message
         try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
-        
+
         // Insert a reply
         let nonShadowedReply: MessagePayload = .dummy(
             messageId: .unique,
@@ -474,9 +497,10 @@ final class MessageController_Tests: XCTestCase {
             showReplyInChannel: false,
             authorUserId: .unique,
             createdAt: .unique(after: truncatedDate),
+            cid: cid,
             isShadowed: false
         )
-        
+
         // Insert shadowed reply by another user
         let createdAt = Date.unique(after: truncatedDate)
         let shadowedReply: MessagePayload = .dummy(
@@ -485,36 +509,39 @@ final class MessageController_Tests: XCTestCase {
             showReplyInChannel: false,
             authorUserId: .unique,
             createdAt: createdAt,
+            cid: cid,
             isShadowed: true
         )
-        
+
         // Save messages
-        try client.databaseContainer.writeSynchronously {
-            try $0.saveMessage(payload: nonShadowedReply, for: cid, syncOwnReactions: true, cache: nil)
-            try $0.saveMessage(payload: shadowedReply, for: cid, syncOwnReactions: true, cache: nil)
-        }
-        
+        try saveReplies(with: [nonShadowedReply, shadowedReply])
+
         // all replies should be visible
         XCTAssertEqual(Set(controller.replies.map(\.id)), Set([nonShadowedReply.id, shadowedReply.id]))
     }
-    
+
     func test_replies_withDefaultShadowedMessagesVisible() throws {
+        let delegate = TestDelegate()
+        controller.delegate = delegate
+        
+        // Initial observer callback
+        try waitForRepliesChange(count: 0)
+        
         // Create dummy channel
-        let cid = ChannelId.unique
         let channel = dummyPayload(with: cid)
         let truncatedDate = Date.unique
-        
+
         try client.databaseContainer.createCurrentUser(id: currentUserId)
-        
+
         // Save channel
         try client.databaseContainer.writeSynchronously {
             let dto = try $0.saveChannel(payload: channel)
             dto.truncatedAt = truncatedDate.bridgeDate
         }
-        
+
         // Insert parent message
         try client.databaseContainer.createMessage(id: messageId, authorId: .unique, cid: cid, text: "Parent")
-        
+
         // Insert a reply
         let nonShadowedReply: MessagePayload = .dummy(
             messageId: .unique,
@@ -522,9 +549,10 @@ final class MessageController_Tests: XCTestCase {
             showReplyInChannel: false,
             authorUserId: .unique,
             createdAt: .unique(after: truncatedDate),
+            cid: cid,
             isShadowed: false
         )
-        
+
         // Insert shadowed reply by another user
         let createdAt = Date.unique(after: truncatedDate)
         let shadowedReply: MessagePayload = .dummy(
@@ -533,23 +561,21 @@ final class MessageController_Tests: XCTestCase {
             showReplyInChannel: false,
             authorUserId: .unique,
             createdAt: createdAt,
+            cid: cid,
             isShadowed: true
         )
-        
-        // Save messages
-        try client.databaseContainer.writeSynchronously {
-            try $0.saveMessage(payload: nonShadowedReply, for: cid, syncOwnReactions: true, cache: nil)
-            try $0.saveMessage(payload: shadowedReply, for: cid, syncOwnReactions: true, cache: nil)
-        }
+
+        try saveReplies(with: [nonShadowedReply, shadowedReply])
+        try waitForRepliesChange(count: 1)
         
         // only non-shadowed reply should be visible
         XCTAssertEqual(Set(controller.replies.map(\.id)), Set([nonShadowedReply.id]))
     }
-    
+
     // MARK: - Delegate
 
     func test_delegate_isAssignedCorrectly() {
-        let delegate = TestDelegate(expectedQueueId: callbackQueueID)
+        let delegate = TestDelegate()
 
         // Set the delegate
         controller.delegate = delegate
@@ -557,204 +583,274 @@ final class MessageController_Tests: XCTestCase {
         // Assert the delegate is assigned correctly
         XCTAssert(controller.delegate === delegate)
     }
-    
+
     func test_settingDelegate_leadsToFetchingLocalDataa() {
         // Check initial state
         XCTAssertEqual(controller.state, .initialized)
-        
+
         // Set the delegate
-        let delegate = TestDelegate(expectedQueueId: callbackQueueID)
+        let delegate = TestDelegate()
         controller.delegate = delegate
-        
+
         // Assert state changed
         AssertAsync.willBeEqual(controller.state, .localDataFetched)
     }
 
-    func test_delegate_isNotifiedAboutStateChanges() throws {
+    @MainActor func test_delegate_isNotifiedAboutStateChanges() throws {
         // Set the delegate
-        let delegate = TestDelegate(expectedQueueId: callbackQueueID)
+        let delegate = TestDelegate()
         controller.delegate = delegate
-        
+
         // Assert delegate is notified about state changes
         AssertAsync.willBeEqual(delegate.state, .localDataFetched)
 
         // Synchronize
         controller.synchronize()
-            
+
         // Simulate network call response
         env.messageUpdater.getMessage_completion?(.success(ChatMessage.unique))
-        
+
         // Assert delegate is notified about state changes
         AssertAsync.willBeEqual(delegate.state, .remoteDataFetched)
     }
 
-    func test_delegate_isNotifiedAboutCreatedMessage() throws {
+    @MainActor func test_delegate_isNotifiedAboutCreatedMessage() throws {
         // Create current user in the database
         try client.databaseContainer.createCurrentUser(id: currentUserId)
-        
+
         // Create channel in the database
         try client.databaseContainer.createChannel(cid: cid)
-        
+
         // Set the delegate
-        let delegate = TestDelegate(expectedQueueId: callbackQueueID)
+        let delegate = TestDelegate()
         controller.delegate = delegate
-        
+
         // Simulate `synchronize` call
         controller.synchronize()
 
         // Simulate response from a backend with a message that doesn't exist locally
         let messagePayload: MessagePayload = .dummy(
             messageId: messageId,
-            authorUserId: currentUserId
+            authorUserId: currentUserId,
+            cid: cid
         )
         try client.databaseContainer.writeSynchronously { session in
-            try session.saveMessage(payload: messagePayload, for: self.cid, syncOwnReactions: true, cache: nil)
+            try session.saveMessage(payload: messagePayload, syncOwnReactions: true, cache: nil)
         }
         env.messageUpdater.getMessage_completion?(.success(ChatMessage.unique))
-        
+
         // Assert `create` entity change is received by the delegate
         AssertAsync {
             Assert.willBeEqual(delegate.didChangeMessage_change?.fieldChange(\.id), .create(messagePayload.id))
             Assert.willBeEqual(delegate.didChangeMessage_change?.fieldChange(\.text), .create(messagePayload.text))
         }
     }
-    
-    func test_delegate_isNotifiedAboutUpdatedMessage() throws {
+
+    @MainActor func test_delegate_isNotifiedAboutUpdatedMessage() throws {
         let initialMessageText: String = .unique
 
         // Create current user in the database
         try client.databaseContainer.createCurrentUser(id: currentUserId)
-        
+
         // Create channel in the database
         try client.databaseContainer.createChannel(cid: cid)
-        
+
         // Create message in the database with `initialMessageText`
         try client.databaseContainer.createMessage(id: messageId, authorId: currentUserId, cid: cid, text: initialMessageText)
-        
+
         // Set the delegate
-        let delegate = TestDelegate(expectedQueueId: callbackQueueID)
+        let delegate = TestDelegate()
         controller.delegate = delegate
-        
+
         // Simulate `synchronize` call
         controller.synchronize()
-        
+
         // Simulate response from a backend with a message that exists locally but has out-dated text
         let messagePayload: MessagePayload = .dummy(
             messageId: messageId,
             authorUserId: currentUserId,
-            text: "new text"
+            text: "new text",
+            cid: cid
         )
         try client.databaseContainer.writeSynchronously { session in
-            try session.saveMessage(payload: messagePayload, for: self.cid, syncOwnReactions: true, cache: nil)
+            try session.saveMessage(payload: messagePayload, syncOwnReactions: true, cache: nil)
         }
         env.messageUpdater.getMessage_completion?(.success(ChatMessage.unique))
-        
+
         // Assert `update` entity change is received by the delegate
         AssertAsync {
             Assert.willBeEqual(delegate.didChangeMessage_change?.fieldChange(\.id), .update(messagePayload.id))
             Assert.willBeEqual(delegate.didChangeMessage_change?.fieldChange(\.text), .update(messagePayload.text))
         }
     }
-    
-    func test_delegate_isNotifiedAboutRepliesChanges() throws {
-        // Create current user in the database
-        try client.databaseContainer.createCurrentUser(id: currentUserId)
-        
-        // Create channel in the database
-        try client.databaseContainer.createChannel(cid: cid)
-        
-        // Create parent message
-        try client.databaseContainer.createMessage(id: messageId, authorId: currentUserId, cid: cid)
-        
+
+    @MainActor func test_delegate_isNotifiedAboutRepliesChanges() throws {
         // Set the delegate
-        let delegate = TestDelegate(expectedQueueId: callbackQueueID)
+        let delegate = TestDelegate()
         controller.delegate = delegate
-        
+
         // Simulate `synchronize` call
         controller.synchronize()
-        
+        try waitForRepliesChange(count: 0)
+
         // Add reply to DB
-        let reply: MessagePayload = .dummy(
-            messageId: .unique,
-            parentId: messageId,
-            showReplyInChannel: false,
-            authorUserId: .unique
-        )
-        
-        var replyModel: ChatMessage?
-        try client.databaseContainer.writeSynchronously { session in
-            replyModel = try session.saveMessage(payload: reply, for: self.cid, syncOwnReactions: true, cache: nil).asModel()
+        let replyId = MessageId.unique
+        try saveReplies(with: [replyId])
+        try waitForRepliesChange(count: 1)
+
+        let model: ChatMessage? = try client.databaseContainer.readSynchronously { session in
+            guard let reply = session.message(id: replyId) else { return nil }
+            return try reply.asModel()
         }
-    
+        let replyModel = try XCTUnwrap(model)
+
         // Assert `insert` entity change is received by the delegate
-        AssertAsync.willBeEqual(
+        XCTAssertEqual(
             delegate.didChangeReplies_changes,
-            [.insert(replyModel!, index: [0, 0])]
+            [.insert(replyModel, index: [0, 0])]
         )
     }
 
-    func test_delegate_isNotifiedAboutReactionChanges() throws {
+    @MainActor func test_delegate_isNotifiedAboutReactionChanges() throws {
         // Set the delegate
-        let delegate = TestDelegate(expectedQueueId: callbackQueueID)
+        let delegate = TestDelegate()
         controller.delegate = delegate
 
         controller.reactions = [.mock(type: "like")]
 
         AssertAsync.willBeEqual(
-            delegate.didChangeReactions_reactions,
-            [.mock(type: "like")]
+            delegate.didChangeReactions_reactions.map(\.type),
+            [ChatMessageReaction.mock(type: "like").type]
         )
     }
-    
-    // MARK: - Delete message
-    
-    func test_deleteMessage_propagatesError() {
-        // Simulate `deleteMessage` call and catch the completion
-        var completionError: Error?
-        controller.deleteMessage { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            completionError = $0
-        }
-        
-        // Simulate network response with the error
-        let networkError = TestError()
-        env.messageUpdater.deleteMessage_completion?(networkError)
-        
-        // Assert error is propagated
-        AssertAsync.willBeEqual(completionError as? TestError, networkError)
+
+    // MARK: - Download Attachment
+
+    func test_downloadAttachment_propagatesSuccess() {
+        let attachmentId = AttachmentId.unique
+        let expected = ChatMessageFileAttachment.mock(id: attachmentId)
+        env.messageUpdater.downloadAttachment_completion_result = .success(expected.asAnyAttachment)
+
+        nonisolated(unsafe) var completionResult: Result<ChatMessageFileAttachment, Error>?
+        controller.downloadAttachment(expected) { completionResult = $0 }
+
+        AssertAsync.willBeTrue(completionResult != nil)
+        let result = try? completionResult?.get()
+        XCTAssertEqual(result, expected)
+        XCTAssertEqual(env.messageUpdater.downloadAttachment_attachmentId, attachmentId)
     }
-    
-    func test_deleteMessage_propagatesNilError() {
-        // Simulate `deleteMessage` call and catch the completion
-        var completionCalled = false
-        controller.deleteMessage { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            XCTAssertNil($0)
-            completionCalled = true
-        }
-        
+
+    func test_downloadAttachment_callsCompletion_evenWhenControllerIsNotRetained() {
+        let attachmentId = AttachmentId.unique
+        let expected = ChatMessageFileAttachment.mock(id: attachmentId)
+
+        // Simulate `downloadAttachment` call and catch the completion
+        nonisolated(unsafe) var completionResult: Result<ChatMessageFileAttachment, Error>?
+        controller.downloadAttachment(expected) { completionResult = $0 }
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
+        // Simulate the network response after the controller reference is dropped
+        env.messageUpdater.downloadAttachment_completion?(.success(expected.asAnyAttachment))
+        // Release reference of completion so we can deallocate stuff
+        env.messageUpdater.downloadAttachment_completion = nil
+
+        // Assert completion is still called even though the controller was not retained
+        AssertAsync.willBeTrue(completionResult != nil)
+        XCTAssertEqual(try? completionResult?.get(), expected)
+        // `weakController` should be deallocated too
+        AssertAsync.canBeReleased(&weakController)
+    }
+
+    func test_downloadAttachment_propagatesError() {
+        let attachmentId = AttachmentId.unique
+        let attachment = ChatMessageFileAttachment.mock(id: attachmentId)
+        let expectedError = TestError()
+        env.messageUpdater.downloadAttachment_completion_result = .failure(expectedError)
+
+        nonisolated(unsafe) var completionResult: Result<ChatMessageFileAttachment, Error>?
+        controller.downloadAttachment(attachment) { completionResult = $0 }
+
+        AssertAsync.willBeTrue(completionResult != nil)
+        if case let .failure(error) = completionResult {
+            XCTAssertEqual(error as? TestError, expectedError)
+        } else {
+            XCTFail("Expected failure")
+        }
+        XCTAssertEqual(env.messageUpdater.downloadAttachment_attachmentId, attachmentId)
+    }
+
+    func test_downloadAttachment_withCustomRequest_propagatesRequestToUpdater() {
+        let attachmentId = AttachmentId.unique
+        let attachment = ChatMessageFileAttachment.mock(id: attachmentId)
+        let customURL = URL(string: "https://cdn.example.com/signed?token=abc123")!
+        let customRequest = URLRequest(url: customURL)
+        env.messageUpdater.downloadAttachment_completion_result = .success(attachment.asAnyAttachment)
+
+        controller.downloadAttachment(attachment, request: customRequest) { _ in }
+
+        AssertAsync.willBeEqual(env.messageUpdater.downloadAttachment_attachmentId, attachmentId)
+        XCTAssertEqual(env.messageUpdater.downloadAttachment_request?.url, customURL)
+    }
+
+    func test_downloadAttachment_withoutRequest_propagatesNilRequestToUpdater() {
+        let attachmentId = AttachmentId.unique
+        let attachment = ChatMessageFileAttachment.mock(id: attachmentId)
+        env.messageUpdater.downloadAttachment_completion_result = .success(attachment.asAnyAttachment)
+
+        controller.downloadAttachment(attachment) { _ in }
+
+        AssertAsync.willBeEqual(env.messageUpdater.downloadAttachment_attachmentId, attachmentId)
+        XCTAssertNil(env.messageUpdater.downloadAttachment_request)
+    }
+
+    // MARK: - Delete message
+
+    func test_deleteMessage_propagatesError() {
+        // Simulate `deleteMessage` call and catch the completion
+        nonisolated(unsafe) var completionError: Error?
+        controller.deleteMessage { completionError = $0 }
+
+        // Simulate network response with the error
+        let networkError = TestError()
+        env.messageUpdater.deleteMessage_completion?(networkError)
+
+        // Assert error is propagated
+        AssertAsync.willBeEqual(completionError as? TestError, networkError)
+    }
+
+    func test_deleteMessage_propagatesNilError() {
+        // Simulate `deleteMessage` call and catch the completion
+        nonisolated(unsafe) var completionCalled = false
+        controller.deleteMessage { XCTAssertNil($0); completionCalled = true }
+
+        // Keep a weak ref so we can check if it's actually deallocated
+        weak var weakController = controller
+
+        // (Try to) deallocate the controller
+        // by not keeping any references to it
+        controller = nil
+
         // Simulate successful network response
         env.messageUpdater.deleteMessage_completion?(nil)
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater.deleteMessage_completion = nil
-        
+
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_deleteMessage_whenHardIsFalse_callsMessageUpdater_withCorrectValues() {
         // Simulate `deleteMessage` call
         controller.deleteMessage(hard: false)
-        
+
         // Assert messageUpdater is called with correct `messageId`
         XCTAssertEqual(env.messageUpdater.deleteMessage_messageId, controller.messageId)
         XCTAssertEqual(env.messageUpdater.deleteMessage_hard, false)
@@ -768,210 +864,344 @@ final class MessageController_Tests: XCTestCase {
         XCTAssertEqual(env.messageUpdater.deleteMessage_messageId, controller.messageId)
         XCTAssertEqual(env.messageUpdater.deleteMessage_hard, true)
     }
-    
-    // MARK: - Edit message
-    
-    func test_editMessage_propagatesError() {
-        // Simulate `editMessage` call and catch the completion
-        var completionError: Error?
-        controller.editMessage(text: .unique) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+
+    func test_deleteMessageForMe_propagatesError() {
+        // Simulate `deleteMessageForMe` call and catch the completion
+        nonisolated(unsafe) var completionError: Error?
+        controller.deleteMessageForMe {
             completionError = $0
         }
-        
+
         // Simulate network response with the error
         let networkError = TestError()
-        env.messageUpdater.editMessage_completion?(networkError)
-        
+        env.messageUpdater.deleteMessage_completion?(networkError)
+
         // Assert error is propagated
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
-    func test_editMessage_propagatesNilError() {
-        // Simulate `editMessage` call and catch the completion
-        var completionCalled = false
-        controller.editMessage(text: .unique) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+
+    func test_deleteMessageForMe_propagatesNilError() {
+        // Simulate `deleteMessageForMe` call and catch the completion
+        nonisolated(unsafe) var completionCalled = false
+        controller.deleteMessageForMe {
             XCTAssertNil($0)
             completionCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response
-        env.messageUpdater.editMessage_completion?(nil)
+        env.messageUpdater.deleteMessage_completion?(nil)
         // Release reference of completion so we can deallocate stuff
-        env.messageUpdater.editMessage_completion = nil
-        
+        env.messageUpdater.deleteMessage_completion = nil
+
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
-    func test_editMessage_callsMessageUpdater_withCorrectValues() {
-        let updatedText: String = .unique
-        
-        // Simulate `editMessage` call and catch the completion
-        controller.editMessage(text: updatedText)
-        
-        // Assert message updater is called with correct `messageId` and `text`
-        XCTAssertEqual(env.messageUpdater.editMessage_messageId, controller.messageId)
-        XCTAssertEqual(env.messageUpdater.editMessage_text, updatedText)
+
+    func test_deleteMessageForMe_callsMessageUpdater_withCorrectValues() {
+        // Simulate `deleteMessageForMe` call
+        controller.deleteMessageForMe()
+
+        // Assert messageUpdater is called with correct `messageId`, hard: false, and deleteForMe: true
+        XCTAssertEqual(env.messageUpdater.deleteMessage_messageId, controller.messageId)
+        XCTAssertEqual(env.messageUpdater.deleteMessage_hard, false)
+        XCTAssertEqual(env.messageUpdater.deleteMessage_deleteForMe, true)
     }
 
-    func test_editMessage_callsMessageUpdater_withCorrectExtraDataValues() {
-        let updatedText: String = .unique
-        let extraData: [String: RawJSON] = ["myKey": .string("myValue")]
+    // MARK: - Edit message
 
+    func test_editMessage_propagatesError() {
         // Simulate `editMessage` call and catch the completion
-        controller.editMessage(text: updatedText, extraData: extraData)
+        nonisolated(unsafe) var completionError: Error?
+        controller.editMessage(text: .unique) { completionError = $0 }
 
-        // Assert message updater is called with correct `messageId` and `text`
-        XCTAssertEqual(env.messageUpdater.editMessage_text, updatedText)
-        XCTAssertEqual(env.messageUpdater.editMessage_extraData, extraData)
-    }
-    
-    // MARK: - Flag message
-    
-    func test_flag_propagatesError() {
-        // Simulate `flag` call and catch the completion.
-        var completionError: Error?
-        controller.flag { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            completionError = $0
-        }
-        
-        // Simulate network response with the error.
+        // Simulate network response with the error
         let networkError = TestError()
-        env.messageUpdater.flagMessage_completion!(networkError)
-        
-        // Assert error is propagated.
+        env.messageUpdater.editMessage_completion?(.failure(networkError))
+
+        // Assert error is propagated
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
-    func test_flag_propagatesNilError() {
-        // Simulate `flag` call and catch the completion.
-        var completionIsCalled = false
-        controller.flag { [callbackQueueID] error in
-            // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
-            // Assert there is no error.
-            XCTAssertNil(error)
-            completionIsCalled = true
-        }
-        
+
+    func test_editMessage_propagatesNilError() {
+        // Simulate `editMessage` call and catch the completion
+        nonisolated(unsafe) var completionCalled = false
+        controller.editMessage(text: .unique) { XCTAssertNil($0); completionCalled = true }
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
+        // Simulate successful network response
+        env.messageUpdater.editMessage_completion?(.success(.mock()))
+        // Release reference of completion so we can deallocate stuff
+        env.messageUpdater.editMessage_completion = nil
+
+        // Assert completion is called
+        AssertAsync.willBeTrue(completionCalled)
+        // `weakController` should be deallocated too
+        AssertAsync.canBeReleased(&weakController)
+    }
+
+    func test_editMessage_callsMessageUpdater_withCorrectValues() {
+        let updatedText: String = .unique
+
+        // Simulate `editMessage` call and catch the completion
+        controller.editMessage(text: updatedText, skipEnrichUrl: true)
+
+        // Assert message updater is called with correct `messageId` and `text`
+        XCTAssertEqual(env.messageUpdater.editMessage_messageId, controller.messageId)
+        XCTAssertEqual(env.messageUpdater.editMessage_text, updatedText)
+        XCTAssertEqual(env.messageUpdater.editMessage_skipEnrichUrl, true)
+    }
+
+    func test_editMessage_callsMessageUpdater_withCorrectExtraParameters() {
+        let updatedText: String = .unique
+        let attachments = [AnyAttachmentPayload.mockAudio]
+        let extraData: [String: RawJSON] = ["myKey": .string("myValue")]
+
+        // Simulate `editMessage` call and catch the completion
+        controller.editMessage(
+            text: updatedText,
+            attachments: attachments,
+            extraData: extraData
+        )
+
+        // Assert message updater is called with correct `messageId` and `text`
+        XCTAssertEqual(env.messageUpdater.editMessage_text, updatedText)
+        XCTAssertEqual(env.messageUpdater.editMessage_attachments, attachments)
+        XCTAssertEqual(env.messageUpdater.editMessage_extraData, extraData)
+    }
+
+    func test_editMessage_callsMessageUpdater_withMentionParameters() {
+        let updatedText: String = .unique
+        let mentionedUserIds: [UserId] = [.unique]
+        let mentionedGroupIds: [String] = [.unique]
+        let mentionedRoles: [String] = ["admin"]
+
+        controller.editMessage(
+            text: updatedText,
+            mentionedUserIds: mentionedUserIds,
+            mentionedHere: true,
+            mentionedChannel: true,
+            mentionedGroupIds: mentionedGroupIds,
+            mentionedRoles: mentionedRoles
+        )
+
+        XCTAssertEqual(env.messageUpdater.editMessage_text, updatedText)
+        XCTAssertEqual(env.messageUpdater.editMessage_mentionedUserIds, mentionedUserIds)
+        XCTAssertEqual(env.messageUpdater.editMessage_mentionedHere, true)
+        XCTAssertEqual(env.messageUpdater.editMessage_mentionedChannel, true)
+        XCTAssertEqual(env.messageUpdater.editMessage_mentionedGroupIds, mentionedGroupIds)
+        XCTAssertEqual(env.messageUpdater.editMessage_mentionedRoles, mentionedRoles)
+    }
+
+    func test_editMessage_callsMessageUpdater_withSkipPushParameter() {
+        let updatedText: String = .unique
+
+        // Simulate `editMessage` call with skipPush set to true
+        controller.editMessage(text: updatedText, skipPush: true)
+
+        // Assert message updater is called with correct `skipPush` value
+        XCTAssertEqual(env.messageUpdater.editMessage_messageId, controller.messageId)
+        XCTAssertEqual(env.messageUpdater.editMessage_text, updatedText)
+        XCTAssertEqual(env.messageUpdater.editMessage_skipPush, true)
+    }
+
+    func test_editMessage_callsMessageUpdater_withSkipPushDefaultValue() {
+        let updatedText: String = .unique
+
+        // Simulate `editMessage` call without specifying skipPush (should use default false)
+        controller.editMessage(text: updatedText)
+
+        // Assert message updater is called with correct default `skipPush` value
+        XCTAssertEqual(env.messageUpdater.editMessage_messageId, controller.messageId)
+        XCTAssertEqual(env.messageUpdater.editMessage_text, updatedText)
+        XCTAssertEqual(env.messageUpdater.editMessage_skipPush, false)
+    }
+
+    func test_editMessage_whenMessageTransformerIsProvided_callsUpdaterWithTransformedValues() throws {
+        class MockTransformer: StreamModelsTransformer, @unchecked Sendable {
+            var mockTransformedMessage = NewMessageTransformableInfo(
+                text: "transformed",
+                attachments: [.mockFile],
+                extraData: ["transformed": true]
+            )
+            func transform(newMessageInfo: NewMessageTransformableInfo) -> NewMessageTransformableInfo {
+                mockTransformedMessage
+            }
+        }
+
+        let transformer = MockTransformer()
+        var config = ChatClientConfig(apiKeyString: .unique)
+        config.modelsTransformer = transformer
+        client = .mock(config: config)
+        controller = ChatMessageController(
+            client: client,
+            cid: cid,
+            messageId: messageId,
+            replyPaginationHandler: replyPaginationHandler,
+            environment: env.controllerEnvironment
+        )
+
+        let exp = expectation(description: "should complete edit message")
+
+        controller.editMessage(
+            text: .unique
+        ) { _ in
+            exp.fulfill()
+        }
+
+        env.messageUpdater.editMessage_completion?(.success(.unique))
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.editMessage_text, transformer.mockTransformedMessage.text)
+        XCTAssertEqual(env.messageUpdater.editMessage_attachments, transformer.mockTransformedMessage.attachments)
+        XCTAssertEqual(env.messageUpdater.editMessage_extraData, transformer.mockTransformedMessage.extraData)
+    }
+
+    // MARK: - Flag message
+
+    func test_flag_propagatesError() {
+        // Simulate `flag` call and catch the completion.
+        nonisolated(unsafe) var completionError: Error?
+        controller.flag { completionError = $0 }
+
+        // Simulate network response with the error.
+        let networkError = TestError()
+        env.messageUpdater.flagMessage_completion!(networkError)
+
+        // Assert error is propagated.
+        AssertAsync.willBeEqual(completionError as? TestError, networkError)
+    }
+
+    func test_flag_propagatesNilError() {
+        // Simulate `flag` call and catch the completion.
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.flag { error in
+            XCTAssertNil(error)
+            completionIsCalled = true
+        }
+
+        // Keep a weak ref so we can check if it's actually deallocated
+        weak var weakController = controller
+
+        // (Try to) deallocate the controller
+        // by not keeping any references to it
+        controller = nil
+
         // Simulate successful network response.
         env.messageUpdater.flagMessage_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater.flagMessage_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_flag_callsUpdater_withCorrectValues() {
         // Simulate `flag` call.
-        controller.flag()
-        
+        let reason = "Test"
+        controller.flag(reason: reason)
+
         // Assert updater is called with correct `flag`.
         XCTAssertEqual(env.messageUpdater.flagMessage_flag, true)
         // Assert updater is called with correct `messageId`.
         XCTAssertEqual(env.messageUpdater.flagMessage_messageId, controller.messageId)
         // Assert updater is called with correct `cid`.
         XCTAssertEqual(env.messageUpdater.flagMessage_cid, controller.cid)
+        // Assert updater is called with correct `reason`.
+        XCTAssertEqual(env.messageUpdater.flagMessage_reason, reason)
     }
-    
+
     func test_flag_keepsControllerAlive() {
         // Simulate `flag` call.
         controller.flag()
-        
+
         // Create a weak ref and release a controller.
-        weak var weakController = controller
+        let weakController = { [weak controller] in controller }
         controller = nil
-        
+
         // Assert controller is kept alive.
-        AssertAsync.staysTrue(weakController != nil)
+        AssertAsync.staysTrue(weakController() != nil)
     }
-    
+
     // MARK: - Unflag message
-    
+
+    @available(*, deprecated, message: "Tests deprecated unflag API")
     func test_unflag_propagatesError() {
         // Simulate `unflag` call and catch the completion.
-        var completionError: Error?
-        controller.unflag { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            completionError = $0
-        }
-        
+        nonisolated(unsafe) var completionError: Error?
+        controller.unflag { completionError = $0 }
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.messageUpdater.flagMessage_completion!(networkError)
-        
+
         // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
+    @available(*, deprecated, message: "Tests deprecated unflag API")
     func test_unflag_propagatesNilError() {
         // Simulate `unflag` call and catch the completion.
-        var completionIsCalled = false
-        controller.unflag { [callbackQueueID] error in
-            // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
-            // Assert there is no error.
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.unflag { error in
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.messageUpdater.flagMessage_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater.flagMessage_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
+    @available(*, deprecated, message: "Tests deprecated unflag API")
     func test_unflag_callsUpdater_withCorrectValues() {
         // Simulate `unflag` call.
         controller.unflag()
-        
+
         // Assert updater is called with correct `flag`.
         XCTAssertEqual(env.messageUpdater.flagMessage_flag, false)
         // Assert updater is called with correct `messageId`.
         XCTAssertEqual(env.messageUpdater.flagMessage_messageId, controller.messageId)
         // Assert updater is called with correct `cid`.
         XCTAssertEqual(env.messageUpdater.flagMessage_cid, controller.cid)
+        // Assert updater is called with correct `reason`.
+        XCTAssertEqual(env.messageUpdater.flagMessage_reason, nil)
     }
-    
+
     // MARK: - Create new reply
-    
+
     func test_createNewReply_callsMessageUpdater() {
-        let newMessageId: MessageId = .unique
-        
+        let newMessage = ChatMessage.mock()
+
         // New message values
         let text: String = .unique
         let showReplyInChannel = true
@@ -979,29 +1209,32 @@ final class MessageController_Tests: XCTestCase {
         let extraData: [String: RawJSON] = [:]
         let attachments: [AnyAttachmentPayload] = [.mockFile, .mockImage, .init(payload: TestAttachmentPayload.unique)]
         let pin = MessagePinning(expirationDate: .unique)
+        let skipPush = true
+        let skipEnrichUrl = false
 
         // Simulate `createNewReply` calls and catch the completion
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         controller.createNewReply(
             text: text,
             pinning: pin,
             attachments: attachments,
             showReplyInChannel: showReplyInChannel,
             quotedMessageId: quotedMessageId,
+            skipPush: skipPush,
+            skipEnrichUrl: skipEnrichUrl,
             extraData: extraData
-        ) { [callbackQueueID] result in
-            AssertTestQueue(withId: callbackQueueID)
-            AssertResultSuccess(result, newMessageId)
+        ) { result in
+            AssertResultSuccess(result, newMessage.id)
             completionCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Completion shouldn't be called yet
         XCTAssertFalse(completionCalled)
         XCTAssertEqual(env.messageUpdater.createNewReply_cid, cid)
@@ -1012,194 +1245,429 @@ final class MessageController_Tests: XCTestCase {
         XCTAssertEqual(env.messageUpdater.createNewReply_showReplyInChannel, showReplyInChannel)
         XCTAssertEqual(env.messageUpdater.createNewReply_extraData, extraData)
         XCTAssertEqual(env.messageUpdater.createNewReply_attachments, attachments)
+        XCTAssertEqual(env.messageUpdater.createNewReply_skipPush, skipPush)
+        XCTAssertEqual(env.messageUpdater.createNewReply_skipEnrichUrl, skipEnrichUrl)
         XCTAssertEqual(env.messageUpdater.createNewReply_quotedMessageId, quotedMessageId)
-        
+
         // Simulate successful update
-        env.messageUpdater.createNewReply_completion?(.success(newMessageId))
+        env.messageUpdater.createNewReply_completion?(.success(newMessage))
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater.createNewReply_completion = nil
 
         // Pin
         XCTAssertEqual(env.messageUpdater.createNewReply_pinning, pin)
-        
+
         // Completion should be called
         AssertAsync.willBeTrue(completionCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
+    func test_createNewReply_sendsNewMessagePendingEvent() throws {
+        let exp = expectation(description: "should complete create new message")
+
+        let mockedEventNotificationCenter = EventNotificationCenter_Mock(
+            database: .init(kind: .inMemory, chatClientConfig: .init(apiKeyString: .unique))
+        )
+        client.mockedEventNotificationCenter = mockedEventNotificationCenter
+
+        controller.createNewReply(
+            text: .unique
+        ) { _ in
+            exp.fulfill()
+        }
+
+        env.messageUpdater?.createNewReply_completion?(.success(.unique))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        let event = try XCTUnwrap(mockedEventNotificationCenter.mock_process.calls.first?.0.first)
+        XCTAssertTrue(event is NewMessagePendingEvent)
+    }
+
+    func test_createNewReply_whenMessageTransformerIsProvided_callsUpdaterWithTransformedValues() throws {
+        class MockTransformer: StreamModelsTransformer, @unchecked Sendable {
+            var mockTransformedMessage = NewMessageTransformableInfo(
+                text: "transformed",
+                attachments: [.mockFile],
+                extraData: ["transformed": true]
+            )
+            func transform(newMessageInfo: NewMessageTransformableInfo) -> NewMessageTransformableInfo {
+                mockTransformedMessage
+            }
+        }
+
+        let transformer = MockTransformer()
+        var config = ChatClientConfig(apiKeyString: .unique)
+        config.modelsTransformer = transformer
+        client = .mock(config: config)
+        controller = ChatMessageController(
+            client: client,
+            cid: cid,
+            messageId: messageId,
+            replyPaginationHandler: replyPaginationHandler,
+            environment: env.controllerEnvironment
+        )
+
+        let exp = expectation(description: "should complete create new reply")
+
+        controller.createNewReply(
+            text: .unique
+        ) { _ in
+            exp.fulfill()
+        }
+
+        env.messageUpdater.createNewReply_completion?(.success(.unique))
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.createNewReply_text, transformer.mockTransformedMessage.text)
+        XCTAssertEqual(env.messageUpdater.createNewReply_attachments, transformer.mockTransformedMessage.attachments)
+        XCTAssertEqual(env.messageUpdater.createNewReply_extraData, transformer.mockTransformedMessage.extraData)
+    }
+
     // MARK: - Load replies
-    
+
     func test_loadPreviousReplies_propagatesError() {
         // Simulate `loadPreviousReplies` call and catch the completion
-        var completionError: Error?
-        controller.loadPreviousReplies { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.loadPreviousReplies {
             completionError = $0
         }
-        
+
         // Simulate network response with the error
         let networkError = TestError()
         env.messageUpdater.loadReplies_completion?(.failure(networkError))
-        
+
         // Assert error is propagated
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
     func test_loadPreviousReplies_propagatesNilError() {
         // Simulate `loadPreviousReplies` call and catch the completion
-        var completionCalled = false
-        controller.loadPreviousReplies { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            XCTAssertNil($0)
-            completionCalled = true
-        }
-        
+        nonisolated(unsafe) var completionCalled = false
+        controller.loadPreviousReplies { XCTAssertNil($0); completionCalled = true }
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response
         env.messageUpdater.loadReplies_completion?(.success(MessageRepliesPayload(messages: [])))
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater.loadReplies_completion = nil
-        
+
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_loadPreviousReplies_callsMessageUpdater_withCorrectValues() {
-        // Simulate `loadNextReplies` call
         controller.loadPreviousReplies()
-        
+
         // Assert message updater is called with correct values
         XCTAssertEqual(env.messageUpdater.loadReplies_cid, controller.cid)
         XCTAssertEqual(env.messageUpdater.loadReplies_messageId, messageId)
         XCTAssertEqual(env.messageUpdater.loadReplies_pagination, .init(pageSize: 25))
     }
-    
-    func test_loadPreviousReplies_noMessageIdPassed_properlyHandlesPagination() {
-        // Simulate `loadNextReplies` call
-        controller.loadPreviousReplies(
-            limit: 21,
-            completion: nil
-        )
-        
-        // Pagination should not have a parameter because this is the first call
-        XCTAssertNil(env.messageUpdater.loadReplies_pagination?.parameter)
-        
-        // Call `loadPreviousReplies`, this time since the first batch was received already it should
-        // pass the last message id
-        env.messageUpdater.loadReplies_completion?(
-            .success(
-                .init(
-                    messages: (0...30).map {
-                        _ in MessagePayload.dummy(messageId: .unique, authorUserId: .unique)
-                    }
-                )
-            )
-        )
+
+    func test_loadPreviousReplies_noMessageIdPassed_noLastMessageFetched_fetchWithoutParemeter() {
         _ = controller.replies
         env.repliesObserver.items_mock = [
             .mock(
+                id: "first message", cid: .unique, text: .unique, author: .unique
+            ),
+            .mock(
                 id: "last message", cid: .unique, text: .unique, author: .unique
+            ),
+            // The last message used for pagination, needs to be in the server as well,
+            // so this one should not be used
+            .mock(
+                id: "last message only local", cid: .unique, text: .unique, author: .unique, localState: .pendingSync
             )
         ]
-        
+
         controller.loadPreviousReplies(
             limit: 21,
             completion: nil
         )
-        
+
+        XCTAssertEqual(env.messageUpdater.loadReplies_pagination, .init(pageSize: 21))
+        XCTAssertEqual(env.messageUpdater.loadReplies_pagination?.parameter, nil)
+    }
+
+    func test_loadPreviousReplies_noMessageIdPassed_usesLastFetchedId() {
+        let lastFetchedId = MessageId.unique
+        replyPaginationHandler.mockState.oldestFetchedMessage = .dummy(messageId: lastFetchedId)
+
+        controller.loadPreviousReplies(
+            limit: 21,
+            completion: nil
+        )
+
         XCTAssertEqual(
             env.messageUpdater.loadReplies_pagination?.parameter,
-            .lessThan("last message")
+            .lessThan(lastFetchedId)
         )
     }
-    
+
     func test_loadPreviousReplies_messageIdPassed_properlyHandlesPagination() {
-        // Simulate `loadNextReplies` call
         controller.loadPreviousReplies(
             before: "last message",
             limit: 21,
             completion: nil
         )
-        
+
         XCTAssertEqual(
             env.messageUpdater.loadReplies_pagination?.parameter,
             .lessThan("last message")
         )
     }
-    
-    // MARK: - `loadNextReplies`
-    
-    func test_loadNextReplies_failsOnEmptyReplies() throws {
-        // Simulate `loadNextReplies` call and catch the completion error.
-        let completionError = try waitFor {
-            controller.loadNextReplies(completion: $0)
+
+    func test_loadPreviousReplies_whenHasLoadedAllPreviousReplies_doesNotCallUpdater() throws {
+        replyPaginationHandler.mockState.hasLoadedAllPreviousMessages = true
+
+        let exp = expectation(description: "load replies completes")
+        controller.loadPreviousReplies(before: "last message", limit: 2) { _ in
+            exp.fulfill()
         }
-        
-        // Assert correct error is thrown
-        AssertAsync.willBeTrue(completionError is ClientError.MessageEmptyReplies)
+
+        env.messageUpdater.loadReplies_completion?(.success(.init(messages: [.dummy()])))
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.loadReplies_callCount, 0)
     }
-    
-    func test_loadNextReplies_propagatesError() {
+
+    func test_loadPreviousReplies_whenIsLoadingPreviousReplies_doesNotCallUpdater() throws {
+        replyPaginationHandler.mockState.isLoadingPreviousMessages = true
+
+        let exp = expectation(description: "load replies completes")
+        controller.loadPreviousReplies(before: "last message", limit: 2) { _ in
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadReplies_completion?(.success(.init(messages: [.dummy()])))
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.loadReplies_callCount, 0)
+    }
+
+    @MainActor func test_loadPreviousReplies_whenMessagesAreEmpty_callDelegateWithEmptyChanges() throws {
+        let delegate = TestDelegate()
+        controller.delegate = delegate
+        
+        _ = controller.replies
+        try waitForRepliesChange(count: 0)
+        delegate.didChangeRepliesCount = 0
+        
+        let exp = expectation(description: "load replies completes")
+        controller.loadPreviousReplies(before: "last message", limit: 2) { _ in
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadReplies_completion?(.success(.init(messages: [])))
+        waitForExpectations(timeout: defaultTimeout)
+        
+        XCTAssertEqual(env.messageUpdater.loadReplies_callCount, 1)
+        // It should call the didChangeReplies with empty changes
+        // in order to add the parent message to the list again.
+        XCTAssertEqual(delegate.didChangeRepliesCount, 1)
+    }
+
+    // MARK: - Load Next Replies
+
+    func test_loadNextReplies_propagatesError() throws {
+        // Simulate controller is in mid-page
+        try saveReplies(with: [.unique, .unique])
+        replyPaginationHandler.mockState.hasLoadedAllNextMessages = false
+
         // Simulate `loadNextReplies` call and catch the completion
-        var completionError: Error?
-        controller.loadNextReplies(after: .unique) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.loadNextReplies(after: .unique) {
             completionError = $0
         }
-        
+
         // Simulate network response with the error
         let networkError = TestError()
         env.messageUpdater.loadReplies_completion?(.failure(networkError))
-        
+
         // Assert error is propagated
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
-    func test_loadNextReplies_propagatesNilError() {
+
+    func test_loadNextReplies_propagatesNilError() throws {
+        // Simulate controller is in mid-page
+        try saveReplies(with: [.unique, .unique])
+        replyPaginationHandler.mockState.hasLoadedAllNextMessages = false
+
         // Simulate `loadNextReplies` call and catch the completion
-        var completionCalled = false
-        controller.loadNextReplies(after: .unique) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
-            XCTAssertNil($0)
-            completionCalled = true
-        }
-        
+        nonisolated(unsafe) var completionCalled = false
+        controller.loadNextReplies(after: .unique) { XCTAssertNil($0); completionCalled = true }
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response
         env.messageUpdater.loadReplies_completion?(.success(MessageRepliesPayload(messages: [])))
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater.loadReplies_completion = nil
-        
+
+        // Clean message updater
+        env.messageUpdater.cleanUp()
+
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
-    func test_loadNextReplies_callsMessageUpdater_withCorrectValues() {
+
+    func test_loadNextReplies_callsMessageUpdater_withCorrectValues() throws {
+        // Simulate controller is in mid-page
+        try saveReplies(with: [.unique, .unique])
+        replyPaginationHandler.mockState.hasLoadedAllNextMessages = false
+
         // Simulate `loadNextReplies` call
         let afterMessageId: MessageId = .unique
         controller.loadNextReplies(after: afterMessageId)
-        
+
         // Assert message updater is called with correct values
         XCTAssertEqual(env.messageUpdater.loadReplies_cid, controller.cid)
         XCTAssertEqual(env.messageUpdater.loadReplies_messageId, messageId)
         XCTAssertEqual(env.messageUpdater.loadReplies_pagination, .init(pageSize: 25, parameter: .greaterThan(afterMessageId)))
+    }
+
+    func test_loadNextReplies_whenHasLoadedAllNextReplies_doesNotCallUpdater() throws {
+        // Simulate controller has loaded all next replies
+        try saveReplies(with: [.unique, .unique])
+        replyPaginationHandler.mockState.hasLoadedAllNextMessages = true
+
+        let exp = expectation(description: "load replies completes")
+        controller.loadNextReplies(after: "last message", limit: 2) { _ in
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadReplies_completion?(.success(.init(messages: [.dummy()])))
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.loadReplies_callCount, 0)
+    }
+
+    func test_loadNextReplies_whenIsLoadingNextReplies_doesNotCallUpdater() throws {
+        // Simulate controller is loading next replies
+        try saveReplies(with: [.unique, .unique])
+        replyPaginationHandler.mockState.hasLoadedAllNextMessages = false
+        replyPaginationHandler.mockState.isLoadingNextMessages = true
+
+        let exp = expectation(description: "load replies completes")
+        controller.loadNextReplies(after: "last message", limit: 2) { _ in
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadReplies_completion?(.success(.init(messages: [.dummy()])))
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.loadReplies_callCount, 0)
+    }
+
+    // MARK: - Load Page Around Reply Id
+
+    func test_loadPageAroundReplyId() {
+        let exp = expectation(description: "should load page around reply id")
+        let replyId = MessageId.unique
+        controller.loadPageAroundReplyId(replyId, limit: 5) { error in
+            XCTAssertNil(error)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadReplies_completion?(.success(.init(
+            messages: [.dummy(), .dummy(), .dummy()]
+        )))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        let expectedPagination = MessagesPagination(pageSize: 5, parameter: .around(replyId))
+        XCTAssertEqual(env.messageUpdater.loadReplies_callCount, 1)
+        XCTAssertEqual(env.messageUpdater.loadReplies_pagination, expectedPagination)
+    }
+
+    func test_loadPageAroundReplyId_whenError_shouldCompleteWithError() {
+        let exp = expectation(description: "should load page around reply id")
+        let replyId = MessageId.unique
+        controller.loadPageAroundReplyId(replyId, limit: 5) { error in
+            XCTAssertNotNil(error)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadReplies_completion?(.failure(NSError(domain: "dummy", code: 3)))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.loadReplies_callCount, 1)
+    }
+
+    func test_loadPageAroundReplyId_whenIsLoadingMiddleMessages_shouldNotLoadMoreReplies() {
+        // Simulate controller is loading middle messages
+        replyPaginationHandler.mockState.isLoadingMiddleMessages = true
+
+        let exp = expectation(description: "should load page around reply id")
+        let replyId = MessageId.unique
+        controller.loadPageAroundReplyId(replyId, limit: 5) { error in
+            XCTAssertNil(error)
+            exp.fulfill()
+        }
+
+        let oldestReply = MessagePayload.dummy()
+        let newestReply = MessagePayload.dummy()
+        env.messageUpdater.loadReplies_completion?(.success(.init(
+            messages: [oldestReply, .dummy(), newestReply]
+        )))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.loadReplies_callCount, 0)
+    }
+
+    // MARK: - Load first page
+
+    func test_loadFirstPage_loadsFirstPageOfReplies() throws {
+        let firstPage = MessagesPagination(pageSize: 25, parameter: nil)
+
+        let exp = expectation(description: "load first page completes")
+        controller.loadFirstPage() { error in
+            XCTAssertNil(error)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadReplies_completion?(.success(.init(messages: [.dummy()])))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        // Assert message updater is called with correct values
+        XCTAssertEqual(env.messageUpdater.loadReplies_cid, controller.cid)
+        XCTAssertEqual(env.messageUpdater.loadReplies_messageId, messageId)
+        XCTAssertEqual(env.messageUpdater.loadReplies_pagination, firstPage)
+    }
+
+    func test_loadFirstPage_whenError() throws {
+        let exp = expectation(description: "load first page completes")
+        nonisolated(unsafe) var expectedError: Error?
+        controller.loadFirstPage() { error in
+            expectedError = error
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadReplies_completion?(.failure(NSError(domain: "dummy", code: 3)))
+
+        waitForExpectations(timeout: defaultTimeout)
+
+        XCTAssertNotNil(expectedError)
     }
 
     // MARK: - Load Reactions
@@ -1228,7 +1696,7 @@ final class MessageController_Tests: XCTestCase {
             .sorted(by: { $0.updatedAt > $1.updatedAt })
 
         controller.startObserversIfNeeded()
-        
+
         XCTAssertEqual(controller.reactions.count, 20)
         XCTAssertEqual(
             controller.reactions.map(\.author).map(\.id),
@@ -1237,9 +1705,8 @@ final class MessageController_Tests: XCTestCase {
     }
 
     func test_loadReactions_propagatesError() {
-        var completionError: Error?
-        controller.loadReactions(limit: 25) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.loadReactions(limit: 25) {
             completionError = $0.error
         }
 
@@ -1252,9 +1719,8 @@ final class MessageController_Tests: XCTestCase {
     }
 
     func test_loadReactions_propagatesReactions() {
-        var completionCalled = false
-        controller.loadReactions(limit: 25) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionCalled = false
+        controller.loadReactions(limit: 25) {
             let reactions = try? $0.get()
             XCTAssertEqual(reactions!.count, 1)
             completionCalled = true
@@ -1303,8 +1769,6 @@ final class MessageController_Tests: XCTestCase {
         // This is required somehow to initialise the env.messageUpdater
         controller.loadNextReactions()
 
-        controller.callbackQueue = .main
-
         let exp = expectation(description: "should succeed load next reactions call")
 
         env.messageUpdater.loadReactions_result = .success([.mock(type: "like"), .mock(type: "like")])
@@ -1314,7 +1778,7 @@ final class MessageController_Tests: XCTestCase {
             exp.fulfill()
         }
 
-        wait(for: [exp], timeout: 0.5)
+        wait(for: [exp], timeout: defaultTimeout)
 
         XCTAssertEqual(controller.hasLoadedAllReactions, true)
     }
@@ -1322,8 +1786,6 @@ final class MessageController_Tests: XCTestCase {
     func test_loadNextReactions_whenResultHigherThanLimit_shouldNotSetLoadedAllReactions() {
         // This is required somehow to initialise the env.messageUpdater
         controller.loadNextReactions()
-
-        controller.callbackQueue = .main
 
         let exp = expectation(description: "should succeed load next reactions call")
 
@@ -1336,7 +1798,7 @@ final class MessageController_Tests: XCTestCase {
             exp.fulfill()
         }
 
-        wait(for: [exp], timeout: 0.5)
+        wait(for: [exp], timeout: defaultTimeout)
 
         XCTAssertEqual(controller.hasLoadedAllReactions, false)
     }
@@ -1346,6 +1808,7 @@ final class MessageController_Tests: XCTestCase {
 
         let mockedReactions = repeatElement(
             ChatMessageReaction(
+                id: .unique,
                 type: "likes",
                 score: 1,
                 createdAt: .unique,
@@ -1371,8 +1834,6 @@ final class MessageController_Tests: XCTestCase {
         // This is required somehow to initialise the env.messageUpdater
         controller.loadNextReactions()
 
-        controller.callbackQueue = .main
-
         let exp = expectation(description: "should succeed load next reactions call")
 
         let mockedReactions: [ChatMessageReaction] = [
@@ -1385,7 +1846,7 @@ final class MessageController_Tests: XCTestCase {
             exp.fulfill()
         }
 
-        wait(for: [exp], timeout: 0.5)
+        wait(for: [exp], timeout: defaultTimeout)
 
         XCTAssertEqual(controller.reactions.count, mockedReactions.count)
     }
@@ -1393,8 +1854,6 @@ final class MessageController_Tests: XCTestCase {
     func test_loadNextReactions_shouldNotAppendDuplicatedReactions() {
         // This is required somehow to initialise the env.messageUpdater
         controller.loadNextReactions()
-
-        controller.callbackQueue = .main
 
         let exp = expectation(description: "should succeed load next reactions call")
 
@@ -1417,16 +1876,15 @@ final class MessageController_Tests: XCTestCase {
             exp.fulfill()
         }
 
-        wait(for: [exp], timeout: 0.5)
+        wait(for: [exp], timeout: defaultTimeout)
 
         XCTAssertEqual(controller.reactions.count, 5)
     }
 
-    func test_loadNextReactions_shouldCallDelegateWhenReactionsChange() {
+    @MainActor func test_loadNextReactions_shouldCallDelegateWhenReactionsChange() {
         // This is required somehow to initialise the env.messageUpdater
         controller.loadNextReactions()
 
-        controller.callbackQueue = .main
         controller.state = .localDataFetched
 
         controller.reactions = [
@@ -1461,161 +1919,178 @@ final class MessageController_Tests: XCTestCase {
             exp.fulfill()
         }
 
-        wait(for: [exp], timeout: 0.5)
+        wait(for: [exp], timeout: defaultTimeout)
 
         XCTAssertEqual(controller.reactions.count, 5)
         XCTAssertEqual(testDelegate.callCount, 1)
     }
-    
+
     // MARK: - Add reaction
-    
+
     func test_addReaction_propagatesError() {
         // Simulate `addReaction` call and catch the completion.
-        var completionError: Error?
-        controller.addReaction(.init(rawValue: .unique)) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.addReaction(.init(rawValue: .unique)) {
             completionError = $0
         }
-        
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.messageUpdater.addReaction_completion!(networkError)
-        
+
         // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
     func test_addReaction_propagatesNilError() {
         // Simulate `addReaction` call and catch the completion.
-        var completionIsCalled = false
-        controller.addReaction(.init(rawValue: .unique)) { [callbackQueueID] error in
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.addReaction(.init(rawValue: .unique)) { error in
             // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
+            
             // Assert there is no error.
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.messageUpdater.addReaction_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater.addReaction_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_addReaction_callsUpdater_withCorrectValues() {
         let type: MessageReactionType = "like"
         let score = 5
         let enforceUnique = true
         let extraData: [String: RawJSON] = [:]
-        
-        // Simulate `addReaction` call.
-        controller.addReaction(type, score: score, enforceUnique: true, extraData: extraData)
-        
-        // Assert updater is called with correct `type`.
+        let skipPush = true
+        let pushEmojiCode = "👍"
+
+        controller.addReaction(
+            type,
+            score: score,
+            enforceUnique: true,
+            skipPush: skipPush,
+            pushEmojiCode: pushEmojiCode,
+            extraData: extraData
+        )
+
         XCTAssertEqual(env.messageUpdater.addReaction_type, type)
-        // Assert updater is called with correct `score`.
         XCTAssertEqual(env.messageUpdater.addReaction_score, score)
-        // Assert updater is called with correct `enforceUnique`.
         XCTAssertEqual(env.messageUpdater.addReaction_enforceUnique, enforceUnique)
-        // Assert updater is called with correct `extraData`.
         XCTAssertEqual(env.messageUpdater.addReaction_extraData, extraData)
-        // Assert updater is called with correct `messageId`.
+        XCTAssertEqual(env.messageUpdater.addReaction_skipPush, skipPush)
+        XCTAssertEqual(env.messageUpdater.addReaction_pushEmojiCode, pushEmojiCode)
         XCTAssertEqual(env.messageUpdater.addReaction_messageId, controller.messageId)
     }
-    
+
+    func test_addReaction_callsUpdater_withDefaultValue() {
+        let type: MessageReactionType = "like"
+
+        controller.addReaction(type)
+
+        XCTAssertEqual(env.messageUpdater.addReaction_type, type)
+        XCTAssertEqual(env.messageUpdater.addReaction_skipPush, false)
+        XCTAssertEqual(env.messageUpdater.addReaction_messageId, controller.messageId)
+        XCTAssertEqual(env.messageUpdater.addReaction_score, 1)
+        XCTAssertEqual(env.messageUpdater.addReaction_enforceUnique, false)
+        XCTAssertEqual(env.messageUpdater.addReaction_extraData, [:])
+        XCTAssertNil(env.messageUpdater.addReaction_pushEmojiCode)
+    }
+
     func test_addReaction_keepsControllerAlive() {
         // Simulate `addReaction` call.
         controller.addReaction(.init(rawValue: .unique))
-        
+
         // Create a weak ref and release a controller.
-        weak var weakController = controller
+        let weakController = { [weak controller] in controller }
         controller = nil
-        
+
         // Assert controller is kept alive.
-        AssertAsync.staysTrue(weakController != nil)
+        AssertAsync.staysTrue(weakController() != nil)
     }
-    
+
     // MARK: - Delete reaction
-    
+
     func test_deleteReaction_propagatesError() {
         // Simulate `deleteReaction` call and catch the completion.
-        var completionError: Error?
-        controller.deleteReaction(.init(rawValue: .unique)) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.deleteReaction(.init(rawValue: .unique)) {
             completionError = $0
         }
-        
+
         // Simulate network response with the error.
         let networkError = TestError()
         env.messageUpdater.deleteReaction_completion!(networkError)
-        
+
         // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, networkError)
     }
-    
+
     func test_deleteReaction_propagatesNilError() {
         // Simulate `deleteReaction` call and catch the completion.
-        var completionIsCalled = false
-        controller.deleteReaction(.init(rawValue: .unique)) { [callbackQueueID] error in
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.deleteReaction(.init(rawValue: .unique)) { error in
             // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
+            
             // Assert there is no error.
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
-        
+
         // Simulate successful network response.
         env.messageUpdater.deleteReaction_completion!(nil)
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater.deleteReaction_completion = nil
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
         // `weakController` should be deallocated too
         AssertAsync.canBeReleased(&weakController)
     }
-    
+
     func test_deleteReaction_callsUpdater_withCorrectValues() {
         let type: MessageReactionType = "like"
-        
+
         // Simulate `deleteReaction` call.
         controller.deleteReaction(type)
-        
+
         // Assert updater is called with correct `type`.
         XCTAssertEqual(env.messageUpdater.deleteReaction_type, type)
         // Assert updater is called with correct `messageId`.
         XCTAssertEqual(env.messageUpdater.deleteReaction_messageId, controller.messageId)
     }
-    
+
     func test_deleteReaction_keepsControllerAlive() {
         // Simulate `deleteReaction` call.
         controller.deleteReaction(.init(rawValue: .unique))
-        
+
         // Create a weak ref and release a controller.
-        weak var weakController = controller
+        let weakController = { [weak controller] in controller }
         controller = nil
-        
+
         // Assert controller is kept alive.
-        AssertAsync.staysTrue(weakController != nil)
+        AssertAsync.staysTrue(weakController() != nil)
     }
 
     // MARK: - Pinning message
@@ -1624,9 +2099,8 @@ final class MessageController_Tests: XCTestCase {
         let pinning = MessagePinning(expirationDate: .unique)
 
         // Simulate `pin` calls and catch the completion
-        var completionCalled = false
-        controller.pin(pinning) { [callbackQueueID] error in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionCalled = false
+        controller.pin(pinning) { error in
             XCTAssertNil(error)
             completionCalled = true
         }
@@ -1644,7 +2118,7 @@ final class MessageController_Tests: XCTestCase {
         XCTAssertEqual(env.messageUpdater?.pinMessage_pinning, pinning)
 
         // Simulate successful update
-        env.messageUpdater?.pinMessage_completion?(nil)
+        env.messageUpdater?.pinMessage_completion?(.success(.mock()))
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater!.pinMessage_completion = nil
 
@@ -1656,15 +2130,14 @@ final class MessageController_Tests: XCTestCase {
 
     func test_pinMessage_callsMessageUpdaterWithError() {
         // Simulate `pin` call and catch the completion
-        var completionCalledError: Error?
-        controller.pin(.noExpiration) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionCalledError: Error?
+        controller.pin(.noExpiration) {
             completionCalledError = $0
         }
 
         // Simulate failed update
         let testError = TestError()
-        env.messageUpdater!.pinMessage_completion?(testError)
+        env.messageUpdater!.pinMessage_completion?(.failure(testError))
 
         // Completion should be called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, testError)
@@ -1672,9 +2145,8 @@ final class MessageController_Tests: XCTestCase {
 
     func test_unpinMessage_callsMessageUpdater() throws {
         // Simulate `unpin` calls and catch the completion
-        var completionCalled = false
-        controller.unpin { [callbackQueueID] error in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionCalled = false
+        controller.unpin { error in
             XCTAssertNil(error)
             completionCalled = true
         }
@@ -1691,7 +2163,7 @@ final class MessageController_Tests: XCTestCase {
         XCTAssertEqual(env.messageUpdater?.unpinMessage_messageId, messageId)
 
         // Simulate successful update
-        env.messageUpdater?.unpinMessage_completion?(nil)
+        env.messageUpdater?.unpinMessage_completion?(.success(.mock()))
         // Release reference of completion so we can deallocate stuff
         env.messageUpdater!.unpinMessage_completion = nil
 
@@ -1703,15 +2175,14 @@ final class MessageController_Tests: XCTestCase {
 
     func test_unpinMessage_callsMessageUpdaterWithError() {
         // Simulate `unpin` call and catch the completion
-        var completionCalledError: Error?
-        controller.unpin { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionCalledError: Error?
+        controller.unpin {
             completionCalledError = $0
         }
 
         // Simulate failed update
         let testError = TestError()
-        env.messageUpdater!.unpinMessage_completion?(testError)
+        env.messageUpdater!.unpinMessage_completion?(.failure(testError))
 
         // Completion should be called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, testError)
@@ -1723,16 +2194,15 @@ final class MessageController_Tests: XCTestCase {
         let attachmentId: AttachmentId = .unique
 
         // Simulate `restartFailedAttachmentUploading` call and catch the completion
-        var completionCalled = false
-        controller.restartFailedAttachmentUploading(with: attachmentId) { [callbackQueueID] error in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionCalled = false
+        controller.restartFailedAttachmentUploading(with: attachmentId) { error in
             XCTAssertNil(error)
             completionCalled = true
         }
-        
+
         // Keep a weak ref so we can check if it's actually deallocated
         weak var weakController = controller
-        
+
         // (Try to) deallocate the controller
         // by not keeping any references to it
         controller = nil
@@ -1754,9 +2224,8 @@ final class MessageController_Tests: XCTestCase {
 
     func test_restartFailedAttachmentUploading_propagatesErrorFromUpdater() {
         // Simulate `restartFailedAttachmentUploading` call and catch the error.
-        var completionCalledError: Error?
-        controller.restartFailedAttachmentUploading(with: .unique) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionCalledError: Error?
+        controller.restartFailedAttachmentUploading(with: .unique) {
             completionCalledError = $0
         }
 
@@ -1772,9 +2241,8 @@ final class MessageController_Tests: XCTestCase {
 
     func test_resendMessage_propagatesError() {
         // Simulate `resend` call and catch the completion.
-        var completionError: Error?
-        controller.resendMessage { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.resendMessage {
             completionError = $0
         }
 
@@ -1788,10 +2256,10 @@ final class MessageController_Tests: XCTestCase {
 
     func test_resend_propagatesNilError() {
         // Simulate `resend` call and catch the completion.
-        var completionIsCalled = false
-        controller.resendMessage { [callbackQueueID] error in
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.resendMessage { error in
             // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
+            
             // Assert there is no error.
             XCTAssertNil(error)
             completionIsCalled = true
@@ -1817,20 +2285,19 @@ final class MessageController_Tests: XCTestCase {
         controller.resendMessage()
 
         // Create a weak ref and release a controller.
-        weak var weakController = controller
+        let weakController = { [weak controller] in controller }
         controller = nil
 
         // Assert controller is kept alive.
-        AssertAsync.staysTrue(weakController != nil)
+        AssertAsync.staysTrue(weakController() != nil)
     }
 
     // MARK: - Dispatch ephemeral message action
 
     func test_dispatchEphemeralMessageAction_propagatesError() {
         // Simulate `dispatchEphemeralMessageAction` call and catch the completion.
-        var completionError: Error?
-        controller.dispatchEphemeralMessageAction(.unique) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.dispatchEphemeralMessageAction(.unique) {
             completionError = $0
         }
 
@@ -1844,10 +2311,10 @@ final class MessageController_Tests: XCTestCase {
 
     func test_dispatchEphemeralMessageAction_propagatesNilError() {
         // Simulate `dispatchEphemeralMessageAction` call and catch the completion.
-        var completionIsCalled = false
-        controller.dispatchEphemeralMessageAction(.unique) { [callbackQueueID] error in
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.dispatchEphemeralMessageAction(.unique) { error in
             // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
+            
             // Assert there is no error.
             XCTAssertNil(error)
             completionIsCalled = true
@@ -1867,7 +2334,6 @@ final class MessageController_Tests: XCTestCase {
         controller.dispatchEphemeralMessageAction(action)
 
         // Assert updater is called with correct values.
-        XCTAssertEqual(env.messageUpdater.dispatchEphemeralMessageAction_cid, controller.cid)
         XCTAssertEqual(env.messageUpdater.dispatchEphemeralMessageAction_messageId, controller.messageId)
         XCTAssertEqual(env.messageUpdater.dispatchEphemeralMessageAction_action, action)
     }
@@ -1877,49 +2343,55 @@ final class MessageController_Tests: XCTestCase {
         controller.dispatchEphemeralMessageAction(.unique)
 
         // Create a weak ref and release a controller.
-        weak var weakController = controller
+        let weakController = { [weak controller] in controller }
         controller = nil
 
         // Assert controller is kept alive.
-        AssertAsync.staysTrue(weakController != nil)
+        AssertAsync.staysTrue(weakController() != nil)
     }
-    
+
     // MARK: - Translate message
-    
+
     func test_translate_propagatesError() {
         // Simulate `translate` call and catch the completion.
-        var completionError: Error?
-        controller.translate(to: .english) { [callbackQueueID] in
-            AssertTestQueue(withId: callbackQueueID)
+        nonisolated(unsafe) var completionError: Error?
+        controller.translate(to: .english) {
             completionError = $0
         }
-        
+
         // Simulate network response with the error.
         let updaterError = TestError()
-        env.messageUpdater.translate_completion!(updaterError)
-        
+        env.messageUpdater.translate_completion!(.failure(updaterError))
+
         // Assert error is propagated.
         AssertAsync.willBeEqual(completionError as? TestError, updaterError)
     }
-    
+
     func test_translate_propagatesNilError() {
         // Simulate `transate` call and catch the completion.
-        var completionIsCalled = false
-        controller.translate(to: .english) { [callbackQueueID] error in
+        nonisolated(unsafe) var completionIsCalled = false
+        controller.translate(to: .english) { error in
             // Assert callback queue is correct.
-            AssertTestQueue(withId: callbackQueueID)
+            
             // Assert there is no error.
             XCTAssertNil(error)
             completionIsCalled = true
         }
-        
+
         // Simulate successful updater call.
-        env.messageUpdater.translate_completion!(nil)
-        
+        let message = ChatMessage.mock(
+            id: .anonymous,
+            cid: .unique,
+            text: "Text",
+            author: ChatUser.mock(id: .anonymous),
+            pinDetails: nil
+        )
+        env.messageUpdater.translate_completion!(.success(message))
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionIsCalled)
     }
-    
+
     func test_translate_callsUpdater_withCorrectValues() {
         // Simulate `resendMessage` call.
         controller.translate(to: .english)
@@ -1927,17 +2399,374 @@ final class MessageController_Tests: XCTestCase {
         XCTAssertEqual(env.messageUpdater.translate_messageId, controller.messageId)
         XCTAssertEqual(env.messageUpdater.translate_language, .english)
     }
-    
+
     func test_translate_keepsControllerAlive() {
         // Simulate `resendMessage` call.
         controller.translate(to: .english)
-        
+
         // Create a weak ref and release a controller.
-        weak var weakController = controller
+        let weakController = { [weak controller] in controller }
         controller = nil
-        
+
         // Assert controller is kept alive.
-        AssertAsync.staysTrue(weakController != nil)
+        AssertAsync.staysTrue(weakController() != nil)
+    }
+
+    // MARK: - Mark thread read
+
+    func test_markThreadRead_whenSuccess() {
+        let exp = expectation(description: "mark read completion")
+        controller.markThreadRead() { error in
+            XCTAssertNil(error)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.markThreadRead_completion?(nil)
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.markThreadRead_callCount, 1)
+    }
+
+    func test_markThreadRead_whenFailure() {
+        let exp = expectation(description: "mark read completion")
+        controller.markThreadRead() { error in
+            XCTAssertNotNil(error)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.markThreadRead_completion?(TestError())
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.markThreadRead_callCount, 1)
+    }
+
+    // MARK: - Mark thread unread
+
+    func test_markThreadUnread_whenSuccess() {
+        let exp = expectation(description: "mark read completion")
+        controller.markThreadUnread() { error in
+            XCTAssertNil(error)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.markThreadUnread_completion?(nil)
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.markThreadUnread_callCount, 1)
+    }
+
+    func test_markThreadUnread_whenFailure() {
+        let exp = expectation(description: "mark read completion")
+        controller.markThreadUnread() { error in
+            XCTAssertNotNil(error)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.markThreadUnread_completion?(TestError())
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.markThreadUnread_callCount, 1)
+    }
+
+    // MARK: update thread
+
+    func test_updateThread_whenSuccess() {
+        let exp = expectation(description: "update thread completion")
+        controller.updateThread(
+            title: "New Title",
+            extraData: ["custom": "test"],
+            unsetProperties: ["prop"]
+        ) { result in
+            XCTAssertEqual(result.value?.title, "New Title")
+            exp.fulfill()
+        }
+
+        env.messageUpdater.updateThread_completion?(.success(.mock(title: "New Title")))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.updateThread_callCount, 1)
+        XCTAssertEqual(env.messageUpdater.updateThread_messageId, messageId)
+        XCTAssertEqual(env.messageUpdater.updateThread_request?.set?["title"], .string("New Title"))
+        XCTAssertEqual(env.messageUpdater.updateThread_request?.set?["custom"], .string("test"))
+        XCTAssertEqual(env.messageUpdater.updateThread_request?.unset, ["prop"])
+    }
+
+    func test_updateThread_whenFailure() {
+        let exp = expectation(description: "update thread completion")
+        controller.updateThread(
+            title: "New Title",
+            extraData: ["custom": "test"],
+            unsetProperties: ["prop"]
+        ) { result in
+            XCTAssertNotNil(result.error)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.updateThread_completion?(.failure(TestError()))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.updateThread_callCount, 1)
+    }
+
+    // MARK: load thread
+
+    func test_loadThread_whenSuccess() {
+        let exp = expectation(description: "load thread completion")
+        controller.loadThread(
+            replyLimit: 2,
+            participantLimit: 5,
+            memberLimit: 20
+        ) { result in
+            XCTAssertEqual(result.value?.parentMessageId, self.messageId)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadThread_completion?(.success(.mock(parentMessage: .mock(id: messageId))))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.loadThread_callCount, 1)
+        XCTAssertEqual(env.messageUpdater.loadThread_query?.messageId, messageId)
+        XCTAssertEqual(env.messageUpdater.loadThread_query?.watch, false)
+        XCTAssertEqual(env.messageUpdater.loadThread_query?.replyLimit, 2)
+        XCTAssertEqual(env.messageUpdater.loadThread_query?.participantLimit, 5)
+        XCTAssertEqual(env.messageUpdater.loadThread_query?.memberLimit, 20)
+    }
+
+    func test_loadThread_whenFailure() {
+        let exp = expectation(description: "load thread completion")
+        controller.loadThread(
+            replyLimit: 2,
+            participantLimit: 5
+        ) { result in
+            XCTAssertNotNil(result.error)
+            exp.fulfill()
+        }
+
+        env.messageUpdater.loadThread_completion?(.failure(TestError()))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        XCTAssertEqual(env.messageUpdater.loadThread_callCount, 1)
+    }
+
+    // MARK: Helpers
+
+    @discardableResult
+    private func saveReplies(with ids: [MessageId], channelPayload: ChannelPayload? = nil) throws -> [MessageDTO] {
+        let payloads: [MessagePayload] = ids.map {
+            MessagePayload.dummy(messageId: $0, parentId: self.messageId, cid: self.cid)
+        }
+
+        return try saveReplies(with: payloads, channelPayload: channelPayload)
+    }
+
+    @discardableResult
+    private func saveReplies(with payloads: [MessagePayload], channelPayload: ChannelPayload? = nil) throws -> [MessageDTO] {
+        nonisolated(unsafe) var replies: [MessageDTO] = []
+
+        try client.databaseContainer.writeSynchronously { session in
+            try session.saveChannel(payload: channelPayload ?? .dummy(channel: .dummy(cid: self.cid)))
+            let parentMessage = try session.saveMessage(
+                payload: .dummy(messageId: self.messageId, cid: self.cid),
+                syncOwnReactions: false,
+                cache: nil
+            )
+            replies = try payloads.compactMap { payload in
+                let reply = try session.saveMessage(
+                    payload: payload,
+                    syncOwnReactions: false,
+                    cache: nil
+                )
+                reply.showInsideThread = true
+                return reply
+            }
+            parentMessage.replies = Set(replies)
+        }
+
+        return replies
+    }
+
+    func waitForRepliesChange(count: Int) throws {
+        let delegate = try XCTUnwrap(controller.delegate as? TestDelegate)
+        let expectation = XCTestExpectation(description: "RepliesChange")
+        StreamConcurrency.onMain {
+            delegate.didChangeRepliesExpectation = expectation
+            delegate.didChangeRepliesExpectedCount = count
+            // The change may already have been delivered by the time we register (the observer's
+            // context merges synchronously, so a change can arrive during the triggering write).
+            // Fulfill immediately when the observed state already matches to avoid depending on
+            // callback timing.
+            if controller.replies.count == count {
+                delegate.didChangeRepliesExpectation = nil
+                expectation.fulfill()
+            }
+        }
+        wait(for: [expectation], timeout: defaultTimeout)
+    }
+
+    // MARK: - Update Message
+
+    func test_partialUpdateMessage_callsMessageUpdater_withCorrectValues() {
+        // Given
+        let text: String = .unique
+        let attachments = [AnyAttachmentPayload.mockFile]
+        let extraData: [String: RawJSON] = ["key": .string("value")]
+
+        // When
+        controller.partialUpdateMessage(text: text, attachments: attachments, extraData: extraData)
+
+        // Then
+        XCTAssertEqual(env.messageUpdater.updatePartialMessage_messageId, messageId)
+        XCTAssertEqual(env.messageUpdater.updatePartialMessage_text, text)
+        XCTAssertEqual(env.messageUpdater.updatePartialMessage_attachments, attachments)
+        XCTAssertEqual(env.messageUpdater.updatePartialMessage_extraData, extraData)
+    }
+
+    func test_partialUpdateMessage_propagatesError() {
+        // Given
+        let error = TestError()
+        nonisolated(unsafe) var completionError: Error?
+        
+        // When
+        let exp = expectation(description: "Completion is called")
+        controller.partialUpdateMessage(text: .unique) { result in
+            if case let .failure(error) = result {
+                completionError = error
+            }
+            exp.fulfill()
+        }
+        
+        env.messageUpdater.updatePartialMessage_completion?(.failure(error))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Then
+        XCTAssertEqual(completionError as? TestError, error)
+    }
+
+    func test_partialUpdateMessage_propagatesSuccess() {
+        // Given
+        nonisolated(unsafe) var completionMessage: ChatMessage?
+        
+        // When
+        let exp = expectation(description: "Completion is called")
+        controller.partialUpdateMessage(text: .unique) { result in
+            if case let .success(message) = result {
+                completionMessage = message
+            }
+            exp.fulfill()
+        }
+        
+        env.messageUpdater.updatePartialMessage_completion?(.success(.unique))
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Then
+        XCTAssertNotNil(completionMessage)
+    }
+
+    // MARK: - Stop Live Location Tests
+
+    func test_stopLiveLocationSharing_callsMessageUpdater_withCorrectValues() {
+        // Save message with live location
+        let latitude = 51.5074
+        let longitude = -0.1278
+        let sharedLocation = SharedLocation(
+            messageId: messageId,
+            channelId: .unique,
+            userId: .unique,
+            createdByDeviceId: .unique,
+            latitude: latitude,
+            longitude: longitude,
+            updatedAt: .unique,
+            createdAt: .unique,
+            endAt: .distantFuture
+        )
+        _ = controller.message
+        env.messageObserver.item_mock = .mock(
+            id: messageId,
+            sharedLocation: sharedLocation
+        )
+
+        // When
+        controller.stopLiveLocationSharing()
+
+        // Simulate
+        env.messageUpdater.stopLiveLocationSharing_completion?(.success(sharedLocation))
+
+        // Then
+        XCTAssertEqual(env.messageUpdater.stopLiveLocationSharing_messageId, messageId)
+    }
+
+    func test_stopLiveLocationSharing_whenNoLiveLocationAttachment_completesWithError() {
+        // Given
+        // Create a mock message without live location attachment
+        _ = controller.message
+        env.messageObserver.item_mock = .mock(
+            id: messageId,
+            sharedLocation: nil
+        )
+
+        // When
+        let exp = expectation(description: "stopLiveLocationSharing")
+        nonisolated(unsafe) var receivedError: Error?
+        controller.stopLiveLocationSharing { result in
+            if case let .failure(error) = result {
+                receivedError = error
+            }
+            exp.fulfill()
+        }
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Then
+        XCTAssertTrue(receivedError is ClientError.MessageDoesNotHaveLiveLocationAttachment)
+    }
+
+    func test_stopLiveLocationSharing_whenLiveLocationAlreadyStopped_completesWithError() {
+        // Given
+        let latitude = 51.5074
+        let longitude = -0.1278
+        let sharedLocation = SharedLocation(
+            messageId: messageId,
+            channelId: .unique,
+            userId: .unique,
+            createdByDeviceId: .unique,
+            latitude: latitude,
+            longitude: longitude,
+            updatedAt: .unique,
+            createdAt: .unique,
+            endAt: .distantPast
+        )
+
+        // Save message with live location
+        _ = controller.message
+        env.messageObserver.item_mock = .mock(
+            id: messageId,
+            sharedLocation: sharedLocation
+        )
+
+        // When
+        let exp = expectation(description: "stopLiveLocationSharing")
+        nonisolated(unsafe) var receivedError: Error?
+        controller.stopLiveLocationSharing { result in
+            if case let .failure(error) = result {
+                receivedError = error
+            }
+            exp.fulfill()
+        }
+
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Then
+        XCTAssertTrue(receivedError is ClientError.MessageLiveLocationAlreadyStopped)
     }
 }
 
@@ -1945,21 +2774,31 @@ private class TestDelegate: QueueAwareDelegate, ChatMessageControllerDelegate {
     @Atomic var state: DataController.State?
     @Atomic var didChangeMessage_change: EntityChange<ChatMessage>?
     @Atomic var didChangeReplies_changes: [ListChange<ChatMessage>] = []
+    @Atomic var didChangeRepliesCount = 0
     @Atomic var didChangeReactions_reactions: [ChatMessageReaction] = []
+    @Atomic var didChangeRepliesExpectation: XCTestExpectation?
+    @Atomic var didChangeRepliesExpectedCount = 0
     
     func controller(_ controller: DataController, didChangeState state: DataController.State) {
         self.state = state
         validateQueue()
     }
-    
+
     func messageController(_ controller: ChatMessageController, didChangeMessage change: EntityChange<ChatMessage>) {
         didChangeMessage_change = change
         validateQueue()
     }
-    
+
     func messageController(_ controller: ChatMessageController, didChangeReplies changes: [ListChange<ChatMessage>]) {
         didChangeReplies_changes = changes
+        _didChangeRepliesCount.mutate { $0 += 1 }
         validateQueue()
+        DispatchQueue.main.async {
+            guard let didChangeRepliesExpectation = self.didChangeRepliesExpectation else { return }
+            guard self.didChangeRepliesExpectedCount == controller.replies.count else { return }
+            didChangeRepliesExpectation.fulfill()
+            self.didChangeRepliesExpectation = nil
+        }
     }
 
     func messageController(_ controller: ChatMessageController, didChangeReactions reactions: [ChatMessageReaction]) {
@@ -1969,21 +2808,33 @@ private class TestDelegate: QueueAwareDelegate, ChatMessageControllerDelegate {
 }
 
 private class TestEnvironment {
+    var replyMessagesPaginationStateHandler: MessagesPaginationStateHandler_Mock!
     var messageUpdater: MessageUpdater_Mock!
-    var messageObserver: EntityDatabaseObserver_Mock<ChatMessage, MessageDTO>!
-    var repliesObserver: ListDatabaseObserver_Mock<ChatMessage, MessageDTO>!
+    var messageObserver: BackgroundEntityDatabaseObserver_Mock<ChatMessage, MessageDTO>!
+    var repliesObserver: BackgroundListDatabaseObserver_Mock<ChatMessage, MessageDTO>!
 
     var messageObserver_synchronizeError: Error?
-    
+
     lazy var controllerEnvironment: ChatMessageController
         .Environment = .init(
             messageObserverBuilder: { [unowned self] in
-                self.messageObserver = .init(context: $0, fetchRequest: $1, itemCreator: $2, fetchedResultsControllerType: $3)
+                self.messageObserver = .init(
+                    database: $0,
+                    fetchRequest: $1,
+                    itemCreator: $2,
+                    fetchedResultsControllerType: $3
+                )
                 self.messageObserver.synchronizeError = self.messageObserver_synchronizeError
                 return self.messageObserver!
             },
             repliesObserverBuilder: { [unowned self] in
-                self.repliesObserver = .init(context: $0, fetchRequest: $1, itemCreator: $2, fetchedResultsControllerType: $3)
+                self.repliesObserver = .init(
+                    database: $0,
+                    fetchRequest: $1,
+                    itemCreator: $2,
+                    itemReuseKeyPaths: (\ChatMessage.id, \MessageDTO.id),
+                    fetchedResultsControllerType: $3
+                )
                 return self.repliesObserver!
             },
             messageUpdaterBuilder: { [unowned self] in

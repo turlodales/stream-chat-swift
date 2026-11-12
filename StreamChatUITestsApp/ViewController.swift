@@ -1,16 +1,16 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
-import UIKit
 import StreamChat
 import StreamChatUI
+import UIKit
 
 var settings = Settings()
+var loggedInUserCredentials = UserCredentials.default
 
 final class ViewController: UIViewController {
-
-    var streamChat = StreamChatWrapper()
+    var streamChat = StreamChatWrapper.shared
 
     var channelController: ChatChannelController?
     var router: CustomChannelListRouter?
@@ -26,6 +26,8 @@ final class ViewController: UIViewController {
         stackView.distribution = .fillProportionally
         stackView.translatesAutoresizingMaskIntoConstraints = false
         stackView.addArrangedSubview(createStartButton())
+        stackView.addArrangedSubview(createStartAsSecondUserButton())
+        stackView.addArrangedSubview(createConnectGuestButton())
         view.addSubview(stackView)
         NSLayoutConstraint.activate([
             stackView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -34,24 +36,62 @@ final class ViewController: UIViewController {
     }
 
     @objc func didTap() {
-        // Setup chat client
-        streamChat.setupChatClient(with: .default)
+        loggedInUserCredentials = .default
+        startChat()
+    }
 
+    @objc func didTapStartAsSecondUser() {
+        loggedInUserCredentials = .hanSolo
+        startChat()
+    }
+
+    private func startChat() {
+        // Setup chat client
+        streamChat.setUpChat()
+        #if TESTS
+        if PerformanceFixture.isEnabled {
+            PerformanceFixture.install(currentUserId: loggedInUserCredentials.id)
+        }
+        #endif
+        streamChat.connectUser(completion: { _ in })
+        showChannelList()
+        #if TESTS
+        if PerformanceFixture.isEnabled {
+            router?.showChannel(for: PerformanceFixture.cid)
+        }
+        #endif
+    }
+
+    @objc func didTapConnectGuest() {
+        // Setup chat client
+        streamChat.setUpChat()
+        streamChat.connectGuestUser(completion: { _ in })
+        showChannelList()
+    }
+
+    private func showChannelList() {
         // create UI
         let channelList = streamChat.makeChannelListViewController()
         router = channelList.router as? CustomChannelListRouter
 
-        router?.onChannelListViewWillAppear = { [weak self] channelListVC in
-            channelListVC.navigationItem.titleView = self?.createIsConnectedSwitchIfNeeded()
+        // create connection switch if needed
+        let switchControl = createIsConnectedSwitchIfNeeded()
+
+        router?.onChannelListViewWillAppear = { channelListVC in
+            var rightBarButtonItems = [self.createThreadListButton()]
+            // show connection switch if needed
+            if let sw = switchControl {
+                rightBarButtonItems.append(UIBarButtonItem(customView: sw))
+            }
+            channelListVC.navigationItem.rightBarButtonItems = rightBarButtonItems
         }
         router?.onChannelViewWillAppear = { [weak self] channelVC in
             guard let self = self else { return }
             self.channelController = channelVC.channelController
 
             // show connection switch if needed
-            let switchControl = self.createIsConnectedSwitchIfNeeded()
-            if let switchControl = switchControl {
-                channelVC.navigationItem.titleView = switchControl
+            if let sw = switchControl {
+                channelVC.navigationItem.rightBarButtonItems?.append(UIBarButtonItem(customView: sw))
             }
 
             // Show debug button on the right side
@@ -69,7 +109,10 @@ final class ViewController: UIViewController {
 
         // pops when tapped on user icon
         router?.onLeave = { [weak self] in
-            self?.navigationController?.popViewController(animated: true)
+            // Pop only once logout has cleared the local storage, so the next login can't race it.
+            self?.streamChat.client?.logout {
+                self?.navigationController?.popViewController(animated: true)
+            }
         }
     }
 
@@ -78,7 +121,7 @@ final class ViewController: UIViewController {
             return
         }
 
-        self.messageListRouter = router
+        messageListRouter = router
         messageListRouter?.onThreadViewWillAppear = { [weak self] threadVC in
             guard let self = self else { return }
             threadVC.navigationItem.rightBarButtonItem = self.createDebugButton()
@@ -101,24 +144,31 @@ final class ViewController: UIViewController {
         streamChat.mockConnection(isConnected: settings.isConnected.isOn)
     }
 
+    @objc func showThreadList() {
+        guard let client = streamChat.client else { return }
+        let threadListVC = ChatThreadListVC(
+            threadListController: client.threadListController(query: ThreadListQuery(watch: true)),
+            eventsController: client.eventsController()
+        )
+        navigationController?.pushViewController(threadListVC, animated: true)
+    }
+
     @objc func showDebugMenu() {
         if let controller = channelController {
             DebugMenu.shared.showMenu(in: self, channelController: controller)
         }
     }
-
 }
 
 // MARK: UI Components
 
 extension ViewController {
-
     func createIsConnectedSwitchIfNeeded() -> UISwitch? {
         guard settings.showsConnectivity.isOn else { return nil }
         let sw = UISwitch()
         sw.isOn = settings.isConnected.isOn
         sw.accessibilityIdentifier = settings.isConnected.setting.rawValue
-        sw.addTarget(self, action: #selector(self.valueChanged(_:)), for: .valueChanged)
+        sw.addTarget(self, action: #selector(valueChanged(_:)), for: .valueChanged)
 
         return sw
     }
@@ -154,15 +204,119 @@ extension ViewController {
         return startButton
     }
 
+    func createStartAsSecondUserButton() -> UIButton {
+        let startButton = UIButton(type: .system)
+        startButton.translatesAutoresizingMaskIntoConstraints = false
+        startButton.setTitle("Start Chat as Han Solo", for: .normal)
+        startButton.accessibilityIdentifier = "TestApp.StartAsSecondUser"
+        startButton.addTarget(self, action: #selector(didTapStartAsSecondUser), for: .touchUpInside)
+        return startButton
+    }
+
+    func createConnectGuestButton() -> UIButton {
+        let startButton = UIButton(type: .system)
+        startButton.translatesAutoresizingMaskIntoConstraints = false
+        startButton.setTitle("Connect Guest", for: .normal)
+        startButton.accessibilityIdentifier = "TestApp.ConnectGuest"
+        startButton.addTarget(self, action: #selector(didTapConnectGuest), for: .touchUpInside)
+        return startButton
+    }
+
+    func createThreadListButton() -> UIBarButtonItem {
+        let item = UIBarButtonItem(
+            image: UIImage(systemName: "text.bubble"),
+            style: .plain,
+            target: self,
+            action: #selector(showThreadList)
+        )
+        item.accessibilityIdentifier = "ThreadListButton"
+        item.accessibilityLabel = "Threads"
+        return item
+    }
+
     func createDebugButton() -> UIBarButtonItem {
         let item = UIBarButtonItem(
             image: UIImage(named: "pencil")!,
             style: .plain,
             target: self,
-            action: #selector(self.showDebugMenu)
+            action: #selector(showDebugMenu)
         )
         item.accessibilityIdentifier = "debug"
         return item
     }
+}
 
+extension StreamChatWrapper {
+    func connectUser(completion: @escaping @Sendable (Error?) -> Void) {
+        let userCredentials = loggedInUserCredentials
+        let tokenProvider = mockTokenProvider(for: userCredentials)
+        client?.connectUser(
+            userInfo: userCredentials.userInfo,
+            tokenProvider: tokenProvider,
+            completion: completion
+        )
+    }
+
+    func connectGuestUser(completion: @escaping @Sendable (Error?) -> Void) {
+        client?.connectGuestUser(
+            userInfo: .init(id: "123"),
+            completion: completion
+        )
+    }
+
+    func mockTokenProvider(for userCredentials: UserCredentials) -> TokenProvider {
+        { completion in
+            if ProcessInfo.processInfo.arguments.contains("MOCK_JWT") {
+                let port = ProcessInfo.processInfo.environment["MOCK_SERVER_PORT"]!
+                let urlString = "http://localhost:\(port)/jwt/get?platform=ios"
+                guard let url = URL(string: urlString) else { return }
+
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+
+                URLSession.shared.dataTask(with: request) { result in
+                    switch result {
+                    case .success((_, let data)):
+                        guard let body = String(data: data, encoding: .utf8) else { return }
+                        let generatedToken = Token(stringLiteral: body)
+                        completion(.success(generatedToken))
+                    case .failure(let error):
+                        completion(.failure(error))
+                    }
+                }
+                .resume()
+            } else {
+                completion(.success(userCredentials.token))
+            }
+        }
+    }
+}
+
+extension URLSession {
+    enum HTTPError: Error {
+        case transportError(Error)
+        case serverSideError(Int)
+    }
+
+    typealias DataTaskResult = Result<(HTTPURLResponse, Data), Error>
+
+    func dataTask(with request: URLRequest, completionHandler: @escaping (DataTaskResult) -> Void) -> URLSessionDataTask {
+        dataTask(with: request) { (data, response, error) in
+            if let error = error {
+                completionHandler(Result.failure(HTTPError.transportError(error)))
+                return
+            }
+
+            guard let response = response as? HTTPURLResponse else { return }
+
+            guard (200...299).contains(response.statusCode) else {
+                completionHandler(Result.failure(HTTPError.serverSideError(response.statusCode)))
+                return
+            }
+
+            guard let data = data else { return }
+
+            completionHandler(Result.success((response, data)))
+        }
+    }
 }

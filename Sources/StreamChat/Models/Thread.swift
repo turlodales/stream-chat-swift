@@ -1,0 +1,94 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+/// A type representing a thread. `ChatThread` is an immutable snapshot of a thread entity at the given time.
+public final class ChatThread: Identifiable, Sendable {
+    public var id: MessageId { parentMessageId }
+    /// The id of the message which created the thread. It is also the id of the thread.
+    public let parentMessageId: MessageId
+    /// The parent message which is the root of this thread.
+    public let parentMessage: ChatMessage
+    /// The channel which this thread belongs to.
+    public let channel: ChatChannel
+    /// The user who created the thread.
+    public let createdBy: ChatUser
+    /// The number of replies in the thread.
+    public let replyCount: Int
+    /// The number of participants in the thread.
+    public let participantCount: Int
+    /// The number of active participants in the thread.
+    public let activeParticipantCount: Int
+    /// The participants in the thread.
+    public let threadParticipants: [ThreadParticipant]
+    /// The date of the last (newest) message in the thread.
+    public let lastMessageAt: Date?
+    /// The date when the thread was created.
+    public let createdAt: Date
+    /// The last date when the thread was updated.
+    public let updatedAt: Date?
+    /// The title of the thread.
+    public let title: String?
+    /// The latest replies of the thread.
+    public let latestReplies: [ChatMessage]
+    /// The reads information of the thread.
+    public let reads: [ThreadRead]
+    /// The custom data of the thread.
+    public let extraData: [String: RawJSON]
+
+    init(
+        parentMessageId: MessageId,
+        parentMessage: ChatMessage,
+        channel: ChatChannel,
+        createdBy: ChatUser,
+        replyCount: Int,
+        participantCount: Int,
+        activeParticipantCount: Int,
+        threadParticipants: [ThreadParticipant],
+        lastMessageAt: Date?,
+        createdAt: Date,
+        updatedAt: Date?,
+        title: String?,
+        latestReplies: [ChatMessage],
+        reads: [ThreadRead],
+        extraData: [String: RawJSON]
+    ) {
+        self.parentMessageId = parentMessageId
+        self.parentMessage = parentMessage
+        self.channel = channel
+        self.createdBy = createdBy
+        self.replyCount = replyCount
+        self.participantCount = participantCount
+        self.activeParticipantCount = activeParticipantCount
+        self.threadParticipants = threadParticipants
+        self.lastMessageAt = lastMessageAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.title = title
+        self.latestReplies = latestReplies
+        self.reads = reads
+        self.extraData = extraData
+    }
+}
+
+extension ChatThread: Hashable {
+    public static func == (lhs: ChatThread, rhs: ChatThread) -> Bool {
+        lhs.parentMessageId == rhs.parentMessageId &&
+            lhs.updatedAt == rhs.updatedAt &&
+            lhs.title == rhs.title &&
+            lhs.reads == rhs.reads &&
+            lhs.latestReplies == rhs.latestReplies &&
+            lhs.lastMessageAt == rhs.lastMessageAt &&
+            lhs.channel == rhs.channel &&
+            lhs.participantCount == rhs.participantCount &&
+            lhs.replyCount == rhs.replyCount &&
+            lhs.threadParticipants == rhs.threadParticipants &&
+            lhs.extraData == rhs.extraData
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(parentMessageId)
+    }
+}

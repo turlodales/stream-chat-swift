@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -10,21 +10,21 @@ final class UserUpdater_Tests: XCTestCase {
     var webSocketClient: WebSocketClient_Mock!
     var apiClient: APIClient_Spy!
     var database: DatabaseContainer_Spy!
-    
+
     var userUpdater: UserUpdater!
-    
+
     // MARK: Setup
-    
+
     override func setUp() {
         super.setUp()
-        
+
         webSocketClient = WebSocketClient_Mock()
         apiClient = APIClient_Spy()
         database = DatabaseContainer_Spy()
-        
+
         userUpdater = .init(database: database, apiClient: apiClient)
     }
-    
+
     override func tearDown() {
         apiClient.cleanUp()
 
@@ -34,10 +34,10 @@ final class UserUpdater_Tests: XCTestCase {
             Assert.canBeReleased(&apiClient)
             Assert.canBeReleased(&database)
         }
-        
+
         super.tearDown()
     }
-        
+
     // MARK: - Mute user
 
     func test_muteUser_makesCorrectAPICall() {
@@ -47,12 +47,14 @@ final class UserUpdater_Tests: XCTestCase {
         userUpdater.muteUser(userId)
 
         // Assert correct endpoint is called
-        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(.muteUser(userId)))
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(.mute(muteRequest: .init(targetIds: [userId]))))
     }
 
-    func test_muteUser_propagatesSuccessfulResponse() {
+    func test_muteUser_propagatesSuccessfulResponse() throws {
+        try database.createCurrentUser(id: .unique)
+
         // Simulate `muteUser` call
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         userUpdater.muteUser(.unique) { error in
             XCTAssertNil(error)
             completionCalled = true
@@ -62,7 +64,7 @@ final class UserUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<MuteResponse, Error>.success(.init()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
@@ -70,19 +72,83 @@ final class UserUpdater_Tests: XCTestCase {
 
     func test_muteUser_propagatesError() {
         // Simulate `muteUser` call
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         userUpdater.muteUser(.unique) {
             completionCalledError = $0
         }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<MuteResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
+    func test_muteUser_savesMutedUsersToDatabase() throws {
+        let currentUserId: UserId = .unique
+        let mutedUserId: UserId = .unique
+        try database.createCurrentUser(id: currentUserId)
+
+        // Mock the API response with the created mute
+        apiClient.test_mockResponseResult(
+            Result<MuteResponse, Error>.success(
+                .init(mutes: [.dummy(userId: mutedUserId)])
+            )
+        )
+
+        // Simulate `muteUser` call
+        let error = try waitFor { userUpdater.muteUser(mutedUserId, completion: $0) }
+        XCTAssertNil(error)
+
+        // Assert the muted user is saved to the database
+        let mutedUserIds = try database.readSynchronously { $0.currentUser?.mutedUsers.map(\.id) }
+        XCTAssertEqual(mutedUserIds, [mutedUserId])
+    }
+
+    func test_muteUser_whenResponseContainsOwnUserOnly_savesMutedUsersToDatabase() throws {
+        let currentUserId: UserId = .unique
+        let mutedUserId: UserId = .unique
+        try database.createCurrentUser(id: currentUserId)
+
+        // Mock the API response where the mute already existed, therefore only `own_user` carries it
+        apiClient.test_mockResponseResult(
+            Result<MuteResponse, Error>.success(
+                .init(
+                    mutes: nil,
+                    ownUser: .dummy(
+                        userId: currentUserId,
+                        role: .user,
+                        mutedUsers: [.dummy(userId: mutedUserId)]
+                    )
+                )
+            )
+        )
+
+        // Simulate `muteUser` call
+        let error = try waitFor { userUpdater.muteUser(mutedUserId, completion: $0) }
+        XCTAssertNil(error)
+
+        // Assert the muted user is saved to the database
+        let mutedUserIds = try database.readSynchronously { $0.currentUser?.mutedUsers.map(\.id) }
+        XCTAssertEqual(mutedUserIds, [mutedUserId])
+    }
+
+    func test_muteUser_whenDatabaseWriteFails_propagatesError() throws {
+        // Mock the API response with the created mute
+        apiClient.test_mockResponseResult(
+            Result<MuteResponse, Error>.success(
+                .init(mutes: [.dummy(userId: .unique)])
+            )
+        )
+
+        // Simulate `muteUser` call without a current user in the database
+        let error = try waitFor { userUpdater.muteUser(.unique, completion: $0) }
+
+        // Assert the database error is propagated
+        XCTAssertTrue(error is ClientError.CurrentUserDoesNotExist)
+    }
+
     // MARK: - Unmute user
 
     func test_unmuteUser_makesCorrectAPICall() {
@@ -92,12 +158,12 @@ final class UserUpdater_Tests: XCTestCase {
         userUpdater.unmuteUser(userId)
 
         // Assert correct endpoint is called
-        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(.unmuteUser(userId)))
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(.unmute(unmuteRequest: .init(targetIds: [userId]))))
     }
 
     func test_unmuteUser_propagatesSuccessfulResponse() {
         // Simulate `muteUser` call
-        var completionCalled = false
+        nonisolated(unsafe) var completionCalled = false
         userUpdater.unmuteUser(.unique) { error in
             XCTAssertNil(error)
             completionCalled = true
@@ -107,7 +173,7 @@ final class UserUpdater_Tests: XCTestCase {
         XCTAssertFalse(completionCalled)
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.success(.init()))
+        apiClient.test_simulateResponse(Result<UnmuteUsersResponse, Error>.success(.init()))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
@@ -115,71 +181,75 @@ final class UserUpdater_Tests: XCTestCase {
 
     func test_unmuteUser_propagatesError() {
         // Simulate `muteUser` call
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         userUpdater.unmuteUser(.unique) {
             completionCalledError = $0
         }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<UnmuteUsersResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
-    
+
     // TODO: - Load user
-    
+
     func test_loadUser_sendCorrectAPICall() {
         let userId: UserId = .unique
-        
+
         // Simulate `loadUser(_ userId:)` call.
         userUpdater.loadUser(userId)
 
         // Assert correct endpoint is called.
-        let expectedEndpoint: Endpoint<UserListPayload> = .users(query: .user(withID: userId))
+        let query = UserListQuery.user(withID: userId)
+        let expectedEndpoint: Endpoint<UserListPayload> = .queryUsers(
+            payload: query.asQueryUsersPayload(),
+            requiresConnectionId: query.options.contains(.presence)
+        )
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
     }
-    
+
     func test_loadUser_propogatesNetworkError() {
         // Simulate `loadUser(_ userId:)` call.
-        var completionError: Error?
+        nonisolated(unsafe) var completionError: Error?
         userUpdater.loadUser(.unique) {
             completionError = $0
         }
-        
+
         // Simulate API response with failure
         let error = TestError()
         apiClient.test_simulateResponse(Result<UserListPayload, Error>.failure(error))
-        
+
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionError as? TestError, error)
     }
-    
+
     func test_loadUser_propogatesUserDoesNotExistError() {
         // Simulate `loadUser(_ userId:)` call.
-        var completionError: Error?
+        nonisolated(unsafe) var completionError: Error?
         userUpdater.loadUser(.unique) {
             completionError = $0
         }
-        
+
         // Simulate API response with empty users list
         let response = Result<UserListPayload, Error>.success(.init(users: []))
         apiClient.test_simulateResponse(response)
-        
+
         // Assert the `UserDoesNotExist` is received
         AssertAsync.willBeTrue(completionError is ClientError.UserDoesNotExist)
     }
-    
+
     func test_loadUser_propogatesUnexpectedError_ifMultipleUsersCome() {
         let userId: UserId = .unique
-        
+
         // Simulate `loadUser(_ userId:)` call.
-        var completionError: Error?
+        nonisolated(unsafe) var completionError: Error?
         userUpdater.loadUser(userId) {
             completionError = $0
         }
-        
+
         // Simulate API response with multiple users
         let response = Result<UserListPayload, Error>.success(.init(users: [
             .dummy(userId: userId),
@@ -187,12 +257,12 @@ final class UserUpdater_Tests: XCTestCase {
             .dummy(userId: userId)
         ]))
         apiClient.test_simulateResponse(response)
-        
+
         // Load the user
         var loadedUser: UserDTO? {
             database.viewContext.user(id: userId)
         }
-        
+
         AssertAsync {
             // Assert `Unexpected` error is received
             Assert.willBeTrue(completionError is ClientError.Unexpected)
@@ -200,133 +270,115 @@ final class UserUpdater_Tests: XCTestCase {
             Assert.staysTrue(loadedUser == nil)
         }
     }
-    
+
     func test_loadUser_propogatesDatabaseError() {
         let databaseError = TestError()
         database.write_errorResponse = databaseError
-        
+
         // Simulate `loadUser(_ userId:)` call.
-        var completionError: Error?
+        nonisolated(unsafe) var completionError: Error?
         userUpdater.loadUser(.unique) {
             completionError = $0
         }
-        
+
         // Simulate API response with one user
-        let userPayload = UserPayload.dummy(userId: .unique)
+        let userPayload = FullUserResponse.dummy(userId: .unique)
         let response = Result<UserListPayload, Error>.success(.init(users: [userPayload]))
         apiClient.test_simulateResponse(response)
-        
-        // Assert the database error is propogated
+
+        // Assert the database error is propagated
         AssertAsync.willBeEqual(completionError as? TestError, databaseError)
     }
-    
+
     func test_loadUser_savesReceivedUserToDatabase() {
         // Simulate `loadUser(_ userId:)` call.
-        var completionIsCalled = false
+        nonisolated(unsafe) var completionIsCalled = false
         userUpdater.loadUser(.unique) { _ in
             completionIsCalled = true
         }
-        
+
         // Simulate API response with empty users list
-        let userPayload = UserPayload.dummy(userId: .unique)
+        let userPayload = FullUserResponse.dummy(userId: .unique)
         let response = Result<UserListPayload, Error>.success(.init(users: [userPayload]))
         apiClient.test_simulateResponse(response)
-        
+
         AssertAsync.willBeTrue(completionIsCalled)
-        
+
         // Load the user
         var user: UserDTO? {
             database.viewContext.user(id: userPayload.id)
         }
-        
+
         AssertAsync {
             // Assert the user is saved to the database
             Assert.willBeEqual(user?.id, userPayload.id)
         }
     }
-    
+
     // MARK: - Flag user
 
     func test_flagUser_makesCorrectAPICall() {
-        let cases = [
-            (true, UserId.unique),
-            (false, UserId.unique)
-        ]
-        
-        for (flag, userId) in cases {
-            // Simulate `flagUser` call.
-            userUpdater.flagUser(flag, with: userId)
-            
-            // Assert correct endpoint is called.
-            let expectedEndpoint: Endpoint<FlagUserPayload> = .flagUser(flag, with: userId)
-            XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
-        }
+        let userId = UserId.unique
+        let reason = String.unique
+        let extraData = ["a": RawJSON.string("1")]
+
+        // Simulate `flagUser` call.
+        userUpdater.flagUser(true, with: userId, reason: reason, extraData: extraData)
+
+        // Assert correct endpoint is called.
+        let expectedEndpoint: Endpoint<EmptyResponse> = .flag(flagRequest: .init(userId: userId, reason: reason, custom: extraData))
+        XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
     }
-    
+
+    func test_unflagUser_doesNotMakeAPICall() {
+        // Simulate `flagUser` call with `flag` set to false.
+        userUpdater.flagUser(false, with: .unique)
+
+        // Assert no API call is made because unflagging is not supported.
+        XCTAssertNil(apiClient.request_endpoint)
+    }
+
     func test_flagUser_updatesFlaggedUserList() throws {
         let currentUserId: UserId = .unique
         let flaggedUserId: UserId = .unique
 
         // Create current user in the database.
         try database.createCurrentUser(id: currentUserId)
-        
-        // Simulate `flagUser` call.
-        var flagCompletionCalled = false
-        userUpdater.flagUser(true, with: flaggedUserId) { error in
-            XCTAssertNil(error)
-            flagCompletionCalled = true
-        }
-        
+        try database.createUser(id: flaggedUserId)
+
         // Simulate `flagUser` API response with success.
-        let payload = FlagUserPayload(
-            currentUser: .dummy(userId: currentUserId, role: .user),
-            flaggedUser: .dummy(userId: flaggedUserId)
-        )
-        apiClient.test_simulateResponse(.success(payload))
-        
-        AssertAsync.willBeTrue(flagCompletionCalled)
-        
-        // Load current user
-        let currentUser = database.viewContext.currentUser
-        // Load flagged user
-        var user: UserDTO? {
-            database.viewContext.user(id: flaggedUserId)
-        }
-        
+        let payload = EmptyResponse()
+        apiClient.test_mockResponseResult(.success(payload))
+
+        // Simulate `flagUser` call.
+        let flagError = try waitFor { userUpdater.flagUser(true, with: flaggedUserId, reason: nil, extraData: nil, completion: $0) }
+        XCTAssertNil(flagError)
+
         // Assert flagged user exists in the database, and current user has it as flagged.
-        AssertAsync {
-            Assert.willBeTrue(user != nil)
-            Assert.willBeEqual(currentUser?.flaggedUsers ?? [], [user])
-        }
-        
+        let flaggedUserIds = try database.readSynchronously { $0.currentUser?.flaggedUsers.map(\.id) }
+        XCTAssertEqual(flaggedUserIds, [flaggedUserId])
+
         // Simulate `unflagUser` call.
-        var unflagCompletionCalled = false
-        userUpdater.flagUser(false, with: flaggedUserId) { error in
-            XCTAssertNil(error)
-            unflagCompletionCalled = true
-        }
-        
-        // Simulate `unflagUser` API response with success.
-        apiClient.test_simulateResponse(.success(payload))
-        
+        // unflag is local change only, backend does not support unflagging users
+        let unflagError = try waitFor { userUpdater.flagUser(false, with: flaggedUserId, reason: nil, extraData: nil, completion: $0) }
+        XCTAssertNil(unflagError)
+
         // Assert user is not a member of `flaggedUsers`.
-        AssertAsync {
-            Assert.willBeEqual(currentUser?.flaggedUsers, [])
-            Assert.willBeTrue(unflagCompletionCalled)
-        }
+        let flaggedUserIdsAfterUnflag = try database.readSynchronously { $0.currentUser?.flaggedUsers.map(\.id) }
+        XCTAssertEqual(flaggedUserIdsAfterUnflag, [])
     }
 
     func test_flagUser_propagatesNetworkError() {
         // Simulate `flagUser` call.
-        var completionCalledError: Error?
-        userUpdater.flagUser(true, with: .unique) {
+        nonisolated(unsafe) var completionCalledError: Error?
+        userUpdater.flagUser(true, with: .unique, reason: nil, extraData: nil) {
             completionCalledError = $0
         }
-        
+
         // Simulate API response with failure.
         let error = TestError()
-        apiClient.test_simulateResponse(Result<FlagUserPayload, Error>.failure(error))
-        
+        apiClient.test_simulateResponse(Result<EmptyResponse, Error>.failure(error))
+
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
@@ -335,21 +387,186 @@ final class UserUpdater_Tests: XCTestCase {
         // Update database to throws the error on write.
         let databaseError = TestError()
         database.write_errorResponse = databaseError
-        
+
         // Simulate `flagUser` call.
-        var completionCalledError: Error?
-        userUpdater.flagUser(true, with: .unique) {
+        nonisolated(unsafe) var completionCalledError: Error?
+        userUpdater.flagUser(true, with: .unique, reason: nil, extraData: nil) {
             completionCalledError = $0
         }
-        
+
         // Simulate API response with success.
-        let payload = FlagUserPayload(
-            currentUser: .dummy(userId: .unique, role: .user),
-            flaggedUser: .dummy(userId: .unique)
-        )
+        let payload = EmptyResponse()
         apiClient.test_simulateResponse(.success(payload))
-        
-        // Assert database error is propogated.
+
+        // Assert database error is propagated.
         AssertAsync.willBeEqual(completionCalledError as? TestError, databaseError)
+    }
+    
+    // MARK: - Block user
+
+    func test_blockUser_makesCorrectAPICall() {
+        let userId: UserId = .unique
+
+        // Simulate `blockUser` call
+        userUpdater.blockUser(userId)
+
+        // Assert correct endpoint is called
+        XCTAssertEqual(
+            apiClient.request_endpoint,
+            AnyEndpoint(Endpoint<BlockUsersResponse>.blockUsers(blockUsersRequest: BlockUsersRequest(blockedUserId: userId)))
+        )
+    }
+
+    func test_blockUser_propagatesSuccessfulResponse() {
+        // Simulate `blockUser` call
+        nonisolated(unsafe) var completionCalled = false
+        userUpdater.blockUser(.unique) { error in
+            XCTAssertNil(error)
+            completionCalled = true
+        }
+        
+        // Assert completion is not called yet
+        XCTAssertFalse(completionCalled)
+        
+        // Simulate API response with success
+        let payload = BlockUsersResponse(blockedByUserId: .unique, blockedUserId: .unique, createdAt: .unique)
+        apiClient.test_simulateResponse(Result<BlockUsersResponse, Error>.success(payload))
+
+        // Assert completion is called
+        AssertAsync.willBeTrue(completionCalled)
+    }
+
+    func test_blockUser_propagatesError() {
+        // Simulate `blockUser` call
+        nonisolated(unsafe) var completionCalledError: Error?
+        userUpdater.blockUser(.unique) {
+            completionCalledError = $0
+        }
+
+        // Simulate API response with failure
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<BlockUsersResponse, Error>.failure(error))
+
+        // Assert the completion is called with the error
+        AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+    }
+
+    // MARK: - Unblock user
+
+    func test_unblockUser_makesCorrectAPICall() {
+        let userId: UserId = .unique
+
+        // Simulate `unblockUser` call
+        userUpdater.unblockUser(userId)
+
+        // Assert correct endpoint is called
+        XCTAssertEqual(
+            apiClient.request_endpoint,
+            AnyEndpoint(Endpoint<UnblockUsersResponse>.unblockUsers(unblockUsersRequest: UnblockUsersRequest(blockedUserId: userId)))
+        )
+    }
+
+    func test_unblockUser_propagatesSuccessfulResponse() {
+        // Simulate `blockUser` call
+        nonisolated(unsafe) var completionCalled = false
+        userUpdater.unblockUser(.unique) { error in
+            XCTAssertNil(error)
+            completionCalled = true
+        }
+
+        // Assert completion is not called yet
+        XCTAssertFalse(completionCalled)
+
+        // Simulate API response with success
+        apiClient.test_simulateResponse(Result<UnblockUsersResponse, Error>.success(.init()))
+
+        // Assert completion is called
+        AssertAsync.willBeTrue(completionCalled)
+    }
+
+    func test_unblockUser_propagatesError() {
+        // Simulate `blockUser` call
+        nonisolated(unsafe) var completionCalledError: Error?
+        userUpdater.unblockUser(.unique) {
+            completionCalledError = $0
+        }
+
+        // Simulate API response with failure
+        let error = TestError()
+        apiClient.test_simulateResponse(Result<UnblockUsersResponse, Error>.failure(error))
+
+        // Assert the completion is called with the error
+        AssertAsync.willBeEqual(completionCalledError as? TestError, error)
+    }
+
+    // MARK: - Block / unblock database effects
+
+    func test_blockUser_whenSucceeds_savesBlockedUserIdAndHidesDirectMessageChannel() throws {
+        let currentUserId: UserId = .unique
+        let blockedUserId: UserId = .unique
+        let directMessageCid = ChannelId(type: .messaging, id: "!members-\(String.unique)")
+        let groupCid: ChannelId = .unique
+        try database.createCurrentUser(id: currentUserId)
+        try saveChannel(cid: directMessageCid, memberIds: [currentUserId, blockedUserId])
+        try saveChannel(cid: groupCid, memberIds: [currentUserId, blockedUserId, .unique])
+
+        apiClient.test_mockResponseResult(
+            Result<BlockUsersResponse, Error>.success(
+                BlockUsersResponse(blockedByUserId: currentUserId, blockedUserId: blockedUserId, createdAt: .unique)
+            )
+        )
+        let error = try waitFor { userUpdater.blockUser(blockedUserId, completion: $0) }
+
+        XCTAssertNil(error)
+        let blockedUserIds = try database.readSynchronously { $0.currentUser?.blockedUserIds }
+        XCTAssertEqual(blockedUserIds, [blockedUserId])
+        XCTAssertEqual(try channelState(cid: directMessageCid), ChannelState(isBlocked: true, isHidden: true))
+        XCTAssertEqual(try channelState(cid: groupCid), ChannelState(isBlocked: false, isHidden: false))
+    }
+
+    func test_unblockUser_whenSucceeds_removesBlockedUserIdAndShowsDirectMessageChannel() throws {
+        let currentUserId: UserId = .unique
+        let blockedUserId: UserId = .unique
+        let directMessageCid = ChannelId(type: .messaging, id: "!members-\(String.unique)")
+        try database.createCurrentUser(id: currentUserId)
+        try saveChannel(cid: directMessageCid, memberIds: [currentUserId, blockedUserId])
+        try database.writeSynchronously { session in
+            session.currentUser?.blockedUserIds = [blockedUserId]
+            let channel = try XCTUnwrap(session.channel(cid: directMessageCid))
+            channel.isBlocked = true
+            channel.isHidden = true
+        }
+
+        apiClient.test_mockResponseResult(Result<UnblockUsersResponse, Error>.success(.init()))
+        let error = try waitFor { userUpdater.unblockUser(blockedUserId, completion: $0) }
+
+        XCTAssertNil(error)
+        let blockedUserIds = try database.readSynchronously { $0.currentUser?.blockedUserIds }
+        XCTAssertEqual(blockedUserIds, [])
+        XCTAssertEqual(try channelState(cid: directMessageCid), ChannelState(isBlocked: false, isHidden: false))
+    }
+
+    // MARK: - Helpers
+
+    private struct ChannelState: Equatable, Sendable {
+        let isBlocked: Bool
+        let isHidden: Bool
+    }
+
+    private func channelState(cid: ChannelId) throws -> ChannelState? {
+        try database.readSynchronously { session in
+            session.channel(cid: cid).map { ChannelState(isBlocked: $0.isBlocked, isHidden: $0.isHidden) }
+        }
+    }
+
+    private func saveChannel(cid: ChannelId, memberIds: [UserId]) throws {
+        try database.writeSynchronously { session in
+            try session.saveChannel(
+                payload: .dummy(
+                    channel: .dummy(cid: cid),
+                    members: memberIds.map { .dummy(user: .dummy(userId: $0)) }
+                )
+            )
+        }
     }
 }

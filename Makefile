@@ -3,86 +3,46 @@ MAKEFLAGS += --silent
 bootstrap:
 	./Scripts/bootstrap.sh
 
-all_artifacts:
-	echo "🏁 Starting at $$(date +%T)"
-	make frameworks
-	echo "🏁 Finished creating dynamic libraries at $$(date +%T)"
-	make static_libraries
-	echo "🏁 Finished creating static libraries at $$(date +%T)"
-	open ./Products
-	echo "🏁 Ended at $$(date +%T)"
-
-frameworks: clean
-	echo "👉 Creating dynamic libraries. Will take a while... Logs available: DerivedData/fastlane.log"
-	bundle exec fastlane build_xcframeworks > DerivedData/fastlane.log
-	echo "👉 Creating compressed archives"
-	cp ./LICENSE ./Products/LICENSE
-	make zip_artifacts name="StreamChat-All" pattern=./*.xcframework
-	make zip_artifacts name="StreamChat" pattern="./StreamChat.xcframework ./LICENSE"
-	make zip_artifacts name="StreamChatUI" pattern="./StreamChatUI.xcframework ./LICENSE"
-	make swiftpm_checksum
-	make clean
-
-static_libraries: clean
-	echo "👉 Creating static libraries"
-	./Scripts/buildStaticLibraries.sh
-	echo "👉 Creating compressed archive"
-	make zip_artifacts name="StreamChat-All-Static" pattern='./*.xcframework ./*.bundle'
-	make clean
-
-clean:
-	echo "♻️  Cleaning ./Products & ./DerivedData"
-	rm -rf DerivedData
-	mkdir -p DerivedData
-	rm -rf Products/*.xcframework
-	rm -rf Products/*.bundle
-	rm -rf Products/*.BCSymbolMaps
-	rm -rf Products/*.dSYMs
-	rm Products/LICENSE || true
-
-zip_artifacts:
-	@if [ "$(name)" = "" ]; then\
-		echo "❌ Missing name parameter"; \
-        exit 1;\
-    fi
-	@if [ "$(pattern)" = "" ]; then\
-		echo "❌ Missing pattern parameter"; \
-        exit 1;\
-    fi
-	echo "👉 Compressing $(name)"
-	cd ./Products && zip -r "$(name).zip" $(pattern) > /dev/null
-
-swiftpm_checksum:
-	echo "ℹ️  Checksum for StreamChat.zip"
-	swift package compute-checksum Products/StreamChat.zip
-	echo "ℹ️  Checksum for StreamChatUI.zip"
-	swift package compute-checksum Products/StreamChatUI.zip
+generate:
+	sourcery --config Sources/StreamChat/.sourcery.yml
 
 update_dependencies:
-	echo "👉 Updating Nuke"
-	make update_nuke version=10.3.3
-	echo "👉 Updating Starscream"
-	make update_starscream version=4.0.4
 	echo "👉 Updating SwiftyGif"
 	make update_swiftygif version=5.4.2
-	echo "👉 Updating SwiftyMarkdown"
-	make update_swiftymarkdown version=1.2.4
-
-update_nuke: check_version_parameter
-	./Scripts/updateDependency.sh $(version) Dependencies/Nuke Sources/StreamChatUI/StreamNuke Sources
-	./Scripts/removePublicDeclarations.sh Sources/StreamChatUI/StreamNuke
-
-update_starscream: check_version_parameter
-	./Scripts/updateDependency.sh $(version) Dependencies/Starscream Sources/StreamChat/StreamStarscream Sources
-	./Scripts/removePublicDeclarations.sh Sources/StreamChat/StreamStarscream
+	echo "👉 Updating DifferenceKit"
+	make update_differencekit version=1.3.0
+	echo "👉 Updating Splash"
+	make update_splash version=0.16.0
+	echo "👉 Updating MarkdownUI"
+	make update_markdownui version=2.4.0
+	echo "👉 Updating NetworkImage"
+	make update_networkimage version=6.0.1
 
 update_swiftygif: check_version_parameter
 	./Scripts/updateDependency.sh $(version) Dependencies/SwiftyGif Sources/StreamChatUI/StreamSwiftyGif SwiftyGif
 	./Scripts/removePublicDeclarations.sh Sources/StreamChatUI/StreamSwiftyGif
 
-update_swiftymarkdown: check_version_parameter
-	./Scripts/updateDependency.sh $(version) Dependencies/SwiftyMarkdown Sources/StreamChatUI/StreamSwiftyMarkdown Sources
-	./Scripts/removePublicDeclarations.sh Sources/StreamChatUI/StreamSwiftyMarkdown
+update_differencekit: check_version_parameter
+	./Scripts/updateDependency.sh $(version) Dependencies/DifferenceKit Sources/StreamChatUI/StreamDifferenceKit Sources
+	./Scripts/removePublicDeclarations.sh Sources/StreamChatUI/StreamDifferenceKit
+
+update_splash: check_version_parameter
+	./Scripts/updateDependency.sh $(version) Dependencies/Splash Sources/StreamChatAI/StreamSplash Sources/Splash
+	./Scripts/removePublicDeclarations.sh Sources/StreamChatAI/StreamSplash
+
+# MarkdownUI's Swift sources go into StreamChatAI, and its cmark-gfm C sources into their own target.
+# StreamChatAI requires iOS 15, above the package's minimum, so its vendored declarations get an @available attribute.
+update_markdownui: check_version_parameter
+	./Scripts/updateDependency.sh $(version) Dependencies/MarkdownUI Sources/StreamChatAI/StreamMarkdownUI Sources/MarkdownUI
+	./Scripts/updateDependency.sh $(version) Dependencies/MarkdownUI Sources/StreamChatAICMark Sources/cmark-gfm
+	./Scripts/removePublicDeclarations.sh Sources/StreamChatAI/StreamMarkdownUI
+	./Scripts/prefixCSymbols.sh stream_ Sources/StreamChatAICMark Sources/StreamChatAI/StreamMarkdownUI
+	./Scripts/addAvailability.py "iOS 15.0, macOS 12.0, *" Sources/StreamChatAI/StreamMarkdownUI
+
+update_networkimage: check_version_parameter
+	./Scripts/updateDependency.sh $(version) Dependencies/NetworkImage Sources/StreamChatAI/StreamNetworkImage Sources/NetworkImage
+	./Scripts/removePublicDeclarations.sh Sources/StreamChatAI/StreamNetworkImage
+	./Scripts/addAvailability.py "iOS 15.0, macOS 12.0, *" Sources/StreamChatAI/StreamNetworkImage
 
 check_version_parameter:
 	@if [ "$(version)" = "" ]; then\

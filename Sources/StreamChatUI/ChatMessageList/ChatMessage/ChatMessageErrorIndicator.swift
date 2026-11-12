@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -9,8 +9,8 @@ import UIKit
 open class ChatMessageErrorIndicator: _Button, AppearanceProvider {
     override open func setUpAppearance() {
         super.setUpAppearance()
-        
+
         setImage(appearance.images.messageListErrorIndicator, for: .normal)
-        tintColor = appearance.colorPalette.alert
+        tintColor = appearance.colorPalette.accentError
     }
 }

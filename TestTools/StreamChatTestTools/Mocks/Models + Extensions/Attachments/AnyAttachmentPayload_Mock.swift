@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -10,6 +10,12 @@ public extension AnyAttachmentPayload {
     static let mockFileWithLongName = try! Self(localFileURL: .localYodaQuoteLongFileName, attachmentType: .file)
     static let mockImage = try! Self(localFileURL: .localYodaImage, attachmentType: .image)
     static let mockVideo = try! Self(localFileURL: .localYodaQuote, attachmentType: .video)
+    static let mockAudio = try! Self(localFileURL: .localYodaQuote, attachmentType: .audio)
+    static let mockVoiceRecording = try! Self(localFileURL: .localYodaQuote, attachmentType: .voiceRecording)
+
+    static func mock(type: AttachmentType, localFileURL: URL? = nil) -> Self {
+        return try! .init(localFileURL: localFileURL ?? .localYodaQuote, attachmentType: type)
+    }
 }
 
 public extension AnyAttachmentPayload {
@@ -20,6 +26,7 @@ public extension AnyAttachmentPayload {
             id: id,
             type: type,
             payload: payload,
+            downloadingState: nil,
             uploadingState: localFileURL.map {
                 .init(
                     localFileURL: $0,

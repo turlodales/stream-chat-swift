@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -8,7 +8,12 @@ import UIKit
 /// The view that shows the list of reactions attached to the message.
 open class ChatMessageReactionsView: _View, ThemeProvider {
     public var content: Content? {
-        didSet { updateContentIfNeeded() }
+        didSet {
+            if oldValue?.reactions == content?.reactions {
+                return
+            }
+            updateContentIfNeeded()
+        }
     }
 
     open var reactionItemView: ChatMessageReactionItemView.Type {
@@ -44,7 +49,7 @@ open class ChatMessageReactionsView: _View, ThemeProvider {
         guard let content = content else { return }
 
         content.reactions.sorted(by: reactionsSorting).forEach { reaction in
-            if appearance.images.availableReactions[reaction.type] == nil {
+            if appearance.images.defaultReactions[reaction.type] == nil {
                 logWarning(unavailableReaction: reaction)
                 return
             }

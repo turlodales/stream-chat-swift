@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -7,7 +7,7 @@ import StreamChat
 import StreamChatUI
 import UIKit
 
-final class DemoChatChannelListVC: ChatChannelListVC, EventsControllerDelegate {
+final class DemoChatChannelListVC: ChatChannelListVC {
     /// The `UIButton` instance used for navigating to new channel screen creation.
     lazy var createChannelButton: UIButton = {
         let button = UIButton()
@@ -15,9 +15,9 @@ final class DemoChatChannelListVC: ChatChannelListVC, EventsControllerDelegate {
         return button
     }()
 
-    lazy var hiddenChannelsButton: UIButton = {
+    lazy var filterChannelsButton: UIButton = {
         let button = UIButton()
-        button.setImage(UIImage(systemName: "archivebox")!, for: .normal)
+        button.setImage(UIImage(systemName: "slider.horizontal.3")!, for: .normal)
         return button
     }()
 
@@ -27,6 +27,119 @@ final class DemoChatChannelListVC: ChatChannelListVC, EventsControllerDelegate {
         showUnder: navigationController!.navigationBar
     )
 
+    var highlightSelectedChannel: Bool { splitViewController?.isCollapsed == false }
+    var selectedChannel: ChatChannel?
+
+    var currentUserId: UserId {
+        controller.client.currentUserId!
+    }
+
+    var initialQuery: ChannelListQuery!
+
+    lazy var hiddenChannelsQuery: ChannelListQuery = .init(filter: .and([
+        .containMembers(userIds: [currentUserId]),
+        .equal(.hidden, to: true)
+    ]))
+
+    lazy var allBlockedChannelsQuery: ChannelListQuery = .init(filter: .and([
+        .containMembers(userIds: [currentUserId]),
+        .or([
+            .equal(.blocked, to: false),
+            .equal(.blocked, to: true)
+        ])
+    ]))
+    
+    lazy var blockedUnblockedWithHiddenChannelsQuery: ChannelListQuery = .init(
+        filter: .and([
+            .containMembers(userIds: [currentUserId]),
+            .or([
+                .and([.equal(.blocked, to: false), .equal(.hidden, to: false)]),
+                .and([.equal(.blocked, to: true), .equal(.hidden, to: true)])
+            ])
+        ])
+    )
+    
+    lazy var channelModeratorChannelsQuery: ChannelListQuery = .init(
+        filter: .and([
+            .containMembers(userIds: [currentUserId]),
+            .equal(.channelRole, to: "channel_moderator")
+        ])
+    )
+
+    lazy var unreadCountChannelsQuery: ChannelListQuery = .init(
+        filter: .and([
+            .containMembers(userIds: [currentUserId]),
+            .hasUnread
+        ]),
+        sort: [.init(key: .unreadCount, isAscending: false)]
+    )
+
+    lazy var sortedByHasUnreadChannelsQuery: ChannelListQuery = .init(
+        filter: .and([
+            .containMembers(userIds: [currentUserId])
+        ]),
+        sort: [
+            .init(key: .hasUnread, isAscending: false),
+            .init(key: .updatedAt, isAscending: false)
+        ]
+    )
+
+    lazy var mutedChannelsQuery: ChannelListQuery = .init(filter: .and([
+        .containMembers(userIds: [currentUserId]),
+        .equal(.muted, to: true)
+    ]))
+
+    lazy var coolChannelsQuery: ChannelListQuery = .init(filter: .and([
+        .containMembers(userIds: [currentUserId]),
+        .equal("is_cool", to: true)
+    ]))
+    
+    lazy var archivedChannelsQuery: ChannelListQuery = .init(filter: .and([
+        .containMembers(userIds: [currentUserId]),
+        .equal(.archived, to: true)
+    ]))
+    
+    lazy var pinnedChannelsQuery: ChannelListQuery = .init(filter: .and([
+        .containMembers(userIds: [currentUserId]),
+        .equal(.pinned, to: true)
+    ]))
+    
+    lazy var equalMembersQuery: ChannelListQuery = .init(filter:
+        .equal(.members, values: [currentUserId, "r2-d2"])
+    )
+    
+    lazy var premiumTaggedChannelsQuery: ChannelListQuery = .init(filter: .in(.filterTags, values: ["premium"]))
+
+    lazy var predefinedMessagingChannelsQuery: ChannelListQuery = .init(
+        predefinedFilter: "user_per_channel_type_channels",
+        filterValues: ["channel_type": .string(ChannelType.messaging.rawValue), "user_id": .string(currentUserId)],
+        sortValues: nil
+    )
+
+    lazy var predefinedArchivedChannelsQuery: ChannelListQuery = .init(
+        predefinedFilter: "user_per_channel_type_archived_hidden",
+        filterValues: [
+            "channel_type": .string(ChannelType.messaging.rawValue),
+            "hidden": .bool(false),
+            "user_id": .string(currentUserId),
+            "archived": .bool(true)
+        ],
+        sortValues: nil
+    )
+    
+    lazy var predefinedHiddenChannelsQuery: ChannelListQuery = .init(
+        predefinedFilter: "user_per_channel_type_archived_hidden",
+        filterValues: [
+            "channel_type": .string(ChannelType.messaging.rawValue),
+            "hidden": .bool(true),
+            "user_id": .string(currentUserId),
+            "archived": .bool(false)
+        ],
+        sortValues: nil
+    )
+    
+    lazy var livestreamChannelsQuery: ChannelListQuery = .init(filter: .equal(.type, to: .livestream))
+
     var demoRouter: DemoChatChannelListRouter? {
         router as? DemoChatChannelListRouter
     }
@@ -34,19 +147,35 @@ final class DemoChatChannelListVC: ChatChannelListVC, EventsControllerDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        eventsController.delegate = self
-        connectionController.delegate = connectionDelegate
+        title = "Channels"
+
+        initialQuery = controller.query
+
+        if AppConfig.shared.demoAppConfig.shouldShowConnectionBanner {
+            connectionController.delegate = connectionDelegate
+        }
 
         navigationItem.rightBarButtonItems = [
-            UIBarButtonItem(customView: hiddenChannelsButton),
+            UIBarButtonItem(customView: filterChannelsButton),
             UIBarButtonItem(customView: createChannelButton)
         ]
         createChannelButton.addTarget(self, action: #selector(didTapCreateNewChannel), for: .touchUpInside)
-        hiddenChannelsButton.addTarget(self, action: #selector(didTapHiddenChannelsButton), for: .touchUpInside)
-        
+        filterChannelsButton.addTarget(self, action: #selector(didTapFilterChannelsButton), for: .touchUpInside)
+
         emptyView.actionButtonPressed = { [weak self] in
             guard let self = self else { return }
             self.didTapCreateNewChannel(self)
+        }
+    }
+
+    override func setUpLayout() {
+        super.setUpLayout()
+
+        if isChatChannelListStatesEnabled {
+            NSLayoutConstraint.activate([
+                channelListErrorView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+                channelListErrorView.heightAnchor.constraint(equalToConstant: 60)
+            ])
         }
     }
 
@@ -54,12 +183,255 @@ final class DemoChatChannelListVC: ChatChannelListVC, EventsControllerDelegate {
         demoRouter?.showCreateNewChannelFlow()
     }
 
-    @objc private func didTapHiddenChannelsButton(_ sender: Any) {
-        demoRouter?.showHiddenChannels()
+    @objc private func didTapFilterChannelsButton(_ sender: Any) {
+        let defaultChannelsAction = UIAlertAction(
+            title: "Initial Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Channels"
+                self?.setInitialChannelsQuery()
+            }
+        )
+
+        let hiddenChannelsAction = UIAlertAction(
+            title: "Hidden Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Hidden Channels"
+                self?.setHiddenChannelsQuery()
+            }
+        )
+
+        let allBlockedChannelsAction = UIAlertAction(
+            title: "Blocked and Non-Blocked Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "All Blocked Channels"
+                self?.setAllBlockedChannelsQuery()
+            }
+        )
+        
+        let blockedUnBlockedExcludingDeletedChannelsAction = UIAlertAction(
+            title: "Blocked Unblocked with Matching Hidden Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Blocked Unblocked with Matching Hidden Channels"
+                self?.setBlockedUnblockedWithHiddenChannelsQuery()
+            }
+        )
+        
+        let channelRoleChannelsAction = UIAlertAction(
+            title: "Moderator Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Moderator Channels"
+                self?.setChannelModeratorChannelsQuery()
+            }
+        )
+
+        let unreadCountChannelsAction = UIAlertAction(
+            title: "Unread Count Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Unread Count Channels"
+                self?.setUnreadCountChannelsQuery()
+            }
+        )
+
+        let hasUnreadChannelsAction = UIAlertAction(
+            title: "Sorted hasUnread Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Sorted hasUnread Channels"
+                self?.setSortedByHasUnreadChannelsQuery()
+            }
+        )
+
+        let coolChannelsAction = UIAlertAction(
+            title: "Cool Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Cool Channels"
+                self?.setCoolChannelsQuery()
+            }
+        )
+
+        let mutedChannelsAction = UIAlertAction(
+            title: "Muted Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Muted Channels"
+                self?.setMutedChannelsQuery()
+            }
+        )
+        
+        let archivedChannelsAction = UIAlertAction(
+            title: "Archived Channels",
+            style: .default
+        ) { [weak self] _ in
+            self?.title = "Archived Channels"
+            self?.setArchivedChannelsQuery()
+        }
+        
+        let pinnedChannelsAction = UIAlertAction(
+            title: "Pinned Channels",
+            style: .default
+        ) { [weak self] _ in
+            self?.title = "Pinned Channels"
+            self?.setPinnedChannelsQuery()
+        }
+        
+        let equalMembersAction = UIAlertAction(
+            title: "R2-D2 Channels (Equal Members)",
+            style: .default
+        ) { [weak self] _ in
+            self?.title = "R2-D2 Channels (Equal Members)"
+            self?.setEqualMembersChannelsQuery()
+        }
+        
+        let taggedChannelsAction = UIAlertAction(
+            title: "Premium Tagged Channels",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Premium Tagged Channels"
+                self?.setPremiumTaggedChannelsQuery()
+            }
+        )
+
+        let predefinedMessagingChannelsAction = UIAlertAction(
+            title: "Messaging (Predefined)",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Messaging (Predefined)"
+                self?.setPredefinedMessagingChannelsQuery()
+            }
+        )
+
+        let predefinedArchivedChannelsAction = UIAlertAction(
+            title: "Archived (Predefined)",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Archived (Predefined)"
+                self?.setPredefinedArchivedChannelsQuery()
+            }
+        )
+        
+        let predefinedHiddenChannelsAction = UIAlertAction(
+            title: "Hidden (Predefined)",
+            style: .default,
+            handler: { [weak self] _ in
+                self?.title = "Hidden (Predefined)"
+                self?.setPredefinedHiddenChannelsQuery()
+            }
+        )
+        
+        let livestreamChannelsAction = UIAlertAction(
+            title: "Livestream Channels",
+            style: .default
+        ) { [weak self] _ in
+            self?.title = "Livestream Channels"
+            self?.setLivestreamChannelsQuery()
+        }
+
+        presentAlert(
+            title: "Filter Channels",
+            actions: [
+                defaultChannelsAction,
+                unreadCountChannelsAction,
+                hasUnreadChannelsAction,
+                hiddenChannelsAction,
+                allBlockedChannelsAction,
+                blockedUnBlockedExcludingDeletedChannelsAction,
+                mutedChannelsAction,
+                coolChannelsAction,
+                pinnedChannelsAction,
+                archivedChannelsAction,
+                equalMembersAction,
+                channelRoleChannelsAction,
+                taggedChannelsAction,
+                predefinedMessagingChannelsAction,
+                predefinedArchivedChannelsAction,
+                predefinedHiddenChannelsAction,
+                livestreamChannelsAction
+            ].sorted(by: { $0.title ?? "" < $1.title ?? "" }),
+            preferredStyle: .actionSheet,
+            sourceView: filterChannelsButton
+        )
     }
 
-    var highlightSelectedChannel: Bool { splitViewController?.isCollapsed == false }
-    var selectedChannel: ChatChannel?
+    func setHiddenChannelsQuery() {
+        replaceQuery(hiddenChannelsQuery)
+    }
+
+    func setAllBlockedChannelsQuery() {
+        replaceQuery(allBlockedChannelsQuery)
+    }
+    
+    func setBlockedUnblockedWithHiddenChannelsQuery() {
+        replaceQuery(blockedUnblockedWithHiddenChannelsQuery)
+    }
+    
+    func setChannelModeratorChannelsQuery() {
+        replaceQuery(channelModeratorChannelsQuery)
+    }
+
+    func setUnreadCountChannelsQuery() {
+        replaceQuery(unreadCountChannelsQuery)
+    }
+
+    func setSortedByHasUnreadChannelsQuery() {
+        replaceQuery(sortedByHasUnreadChannelsQuery)
+    }
+
+    func setMutedChannelsQuery() {
+        replaceQuery(mutedChannelsQuery)
+    }
+
+    func setCoolChannelsQuery() {
+        let controller = self.controller.client.channelListController(
+            query: coolChannelsQuery,
+            filter: { channel in
+                channel.extraData["is_cool"]?.boolValue ?? false
+            }
+        )
+        replaceChannelListController(controller)
+    }
+    
+    func setArchivedChannelsQuery() {
+        replaceQuery(archivedChannelsQuery)
+    }
+    
+    func setPinnedChannelsQuery() {
+        replaceQuery(pinnedChannelsQuery)
+    }
+    
+    func setEqualMembersChannelsQuery() {
+        replaceQuery(equalMembersQuery)
+    }
+    
+    func setPremiumTaggedChannelsQuery() {
+        replaceQuery(premiumTaggedChannelsQuery)
+    }
+
+    func setPredefinedMessagingChannelsQuery() {
+        replaceQuery(predefinedMessagingChannelsQuery)
+    }
+
+    func setPredefinedArchivedChannelsQuery() {
+        replaceQuery(predefinedArchivedChannelsQuery)
+    }
+    
+    func setPredefinedHiddenChannelsQuery() {
+        replaceQuery(predefinedHiddenChannelsQuery)
+    }
+    
+    func setLivestreamChannelsQuery() {
+        replaceQuery(livestreamChannelsQuery)
+    }
+
+    func setInitialChannelsQuery() {
+        replaceQuery(initialQuery)
+    }
 
     override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
@@ -96,13 +468,5 @@ final class DemoChatChannelListVC: ChatChannelListVC, EventsControllerDelegate {
             animated: false,
             scrollPosition: .centeredHorizontally
         )
-    }
-
-    func eventsController(_ controller: EventsController, didReceiveEvent event: Event) {
-        if let newMessageEvent = event as? MessageNewEvent {
-            // This is a DemoApp integration test to make sure there are no deadlocks when
-            // accessing CoreDataLazy properties from the EventsController.delegate
-            _ = newMessageEvent.message.author
-        }
     }
 }

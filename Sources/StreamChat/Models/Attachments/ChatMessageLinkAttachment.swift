@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -80,10 +80,15 @@ extension LinkAttachmentPayload: Decodable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: AttachmentCodingKeys.self)
 
-        let assetURL = try
-            container.decodeIfPresent(URL.self, forKey: .imageURL) ??
-            container.decodeIfPresent(URL.self, forKey: .image) ??
-            container.decodeIfPresent(URL.self, forKey: .assetURL)
+        let assetURL: URL? = try {
+            if let url = try container.decodeIfPresent(URL.self, forKey: .imageURL) {
+                return url
+            }
+            if let url = try container.decodeIfPresent(URL.self, forKey: .image) {
+                return url
+            }
+            return try container.decodeIfPresent(URL.self, forKey: .assetURL)
+        }()
 
         self.init(
             originalURL: try container.decode(URL.self, forKey: .ogURL),
@@ -97,6 +102,26 @@ extension LinkAttachmentPayload: Decodable {
             titleLink: try container.decodeIfPresent(URL.self, forKey: .titleLink),
             assetURL: assetURL,
             previewURL: try container.decodeIfPresent(URL.self, forKey: .thumbURL) ?? assetURL
+        )
+    }
+}
+
+// MARK: - Response -> Model
+
+extension GetOGResponse {
+    func asModel() throws -> LinkAttachmentPayload {
+        guard let ogScrapeUrl, let originalURL = URL(string: ogScrapeUrl) else {
+            throw ClientError.Unexpected("GetOGResponse is missing a valid `og_scrape_url`.")
+        }
+        let assetURL = imageUrl.flatMap { URL(string: $0) } ?? assetUrl.flatMap { URL(string: $0) }
+        return LinkAttachmentPayload(
+            originalURL: originalURL,
+            title: title?.trimmingCharacters(in: .whitespacesAndNewlines),
+            text: text?.trimmingCharacters(in: .whitespacesAndNewlines),
+            author: authorName,
+            titleLink: titleLink.flatMap { URL(string: $0) },
+            assetURL: assetURL,
+            previewURL: thumbUrl.flatMap { URL(string: $0) } ?? assetURL
         )
     }
 }

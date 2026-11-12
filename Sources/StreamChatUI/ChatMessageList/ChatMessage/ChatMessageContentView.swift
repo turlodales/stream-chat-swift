@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -9,7 +9,7 @@ import UIKit
 ///
 /// When custom message content view is created, the protocol that inherits from this one
 /// should be created if an action can be taken on the new content view.
-public protocol ChatMessageContentViewDelegate: AnyObject {
+@MainActor public protocol ChatMessageContentViewDelegate: AnyObject {
     /// Gets called when error indicator is tapped.
     /// - Parameter indexPath: The index path of the cell displaying the content view. Equals to `nil` when
     /// the content view is displayed outside the collection/table view.
@@ -21,9 +21,8 @@ public protocol ChatMessageContentViewDelegate: AnyObject {
     func messageContentViewDidTapOnThread(_ indexPath: IndexPath?)
 
     /// Gets called when quoted message view is tapped.
-    /// - Parameter indexPath: The index path of the cell displaying the content view. Equals to `nil` when
-    /// the content view is displayed outside the collection/table view.
-    func messageContentViewDidTapOnQuotedMessage(_ indexPath: IndexPath?)
+    /// - Parameter quotedMessage: The quoted message which was tapped.
+    func messageContentViewDidTapOnQuotedMessage(_ quotedMessage: ChatMessage)
 	
     /// Gets called when avatar view is tapped.
     /// - Parameter indexPath: The index path of the cell displaying the content view. Equals to `nil` when
@@ -34,33 +33,44 @@ public protocol ChatMessageContentViewDelegate: AnyObject {
     /// - Parameter indexPath: The index path of the cell displaying the content view. Equals to `nil` when
     /// the content view is displayed outside the collection/table view.
     func messageContentViewDidTapOnReactionsView(_ indexPath: IndexPath?)
-    
+
     /// Gets called when delivery status indicator is tapped.
     /// - Parameter indexPath: The index path of the cell displaying the content view. Equals to `nil` when
     /// the content view is displayed outside the collection/table view.
     func messageContentViewDidTapOnDeliveryStatusIndicator(_ indexPath: IndexPath?)
+
+    /// Gets called when mentioned user is tapped.
+    /// - Parameter mentionedUser: The mentioned user that was tapped on.
+    func messageContentViewDidTapOnMentionedUser(_ mentionedUser: ChatUser)
 }
 
 public extension ChatMessageContentViewDelegate {
     func messageContentViewDidTapOnDeliveryStatusIndicator(_ indexPath: IndexPath?) {}
+    func messageContentViewDidTapOnMentionedUser(_ mentionedUser: ChatUser) {}
 }
 
 /// A view that displays the message content.
-open class ChatMessageContentView: _View, ThemeProvider {
+open class ChatMessageContentView: _View, ThemeProvider, UITextViewDelegate {
     /// The current layout options of the view.
     /// When this value is set the subviews are instantiated and laid out just once based on
     /// the received options.
     public var layoutOptions: ChatMessageLayoutOptions?
-    
+
     /// The formatter used for text Markdown
     public var markdownFormatter: MarkdownFormatter {
         appearance.formatters.markdownFormatter
     }
-    
+
     /// A boolean value that determines whether Markdown is active for messages to be formatted.
     open var isMarkdownEnabled: Bool {
         appearance.formatters.isMarkdownEnabled
     }
+
+    /// The component responsible to get the tapped mentioned user in a UITextView
+    var textViewUserMentionsHandler = TextViewMentionedUsersHandler()
+
+    /// The component responsible to detect links in the message text.
+    public let linkDetector = TextLinkDetector()
 
     // MARK: Content && Actions
 
@@ -75,11 +85,14 @@ open class ChatMessageContentView: _View, ThemeProvider {
     open var content: ChatMessage? {
         didSet { updateContentIfNeeded() }
     }
-    
+
     /// The channel the message is sent to.
     open var channel: ChatChannel? {
         didSet { updateContentIfNeeded() }
     }
+
+    /// The current logged in user id.
+    public var currentUserId: UserId?
 
     /// A formatter that converts the message timestamp to textual representation.
     public lazy var timestampFormatter: MessageTimestampFormatter = appearance.formatters.messageTimestamp
@@ -92,6 +105,86 @@ open class ChatMessageContentView: _View, ThemeProvider {
     /// for the content will taken from the provided `width`.
     open var messageAuthorAvatarSize: CGSize { .init(width: 32, height: 32) }
 
+    /// The font used when rendering emojis as "Jumbomoji".
+    open var jumbomojiMessageFont: UIFont {
+        appearance.fonts.emoji
+    }
+
+    /// The font used when rendering system messages.
+    open var systemMessageFont: UIFont {
+        appearance.fonts.caption1.bold
+    }
+
+    /// The default font when rendering the message text.
+    ///
+    /// **Note:** Because of an issue which we don't know yet the root cause, if you want
+    /// the message font to change dynamically (live) when changing the font in accessibility
+    /// settings, you need to override this property and return a new instance of `UIFont`. Do
+    /// not use the `appearance` config, a new instance of `UIFont` is required.
+    ///
+    /// Example: `UIFont.preferredFont(forTextStyle: .body)`
+    open var defaultMessageFont: UIFont {
+        appearance.fonts.body
+    }
+
+    /// The current font used in the message text based on the content of the message.
+    open var messageTextFont: UIFont {
+        if content?.shouldRenderAsJumbomoji == true {
+            return jumbomojiMessageFont
+        }
+
+        if content?.shouldRenderAsSystemMessage == true {
+            return systemMessageFont
+        }
+
+        return defaultMessageFont
+    }
+
+    /// The current text color used in the message text based on the content of the message.
+    open var messageTextColor: UIColor {
+        if content?.isDeleted == true {
+            return appearance.colorPalette.textTertiary
+        }
+
+        if content?.shouldRenderAsSystemMessage == true {
+            return appearance.colorPalette.textTertiary
+        }
+
+        return appearance.colorPalette.textPrimary
+    }
+
+    /// The character separator of the "Edited" label.
+    open var editedLabelSeparator: String {
+        " • "
+    }
+    
+    /// Skip content update when tintColorDidChange is called but content was already updated for that color
+    /// Unnecessary updates can get expensive due to text updates.
+    private var previousContentUpdateTintColor: UIColor?
+
+    /// The background color to restore once the jump highlight is cleared.
+    ///
+    /// The background can be customised while laying out the content view, for example to give
+    /// pinned messages a distinct background, so it has to be preserved across the highlight.
+    private var backgroundColorBeforeJumpHighlight: UIColor?
+
+    /// Whether the message is temporarily highlighted, for example when jumping to it.
+    ///
+    /// Tracking it here makes it possible to tell the highlighted cells apart from the ones that
+    /// were never highlighted, so that clearing the highlight leaves the latter untouched.
+    var isJumpHighlighted = false {
+        didSet {
+            guard isJumpHighlighted != oldValue else { return }
+            if isJumpHighlighted {
+                backgroundColorBeforeJumpHighlight = backgroundColor
+                backgroundColor = appearance.colorPalette.backgroundCoreHighlight
+            } else {
+                backgroundColor = backgroundColorBeforeJumpHighlight
+                backgroundColorBeforeJumpHighlight = nil
+            }
+        }
+    }
+
     // MARK: - Content views
 
     /// Shows the bubble around message content.
@@ -100,7 +193,7 @@ open class ChatMessageContentView: _View, ThemeProvider {
 
     /// Shows message author avatar.
     /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.author`.
-    public private(set) var authorAvatarView: ChatAvatarView?
+    public private(set) var authorAvatarView: ChatUserAvatarView?
 
     /// Shows a spacer where the author avatar should be.
     /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.avatarSizePadding`.
@@ -113,6 +206,10 @@ open class ChatMessageContentView: _View, ThemeProvider {
     /// Shows message timestamp.
     /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.timestamp`.
     public private(set) var timestampLabel: UILabel?
+
+    /// Shows which language the message was translated to, if it was translated.
+    /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.translation`.
+    public private(set) var translationLabel: UILabel?
 
     /// Shows message author name.
     /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.authorName`.
@@ -150,7 +247,7 @@ open class ChatMessageContentView: _View, ThemeProvider {
 
     /// Shows the avatar of the user who left the latest thread reply.
     /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.threadInfo`.
-    public private(set) var threadAvatarView: ChatAvatarView?
+    public private(set) var threadAvatarView: ChatUserAvatarView?
 
     /// Shows the arrow from message bubble to `threadAvatarView` view.
     /// Exists if `layout(options: MessageLayoutOptions)` was invoked with the options containing `.threadInfo`.
@@ -160,9 +257,19 @@ open class ChatMessageContentView: _View, ThemeProvider {
     /// Exists if `layout(options: ChatMessageLayoutOption)` was invoked with the options
     /// containing `.messageDeliveryStatus`.
     public private(set) var deliveryStatusView: ChatMessageDeliveryStatusView?
-    
+
     /// An object responsible for injecting the views needed to display the attachments content.
     public private(set) var attachmentViewInjector: AttachmentViewInjector?
+
+    /// The reply icon image view.
+    open private(set) lazy var replyIconImageView: UIImageView = {
+        let imageView = UIImageView().withoutAutoresizingMaskConstraints
+        imageView.image = appearance.images
+            .messageActionSwipeReply
+            .tinted(with: appearance.colorPalette.textTertiary)
+        imageView.contentMode = .scaleAspectFit
+        return imageView
+    }()
 
     // MARK: - Containers
 
@@ -199,7 +306,7 @@ open class ChatMessageContentView: _View, ThemeProvider {
 
     /// Constraint between bubble and reactions.
     public private(set) var bubbleToReactionsConstraint: NSLayoutConstraint?
-    
+
     /// Makes sure the `layout(options: ChatMessageLayoutOptions)` is called just once.
     /// - Parameter options: The options describing the layout of the content view.
     open func setUpLayoutIfNeeded(
@@ -217,7 +324,7 @@ open class ChatMessageContentView: _View, ThemeProvider {
         attachmentViewInjector = attachmentViewInjectorType?.init(self)
         layoutOptions = options
     }
-    
+
     // swiftlint:disable function_body_length
 
     /// Instantiates the subviews and laid them out based on the received options.
@@ -279,7 +386,7 @@ open class ChatMessageContentView: _View, ThemeProvider {
                 threadAvatarView,
                 threadReplyCountButton
             ]
-            
+
             if attachmentViewInjector?.fillAllAvailableWidth == true {
                 arrangedSubviews.append(.spacer(axis: .horizontal))
             }
@@ -302,32 +409,42 @@ open class ChatMessageContentView: _View, ThemeProvider {
         }
 
         // Metadata
-        if options.hasFootnoteOptions {
-            var footnoteSubviews: [UIView] = []
-            
-            if options.contains(.authorName) {
-                footnoteSubviews.append(createAuthorNameLabel())
-            }
-            if options.contains(.timestamp) {
-                footnoteSubviews.append(createTimestampLabel())
-            }
-            if options.contains(.onlyVisibleToYouIndicator) {
-                onlyVisibleToYouContainer = ContainerStackView()
-                    .withAccessibilityIdentifier(identifier: "onlyVisibleToYouContainer")
-                onlyVisibleToYouContainer!.addArrangedSubview(createOnlyVisibleToYouImageView())
-                onlyVisibleToYouContainer!.addArrangedSubview(createOnlyVisibleToYouLabel())
-                footnoteSubviews.append(onlyVisibleToYouContainer!)
-            }
-            if options.contains(.deliveryStatusIndicator) {
-                footnoteSubviews.append(createDeliveryStatusView())
-            }
-            if attachmentViewInjector?.fillAllAvailableWidth == true {
-                footnoteSubviews.append(.spacer(axis: .horizontal))
-            }
-            
+        var footnoteSubviews: [UIView] = []
+        if options.contains(.authorName) {
+            footnoteSubviews.append(createAuthorNameLabel())
+        }
+        if options.contains(.timestamp) {
+            footnoteSubviews.append(createTimestampLabel())
+        }
+        if options.contains(.onlyVisibleToYouIndicator) {
+            onlyVisibleToYouContainer = ContainerStackView()
+                .withAccessibilityIdentifier(identifier: "onlyVisibleToYouContainer")
+            onlyVisibleToYouContainer!.addArrangedSubview(createOnlyVisibleToYouImageView())
+            onlyVisibleToYouContainer!.addArrangedSubview(createOnlyVisibleToYouLabel())
+            footnoteSubviews.append(onlyVisibleToYouContainer!)
+        }
+        if options.contains(.deliveryStatusIndicator) {
+            footnoteSubviews.append(createDeliveryStatusView())
+        }
+        if options.contains(.flipped) {
+            footnoteSubviews = footnoteSubviews.reversed()
+        }
+        if options.contains(.translation) {
+            footnoteSubviews.append(createTranslationLabel())
+        }
+
+        let shouldRenderSpacer = attachmentViewInjector?.fillAllAvailableWidth == true
+        let spacer = UIView.spacer(axis: .horizontal)
+        if shouldRenderSpacer && options.contains(.flipped) {
+            footnoteSubviews.insert(spacer, at: 0)
+        } else if shouldRenderSpacer {
+            footnoteSubviews.append(spacer)
+        }
+
+        if !footnoteSubviews.isEmpty {
             footnoteContainer = ContainerStackView(
                 spacing: 4,
-                arrangedSubviews: options.contains(.flipped) ? footnoteSubviews.reversed() : footnoteSubviews
+                arrangedSubviews: footnoteSubviews
             ).withAccessibilityIdentifier(identifier: "footnoteContainer")
             bubbleThreadFootnoteContainer.addArrangedSubview(footnoteContainer!)
         }
@@ -404,7 +521,7 @@ open class ChatMessageContentView: _View, ThemeProvider {
 
         if options.contains(.centered) {
             mainContainer.addArrangedSubviews([bubbleThreadFootnoteContainer])
-            
+
             constraintsToActivate += [
                 mainContainer.centerXAnchor
                     .pin(equalTo: centerXAnchor)
@@ -454,23 +571,41 @@ open class ChatMessageContentView: _View, ThemeProvider {
         ]
 
         NSLayoutConstraint.activate(constraintsToActivate)
+
+        // Swipe to Reply Icon
+        replyIconImageView.isHidden = true
+        addSubview(replyIconImageView)
+        NSLayoutConstraint.activate([
+            replyIconImageView.topAnchor.pin(equalTo: bubbleContentContainer.topAnchor),
+            replyIconImageView.leadingAnchor.pin(
+                equalTo: bubbleContentContainer.leadingAnchor,
+                constant: content?.isSentByCurrentUser == true ? -45 : -30
+            ),
+            replyIconImageView.widthAnchor.pin(equalToConstant: 25),
+            replyIconImageView.heightAnchor.pin(equalToConstant: 25)
+        ])
     }
-    
+
     // swiftlint:enable function_body_length
 
     // When the content is updated, we want to make sure there
     // are no unwanted animations caused by the ContainerStackView.
     func updateContentIfNeeded() {
         if superview != nil {
+            if components.isMessageListAnimationsEnabled {
+                updateContent()
+                return
+            }
+
             UIView.performWithoutAnimation {
                 updateContent()
             }
         }
     }
-    
+
     override open func setUpLayout() {
         super.setUpLayout()
-        
+
         guard let options = layoutOptions else {
             log.assertionFailure("Layout options are missing")
             return
@@ -483,62 +618,62 @@ open class ChatMessageContentView: _View, ThemeProvider {
         super.updateContent()
         defer {
             attachmentViewInjector?.contentViewDidUpdateContent()
+            previousContentUpdateTintColor = tintColor
             setNeedsLayout()
         }
 
-        // Text
-        if isMarkdownEnabled, markdownFormatter.containsMarkdown(content?.textContent ?? "") {
-            let markdownText = markdownFormatter.format(content?.textContent ?? "")
-            textView?.attributedText = markdownText
-        } else {
-            var textColor = appearance.colorPalette.text
-            var textFont = appearance.fonts.body
-            
-            if content?.isDeleted == true {
-                textColor = appearance.colorPalette.textLowEmphasis
-            } else if content?.shouldRenderAsJumbomoji == true {
-                textFont = appearance.fonts.emoji
-            } else if content?.type == .system || content?.type == .error {
-                textFont = appearance.fonts.caption1.bold
-                textColor = appearance.colorPalette.textLowEmphasis
+        var text = content?.textContent ?? ""
+
+        // Translated text
+        if layoutOptions?.contains(.translation) == true,
+           let currentUserLang = channel?.membership?.language {
+            let translatedText = content?.translatedText(for: currentUserLang)
+            text = translatedText ?? text
+
+            if translatedText != nil || content?.poll?.hasTranslation(for: currentUserLang) == true,
+               let languageText = Locale.current.localizedString(forLanguageCode: currentUserLang.languageCode) {
+                translationLabel?.text = L10n.Message.translatedTo(languageText)
             }
-            
-            textView?.textColor = textColor
-            textView?.font = textFont
-            textView?.text = content?.textContent
         }
-        
-        // Avatar
-        let placeholder = appearance.images.userAvatarPlaceholder1
-        if let imageURL = content?.author.imageURL, let imageView = authorAvatarView?.imageView {
-            components.imageLoader.loadImage(
-                into: imageView,
-                url: imageURL,
-                imageCDN: components.imageCDN,
-                placeholder: placeholder,
-                preferredSize: .avatarThumbnailSize
-            )
+
+        // Set the text content
+        let attributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: messageTextColor,
+            .font: messageTextFont
+        ]
+        if isMarkdownEnabled {
+            textView?.attributedText = markdownFormatter.format(text, attributes: attributes)
         } else {
-            authorAvatarView?.imageView.image = placeholder
+            let attributedText = NSAttributedString(string: text, attributes: attributes)
+            textView?.attributedText = attributedText
         }
+
+        // Link Detection (Must be after Markdown)
+        if let attributedText = textView?.attributedText {
+            let mutableAttributedText = NSMutableAttributedString(attributedString: attributedText)
+            mutableAttributedText.addLinks(detectedBy: linkDetector)
+            textView?.attributedText = mutableAttributedText
+        }
+
+        // Mentions
+        if let mentionedUsers = content?.mentionedUsers, !mentionedUsers.isEmpty {
+            mentionedUsers.forEach {
+                let mention = "@\($0.name ?? $0.id)"
+                textView?.highlightMention(mention: mention)
+            }
+        }
+
+        // Avatar
+        authorAvatarView?.content = content?.author
 
         // Bubble view
         bubbleView?.content = content.map { message in
-            var backgroundColor: UIColor {
-                if message.isSentByCurrentUser {
-                    if message.type == .ephemeral {
-                        return appearance.colorPalette.background8
-                    } else {
-                        return appearance.colorPalette.background6
-                    }
-                } else {
-                    return appearance.colorPalette.background8
-                }
-            }
-            
+            let backgroundColor: UIColor = message.isSentByCurrentUser ? appearance.colorPalette.chatBackgroundOutgoing : appearance.colorPalette.chatBackgroundIncoming
+            let borderColor: UIColor = message.isSentByCurrentUser ? appearance.colorPalette.chatBorderOutgoing : appearance.colorPalette.chatBorderIncoming
             return .init(
                 backgroundColor: backgroundColor,
-                roundedCorners: layoutOptions?.roundedCorners ?? .all
+                borderColor: borderColor,
+                roundedCorners: layoutOptions?.roundedCorners(for: effectiveUserInterfaceLayoutDirection) ?? .all
             )
         }
 
@@ -549,14 +684,24 @@ open class ChatMessageContentView: _View, ThemeProvider {
         authorNameLabel?.text = content?.author.name
 
         if let createdAt = content?.createdAt {
-            timestampLabel?.text = timestampFormatter.format(createdAt)
+            let timestamp = timestampFormatter.format(createdAt)
+            var text = timestamp
+            let messageWasEdited = components.isMessageEditedLabelEnabled && content?.textUpdatedAt != nil
+            if messageWasEdited && content?.isDeleted == false {
+                text = timestamp + editedLabelSeparator + L10n.Message.edited
+            }
+            timestampLabel?.text = text
         } else {
             timestampLabel?.text = nil
         }
 
         // Quoted message view
         quotedMessageView?.content = content?.quotedMessage.map {
-            .init(message: $0, avatarAlignment: $0.isSentByCurrentUser ? .trailing : .leading)
+            .init(
+                message: $0,
+                avatarAlignment: $0.isSentByCurrentUser ? .trailing : .leading,
+                channel: channel
+            )
         }
 
         // Thread info
@@ -568,17 +713,7 @@ open class ChatMessageContentView: _View, ThemeProvider {
         }
 
         // The last thread participant is the author of the most recent reply.
-        let threadAvatarUrl = content?.threadParticipants.last?.imageURL
-
-        if let imageView = threadAvatarView?.imageView {
-            components.imageLoader.loadImage(
-                into: imageView,
-                url: threadAvatarUrl,
-                imageCDN: components.imageCDN,
-                placeholder: appearance.images.userAvatarPlaceholder4,
-                preferredSize: .avatarThumbnailSize
-            )
-        }
+        threadAvatarView?.content = content?.threadParticipants.last
 
         // Reactions view
         reactionsBubbleView?.tailDirection = content
@@ -590,17 +725,20 @@ open class ChatMessageContentView: _View, ThemeProvider {
                 didTapOnReaction: nil
             )
         }
-        
+
         // Delivery status
         deliveryStatusView?.content = {
             guard let channel = channel, let message = content else { return nil }
             return .init(message: message, channel: channel)
         }()
+
+        textView?.delegate = self
     }
 
     override open func tintColorDidChange() {
         super.tintColorDidChange()
-
+        guard previousContentUpdateTintColor != tintColor else { return }
+        guard UIApplication.shared.applicationState == .active else { return }
         // We need to update the content and manually apply the updated `tintColor`
         // to the subviews which don't listen for `tintColor` updates.
         updateContentIfNeeded()
@@ -608,9 +746,10 @@ open class ChatMessageContentView: _View, ThemeProvider {
 
     /// Cleans up the view so it is ready to display another message.
     /// We don't need to reset `content` because all subviews are always updated.
-    func prepareForReuse() {
+    open func prepareForReuse() {
         defer { attachmentViewInjector?.contentViewDidPrepareForReuse() }
 
+        isJumpHighlighted = false
         delegate = nil
         indexPath = nil
     }
@@ -629,7 +768,8 @@ open class ChatMessageContentView: _View, ThemeProvider {
 
     /// Handles tap on `quotedMessageView` and forwards the action to the delegate.
     @objc open func handleTapOnQuotedMessage() {
-        delegate?.messageContentViewDidTapOnQuotedMessage(indexPath?())
+        guard let quotedMessage = content?.quotedMessage else { return }
+        delegate?.messageContentViewDidTapOnQuotedMessage(quotedMessage)
     }
 
     /// Handles tap on `avatarView` and forwards the action to the delegate.
@@ -640,12 +780,30 @@ open class ChatMessageContentView: _View, ThemeProvider {
     @objc open func handleTapOnReactionsView() {
         delegate?.messageContentViewDidTapOnReactionsView(indexPath?())
     }
-    
+
     /// Handles tap on `deliveryStatusView` and forwards the action to the delegate.
     @objc open func handleTapOnDeliveryStatusView() {
         delegate?.messageContentViewDidTapOnDeliveryStatusIndicator(indexPath?())
     }
-	
+
+    // MARK: - UITextViewDelegate
+
+    open func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
+        if let mentionedUsers = content?.mentionedUsers, !mentionedUsers.isEmpty {
+            let tappedMentionedUser = textViewUserMentionsHandler.mentionedUserTapped(
+                on: textView,
+                in: characterRange,
+                with: mentionedUsers
+            )
+            if let mentionedUser = tappedMentionedUser {
+                delegate?.messageContentViewDidTapOnMentionedUser(mentionedUser)
+                return false // There's no URL to open, so return false
+            }
+        }
+
+        return true
+    }
+
     // MARK: - Setups
 
     /// Instantiates, configures and assigns `textView` when called for the first time.
@@ -656,7 +814,6 @@ open class ChatMessageContentView: _View, ThemeProvider {
                 .withoutAutoresizingMaskConstraints
                 .withAccessibilityIdentifier(identifier: "textView")
             textView?.isEditable = false
-            textView?.dataDetectorTypes = .link
             textView?.isScrollEnabled = false
             textView?.backgroundColor = .clear
             textView?.adjustsFontForContentSizeCategory = true
@@ -669,14 +826,16 @@ open class ChatMessageContentView: _View, ThemeProvider {
 
     /// Instantiates, configures and assigns `authorAvatarView` when called for the first time.
     /// - Returns: The `authorAvatarView` subview.
-    open func createAvatarView() -> ChatAvatarView {
+    open func createAvatarView() -> ChatUserAvatarView {
         if authorAvatarView == nil {
-            authorAvatarView = components
-                .avatarView
+            let avatarView = components
+                .userAvatarView
                 .init()
                 .withoutAutoresizingMaskConstraints
+            avatarView.shouldShowOnlineIndicator = false
+            authorAvatarView = avatarView
         }
-        authorAvatarView?.addTarget(self, action: #selector(handleTapOnAvatarView), for: .touchUpInside)
+        authorAvatarView?.presenceAvatarView.avatarView.addTarget(self, action: #selector(handleTapOnAvatarView), for: .touchUpInside)
         return authorAvatarView!
     }
 
@@ -693,12 +852,14 @@ open class ChatMessageContentView: _View, ThemeProvider {
 
     /// Instantiates, configures and assigns `threadAvatarView` when called for the first time.
     /// - Returns: The `threadAvatarView` subview.
-    open func createThreadAvatarView() -> ChatAvatarView {
+    open func createThreadAvatarView() -> ChatUserAvatarView {
         if threadAvatarView == nil {
-            threadAvatarView = components
-                .avatarView
+            let avatarView = components
+                .userAvatarView
                 .init()
                 .withoutAutoresizingMaskConstraints
+            avatarView.shouldShowOnlineIndicator = false
+            threadAvatarView = avatarView
         }
         return threadAvatarView!
     }
@@ -782,7 +943,9 @@ open class ChatMessageContentView: _View, ThemeProvider {
                 .init()
                 .withoutAutoresizingMaskConstraints
 
-            errorIndicatorView!.addTarget(self, action: #selector(handleTapOnErrorIndicator), for: .touchUpInside)
+            errorIndicatorView?.setContentHuggingPriority(.streamRequire, for: .horizontal)
+
+            errorIndicatorView?.addTarget(self, action: #selector(handleTapOnErrorIndicator), for: .touchUpInside)
         }
         return errorIndicatorView!
     }
@@ -818,10 +981,24 @@ open class ChatMessageContentView: _View, ThemeProvider {
                 .withoutAutoresizingMaskConstraints
                 .withAccessibilityIdentifier(identifier: "timestampLabel")
 
-            timestampLabel!.textColor = appearance.colorPalette.subtitleText
+            timestampLabel!.textColor = appearance.colorPalette.textSecondary
             timestampLabel!.font = appearance.fonts.footnote
         }
         return timestampLabel!
+    }
+
+    open func createTranslationLabel() -> UILabel {
+        if translationLabel == nil {
+            translationLabel = UILabel()
+                .withAdjustingFontForContentSizeCategory
+                .withBidirectionalLanguagesSupport
+                .withoutAutoresizingMaskConstraints
+                .withAccessibilityIdentifier(identifier: "translationLabel")
+
+            translationLabel?.textColor = appearance.colorPalette.textSecondary
+            translationLabel?.font = appearance.fonts.footnote
+        }
+        return translationLabel!
     }
 
     /// Instantiates, configures and assigns `authorNameLabel` when called for the first time.
@@ -834,7 +1011,7 @@ open class ChatMessageContentView: _View, ThemeProvider {
                 .withoutAutoresizingMaskConstraints
                 .withAccessibilityIdentifier(identifier: "authorNameLabel")
 
-            authorNameLabel!.textColor = appearance.colorPalette.subtitleText
+            authorNameLabel!.textColor = appearance.colorPalette.textSecondary
             authorNameLabel!.font = appearance.fonts.footnote
         }
         return authorNameLabel!
@@ -847,7 +1024,7 @@ open class ChatMessageContentView: _View, ThemeProvider {
             onlyVisibleToYouImageView = UIImageView()
                 .withoutAutoresizingMaskConstraints
                 .withAccessibilityIdentifier(identifier: "onlyVisibleToYouImageView")
-            onlyVisibleToYouImageView!.tintColor = appearance.colorPalette.subtitleText
+            onlyVisibleToYouImageView!.tintColor = appearance.colorPalette.textSecondary
             onlyVisibleToYouImageView!.image = appearance.images.onlyVisibleToCurrentUser
             onlyVisibleToYouImageView!.contentMode = .scaleAspectFit
         }
@@ -864,13 +1041,13 @@ open class ChatMessageContentView: _View, ThemeProvider {
                 .withoutAutoresizingMaskConstraints
                 .withAccessibilityIdentifier(identifier: "onlyVisibleToYouLabel")
 
-            onlyVisibleToYouLabel!.textColor = appearance.colorPalette.subtitleText
+            onlyVisibleToYouLabel!.textColor = appearance.colorPalette.textSecondary
             onlyVisibleToYouLabel!.text = L10n.Message.onlyVisibleToYou
             onlyVisibleToYouLabel!.font = appearance.fonts.footnote
         }
         return onlyVisibleToYouLabel!
     }
-    
+
     /// Instantiates, configures and assigns `deliveryStatusView` when called for the first time.
     /// - Returns: The `deliveryStatusView` subview.
     open func createDeliveryStatusView() -> ChatMessageDeliveryStatusView {
@@ -879,16 +1056,25 @@ open class ChatMessageContentView: _View, ThemeProvider {
                 .messageDeliveryStatusView
                 .init()
                 .withAccessibilityIdentifier(identifier: "deliveryStatusView")
-            
+
             deliveryStatusView!.addTarget(self, action: #selector(handleTapOnDeliveryStatusView), for: .touchUpInside)
         }
         return deliveryStatusView!
     }
 }
 
-private extension ChatMessage {
+public extension ChatMessage {
+    /// The message reaction data ready to be presented in a view.
     var reactionsData: [ChatMessageReactionData] {
         let userReactionIDs = Set(currentUserReactions.map(\.type))
+        if reactionGroups.count == reactionScores.count {
+            return reactionGroups.values
+                .map { ChatMessageReactionData(
+                    reactionGroup: $0,
+                    isChosenByCurrentUser: userReactionIDs.contains($0.type)
+                ) }
+        }
+        // Fallback in case reaction groups is not present.
         return reactionScores
             .map { ChatMessageReactionData(
                 type: $0.key,
@@ -898,64 +1084,16 @@ private extension ChatMessage {
     }
 }
 
-private extension ChatMessageLayoutOptions {
-    static let footnote: Self = [
-        .onlyVisibleToYouIndicator,
-        .authorName,
-        .timestamp,
-        .deliveryStatusIndicator
-    ]
-    
-    var hasFootnoteOptions: Bool {
-        !isDisjoint(with: .footnote)
-    }
-}
-
 extension ChatMessageLayoutOptions {
-    var roundedCorners: CACornerMask {
+    func roundedCorners(for layoutDirection: UIUserInterfaceLayoutDirection) -> CACornerMask {
         if contains(.continuousBubble) {
             return .all
         } else if contains(.flipped) {
-            return CACornerMask.all.subtracting(.layerMaxXMaxYCorner)
+            return CACornerMask.all
+                .subtracting(layoutDirection == .leftToRight ? .layerMaxXMaxYCorner : .layerMinXMaxYCorner)
         } else {
-            return CACornerMask.all.subtracting(.layerMinXMaxYCorner)
+            return CACornerMask.all
+                .subtracting(layoutDirection == .leftToRight ? .layerMinXMaxYCorner : .layerMaxXMaxYCorner)
         }
-    }
-}
-
-extension ChatMessageContentView {
-    @available(*, deprecated, renamed: "onlyVisibleToYouImageView")
-    public var onlyVisibleForYouIconImageView: UIImageView? {
-        onlyVisibleToYouImageView
-    }
-    
-    @available(*, deprecated, renamed: "onlyVisibleToYouLabel")
-    public var onlyVisibleForYouLabel: UILabel? {
-        onlyVisibleToYouLabel
-    }
-    
-    @available(*, deprecated, renamed: "onlyVisibleToYouContainer")
-    public var onlyVisibleForYouContainer: ContainerStackView? {
-        onlyVisibleToYouContainer
-    }
-    
-    @available(*, deprecated, renamed: "footnoteContainer")
-    public var metadataContainer: ContainerStackView? {
-        footnoteContainer
-    }
-    
-    @available(*, deprecated, renamed: "bubbleThreadFootnoteContainer")
-    public var bubbleThreadMetaContainer: ContainerStackView? {
-        bubbleThreadFootnoteContainer
-    }
-    
-    @available(*, deprecated, renamed: "createOnlyVisibleToYouImageView")
-    open func createOnlyVisibleForYouIconImageView() -> UIImageView {
-        createOnlyVisibleToYouImageView()
-    }
-    
-    @available(*, deprecated, renamed: "createOnlyVisibleToYouLabel")
-    open func createOnlyVisibleForYouLabel() -> UILabel {
-        createOnlyVisibleToYouLabel()
     }
 }

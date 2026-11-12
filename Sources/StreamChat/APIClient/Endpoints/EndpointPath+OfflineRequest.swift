@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -7,12 +7,104 @@ import Foundation
 extension EndpointPath {
     var shouldBeQueuedOffline: Bool {
         switch self {
-        case .sendMessage, .editMessage, .deleteMessage, .addReaction, .deleteReaction:
+        case .createDraft,
+             .deleteDraft,
+             .deleteMessage,
+             .deleteReaction,
+             .sendMessage,
+             .sendReaction,
+             .updateMessage,
+             .updateMessagePartial:
             return true
-        case .createChannel, .connect, .sync, .users, .guest, .members, .search, .devices, .channels, .updateChannel,
-             .deleteChannel, .channelUpdate, .muteChannel, .showChannel, .truncateChannel, .markChannelRead,
-             .markAllChannelsRead, .channelEvent, .stopWatchingChannel, .pinnedMessages, .uploadAttachment, .message,
-             .replies, .reactions, .messageAction, .banMember, .flagUser, .flagMessage, .muteUser, .translateMessage:
+        case .addUserGroupMembers,
+             .ban,
+             .blockUsers,
+             .castPollVote,
+             .connect,
+             .custom,
+             .createDevice,
+             .createGuest,
+             .createPoll,
+             .createPollOption,
+             .createReminder,
+             .createUserGroup,
+             .deleteChannel,
+             .deleteChannelFile,
+             .deleteChannelImage,
+             .deleteDevice,
+             .deleteFile,
+             .deleteImage,
+             .deletePoll,
+             .deletePollVote,
+             .deleteReminder,
+             .deleteScheduledMessage,
+             .deleteUserGroup,
+             .flag,
+             .getApp,
+             .getBlockedUsers,
+             .getDraft,
+             .getMessage,
+             .getOG,
+             .getOrCreateChannel,
+             .getOrCreateDistinctChannel,
+             .getPinnedMessages,
+             .getReactions,
+             .getReplies,
+             .getThread,
+             .getUserGroup,
+             .getUserLiveLocations,
+             .groupedQueryChannels,
+             .hideChannel,
+             .listDevices,
+             .listUserGroups,
+             .markChannelsRead,
+             .markDelivered,
+             .markRead,
+             .markUnread,
+             .mute,
+             .muteChannel,
+             .queryBannedUsers,
+             .queryChannels,
+             .queryDrafts,
+             .queryMembers,
+             .queryPollVotes,
+             .queryReactions,
+             .queryReminders,
+             .queryScheduledMessages,
+             .queryThreads,
+             .queryUsers,
+             .removeUserGroupMembers,
+             .runMessageAction,
+             .search,
+             .searchRoles,
+             .searchUserGroups,
+             .sendEvent,
+             .sendScheduledMessageNow,
+             .showChannel,
+             .stopWatchingChannel,
+             .sync,
+             .translateMessage,
+             .truncateChannel,
+             .unban,
+             .unblockUsers,
+             .unmute,
+             .unmuteChannel,
+             .unreadCounts,
+             .updateChannel,
+             .updateChannelPartial,
+             .updateLiveLocation,
+             .updateMemberPartial,
+             .updatePollPartial,
+             .updatePushNotificationPreferences,
+             .updateReminder,
+             .updateScheduledMessage,
+             .updateThreadPartial,
+             .updateUserGroup,
+             .updateUsersPartial,
+             .uploadChannelFile,
+             .uploadChannelImage,
+             .uploadFile,
+             .uploadImage:
             return false
         }
     }
@@ -20,6 +112,10 @@ extension EndpointPath {
 
 extension Endpoint {
     var shouldBeQueuedOffline: Bool {
-        path.shouldBeQueuedOffline
+        // The `MessageScheduler` sends a scheduled message again once connected, and replaying it would add it to the channel.
+        if (body as? SendMessageRequest)?.scheduledAt != nil {
+            return false
+        }
+        return path.shouldBeQueuedOffline
     }
 }

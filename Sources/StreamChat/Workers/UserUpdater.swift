@@ -1,42 +1,122 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
+import CoreData
 import Foundation
 
 /// Makes user-related calls to the backend and updates the local storage with the results.
-class UserUpdater: Worker {
+class UserUpdater: Worker, @unchecked Sendable {
     /// Mutes the user with the provided `userId`.
     /// - Parameters:
     ///   - userId: The user identifier.
     ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
     ///
-    func muteUser(_ userId: UserId, completion: ((Error?) -> Void)? = nil) {
-        apiClient.request(endpoint: .muteUser(userId)) {
-            completion?($0.error)
+    func muteUser(_ userId: UserId, completion: (@Sendable (Error?) -> Void)? = nil) {
+        apiClient.request(endpoint: .mute(muteRequest: .init(targetIds: [userId]))) { result in
+            switch result {
+            case .success(let payload):
+                self.database.write({ session in
+                    try session.saveCurrentUserMutedUsers(payload.ownUser?.mutes ?? payload.mutes ?? [])
+                }, completion: {
+                    completion?($0)
+                })
+            case .failure(let error):
+                completion?(error)
+            }
         }
     }
-    
+
     /// Unmutes the user with the provided `userId`.
     /// - Parameters:
     ///   - userId: The user identifier.
     ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
     ///
-    func unmuteUser(_ userId: UserId, completion: ((Error?) -> Void)? = nil) {
-        apiClient.request(endpoint: .unmuteUser(userId)) {
+    func unmuteUser(_ userId: UserId, completion: (@Sendable (Error?) -> Void)? = nil) {
+        apiClient.request(endpoint: .unmute(unmuteRequest: .init(targetIds: [userId]))) {
             completion?($0.error)
         }
     }
     
+    /// Blocks the user with the provided `userId`.
+    /// - Parameters:
+    ///   - userId: The user identifier.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    ///
+    func blockUser(_ userId: UserId, completion: (@Sendable (Error?) -> Void)? = nil) {
+        apiClient.request(endpoint: .blockUsers(blockUsersRequest: BlockUsersRequest(blockedUserId: userId))) {
+            switch $0 {
+            case .success:
+                self.database.write({ session in
+                    session.currentUser?.blockedUserIds.insert(userId)
+                    let channel = ChannelDTO.directMessageChannel(
+                        participantId: userId,
+                        context: self.database.writableContext
+                    )
+                    channel?.isBlocked = true
+                    channel?.isHidden = true
+                }, completion: {
+                    if let error = $0 {
+                        log.error("Failed to save blocked user with id: <\(userId)> to the database. Error: \(error)")
+                    }
+                    completion?($0)
+                })
+            case let .failure(error):
+                self.database.write { session in
+                    session.currentUser?.blockedUserIds.remove(userId)
+                }
+                completion?(error)
+            }
+        }
+    }
+
+    /// Unblocks the user with the provided `userId`.
+    /// - Parameters:
+    ///   - userId: The user identifier.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    ///
+    func unblockUser(_ userId: UserId, completion: (@Sendable (Error?) -> Void)? = nil) {
+        apiClient.request(endpoint: .unblockUsers(unblockUsersRequest: UnblockUsersRequest(blockedUserId: userId))) {
+            switch $0 {
+            case .success:
+                self.database.write({ session in
+                    session.currentUser?.blockedUserIds.remove(userId)
+                    let channel = ChannelDTO.directMessageChannel(
+                        participantId: userId,
+                        context: self.database.writableContext
+                    )
+                    channel?.isBlocked = false
+                    channel?.isHidden = false
+                }, completion: {
+                    if let error = $0 {
+                        log.error("Failed to remove blocked user with id: <\(userId)> from the database. Error: \(error)")
+                    }
+                    completion?($0)
+                })
+            case let .failure(error):
+                self.database.write { session in
+                    session.currentUser?.blockedUserIds.insert(userId)
+                }
+                completion?(error)
+            }
+        }
+    }
+
     /// Makes a single user query call to the backend and updates the local storage with the results.
     ///
     /// - Parameters:
     ///   - userId: The user identifier
     ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
     ///
-    func loadUser(_ userId: UserId, completion: ((Error?) -> Void)? = nil) {
+    func loadUser(_ userId: UserId, completion: (@Sendable (Error?) -> Void)? = nil) {
+        let query = UserListQuery.user(withID: userId)
         apiClient
-            .request(endpoint: .users(query: .user(withID: userId))) { (result: Result<UserListPayload, Error>) in
+            .request(
+                endpoint: .queryUsers(
+                    payload: query.asQueryUsersPayload(),
+                    requiresConnectionId: query.options.contains(.presence)
+                )
+            ) { (result: Result<QueryUsersResponse, Error>) in
                 switch result {
                 case let .success(payload):
                     guard payload.users.count <= 1 else {
@@ -45,14 +125,14 @@ class UserUpdater: Worker {
                         ))
                         return
                     }
-                
+
                     guard let user = payload.users.first else {
                         completion?(ClientError.UserDoesNotExist(userId: userId))
                         return
                     }
-                
+
                     self.database.write({ session in
-                        try session.saveUser(payload: user)
+                        try session.saveUser(fullResponse: user)
                     }, completion: { error in
                         if let error = error {
                             log.error("Failed to save user with id: <\(userId)> to the database. Error: \(error)")
@@ -64,27 +144,45 @@ class UserUpdater: Worker {
                 }
             }
     }
-    
+
     /// Flags or unflags the user with the provided `userId` depending on `flag` value.
+    ///
+    /// Unflagging is not supported by the API, therefore it only updates the local state.
     /// - Parameters:
     ///   - flag: The indicator saying whether the user should be flagged or unflagged.
     ///   - userId: The identifier of a user that should be flagged or unflagged.
+    ///   - extraData: Additional data associated with the flag request.
     ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
     ///
-    func flagUser(_ flag: Bool, with userId: UserId, completion: ((Error?) -> Void)? = nil) {
-        let endpoint: Endpoint<FlagUserPayload> = .flagUser(flag, with: userId)
+    func flagUser(
+        _ flag: Bool,
+        with userId: UserId,
+        reason: String? = nil,
+        extraData: [String: RawJSON]? = nil,
+        completion: (@Sendable (Error?) -> Void)? = nil
+    ) {
+        if !flag {
+            database.write({ session in
+                guard let userDTO = session.user(id: userId) else { return }
+                session.currentUser?.flaggedUsers.remove(userDTO)
+            }, completion: {
+                if let error = $0 {
+                    log.error("Failed to remove the flag from the user with id: <\(userId)> in the database. Error: \(error)")
+                }
+                completion?($0)
+            })
+            return
+        }
+
+        let endpoint: Endpoint<EmptyResponse> = .flag(flagRequest: .init(userId: userId, reason: reason, custom: extraData))
         apiClient.request(endpoint: endpoint) {
             switch $0 {
-            case let .success(payload):
+            case .success:
                 self.database.write({ session in
-                    let userDTO = try session.saveUser(payload: payload.flaggedUser)
-                    
-                    let currentUserDTO = session.currentUser
-                    if flag {
-                        currentUserDTO?.flaggedUsers.insert(userDTO)
-                    } else {
-                        currentUserDTO?.flaggedUsers.remove(userDTO)
+                    guard let userDTO = session.user(id: userId) else {
+                        throw ClientError.UserDoesNotExist(userId: userId)
                     }
+                    session.currentUser?.flaggedUsers.insert(userDTO)
                 }, completion: {
                     if let error = $0 {
                         log.error("Failed to save flagged user with id: <\(userId)> to the database. Error: \(error)")
@@ -99,9 +197,68 @@ class UserUpdater: Worker {
 }
 
 extension ClientError {
-    class UserDoesNotExist: ClientError {
+    final class UserDoesNotExist: ClientError, @unchecked Sendable {
         init(userId: UserId) {
             super.init("There is no user with id: <\(userId)>.")
+        }
+    }
+}
+
+extension UserUpdater {
+    func muteUser(_ userId: UserId) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            muteUser(userId) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+    
+    func unmuteUser(_ userId: UserId) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            unmuteUser(userId) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+    
+    func blockUser(_ userId: UserId) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            blockUser(userId) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+    
+    func unblockUser(_ userId: UserId) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            unblockUser(userId) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+    
+    func flag(
+        _ userId: UserId,
+        reason: String?,
+        extraData: [String: RawJSON]?
+    ) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            flagUser(
+                true,
+                with: userId,
+                reason: reason,
+                extraData: extraData
+            ) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+    
+    func unflag(_ userId: UserId) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            flagUser(false, with: userId) { error in
+                continuation.resume(with: error)
+            }
         }
     }
 }

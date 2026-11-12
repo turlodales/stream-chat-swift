@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -7,15 +7,13 @@
 import XCTest
 
 final class DataController_Tests: XCTestCase {
-    func test_delegateMethodIsCalled() {
+    @MainActor func test_delegateMethodIsCalled() {
         // GIVEN
         let controller = DataController()
-        let delegateQueueId = UUID()
-        let delegate = DataController_Delegate(expectedQueueId: delegateQueueId)
-        
+        let delegate = DataController_Delegate()
+
         controller.stateMulticastDelegate.add(additionalDelegate: delegate)
-        controller.callbackQueue = DispatchQueue.testQueue(withId: delegateQueueId)
-        
+
         // Check if state is `initialized` initially.
         XCTAssertEqual(delegate.state, .initialized)
 
@@ -56,5 +54,21 @@ final class DataController_Tests: XCTestCase {
         let controller = DataController()
         controller.state = .localDataFetchFailed(ClientError(""))
         XCTAssertFalse(controller.canBeRecovered)
+    }
+
+    func test_state_whenAccessedConcurrently_doesNotCrash() {
+        let controller = DataController()
+        let iterations = 1000
+
+        DispatchQueue.concurrentPerform(iterations: iterations) { index in
+            if index.isMultiple(of: 2) {
+                controller.state = .remoteDataFetchFailed(ClientError("Failed \(index)"))
+            } else {
+                _ = controller.state
+                _ = controller.canBeRecovered
+            }
+        }
+
+        XCTAssertTrue(controller.canBeRecovered)
     }
 }

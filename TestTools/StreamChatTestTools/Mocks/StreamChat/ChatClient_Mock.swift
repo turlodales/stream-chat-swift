@@ -1,12 +1,13 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
+@testable import StreamCore
 import XCTest
 
-final class ChatClient_Mock: ChatClient {
+final class ChatClient_Mock: ChatClient, @unchecked Sendable {
     @Atomic var init_config: ChatClientConfig
     @Atomic var init_environment: Environment
     @Atomic var init_completion: ((Error?) -> Void)?
@@ -21,11 +22,27 @@ final class ChatClient_Mock: ChatClient {
     @Atomic var completeTokenWaiters_called = false
     @Atomic var completeTokenWaiters_token: Token?
 
-    override var backgroundWorkers: [Worker] {
-        _backgroundWorkers ?? super.backgroundWorkers
+    var mockedAppSettings: AppSettings?
+
+    override var appSettings: AppSettings? {
+        mockedAppSettings
     }
 
-    private var _backgroundWorkers: [Worker]?
+    var mockedEventNotificationCenter: EventNotificationCenter_Mock?
+
+    override var eventNotificationCenter: PersistentEventNotificationCenter {
+        mockedEventNotificationCenter ?? super.eventNotificationCenter
+    }
+
+    override var backgroundWorkers: [Worker] {
+        _backgroundWorkers.isEmpty ? super.backgroundWorkers : _backgroundWorkers
+    }
+    
+    func addBackgroundWorker(_ worker: Worker) {
+        _backgroundWorkers.append(worker)
+    }
+
+    private var _backgroundWorkers = [Worker]()
 
     // MARK: - Overrides
 
@@ -39,26 +56,35 @@ final class ChatClient_Mock: ChatClient {
 
         super.init(
             config: config,
-            environment: environment
+            environment: environment,
+            factory: ChatClientFactory(config: config, environment: environment)
         )
         if !workerBuilders.isEmpty {
             _backgroundWorkers = workerBuilders.map { $0(databaseContainer, apiClient) }
         }
     }
+    
+    override var currentUserId: UserId? {
+        currentUserId_mock
+    }
 
     public var currentUserId_mock: UserId? {
         get {
-            super.currentUserId
+            authenticationRepository.currentUserId
         }
         set {
-            super.currentUserId = newValue
+            (authenticationRepository as? AuthenticationRepository_Mock)?.mockedCurrentUserId = newValue
         }
     }
-    
-    override func fetchCurrentUserIdFromDatabase() -> UserId? {
-        fetchCurrentUserIdFromDatabase_called = true
 
-        return super.fetchCurrentUserIdFromDatabase()
+    public var connectionStatus_mock: ConnectionStatus?
+    override var connectionStatus: ConnectionStatus {
+        get {
+            connectionStatus_mock ?? super.connectionStatus
+        }
+        set {
+            connectionStatus_mock = newValue
+        }
     }
 
     override func createBackgroundWorkers() {
@@ -96,7 +122,7 @@ final class ChatClient_Mock: ChatClient {
         completeTokenWaiters_called = false
         completeTokenWaiters_token = nil
 
-        _backgroundWorkers?.removeAll()
+        _backgroundWorkers.removeAll()
         init_completion = nil
     }
 }
@@ -110,27 +136,85 @@ extension ChatClient {
     }
 
     /// Create a new instance of mock `ChatClient`
-    static func mock(config: ChatClientConfig? = nil) -> ChatClient {
+    static func mock(config: ChatClientConfig? = nil, bundle: Bundle? = nil) -> ChatClient_Mock {
         .init(
             config: config ?? defaultMockedConfig,
             environment: .init(
-                apiClientBuilder: APIClient_Spy.init,
+                apiClientBuilder: {
+                    APIClient_Spy(
+                        sessionConfiguration: $0,
+                        requestEncoder: $1,
+                        requestDecoder: $2,
+                        attachmentDownloader: $3,
+                        cdnStorage: $4
+                    )
+                },
                 webSocketClientBuilder: {
                     WebSocketClient_Mock(
                         sessionConfiguration: $0,
-                        requestEncoder: $1,
-                        eventDecoder: $2,
-                        eventNotificationCenter: $3
+                        eventDecoder: $1,
+                        eventNotificationCenter: $2
                     )
                 },
                 databaseContainerBuilder: {
                     DatabaseContainer_Spy(
                         kind: $0,
-                        shouldFlushOnStart: $1,
-                        shouldResetEphemeralValuesOnStart: $2,
-                        localCachingSettings: $3,
-                        deletedMessagesVisibility: $4,
-                        shouldShowShadowedMessages: $5
+                        bundle: bundle,
+                        chatClientConfig: $1
+                    )
+                },
+                internetConnection: { center, _ in
+                    InternetConnection_Mock(notificationCenter: center)
+                },
+                authenticationRepositoryBuilder: {
+                    AuthenticationRepository_Mock(
+                        apiClient: $0,
+                        databaseContainer: $1,
+                        connectionRepository: $2,
+                        tokenExpirationRetryStrategy: $3,
+                        timerType: $4
+                    )
+                },
+                syncRepositoryBuilder: {
+                    SyncRepository_Mock(
+                        config: $0,
+                        offlineRequestsRepository: $1,
+                        eventNotificationCenter: $2,
+                        database: $3,
+                        apiClient: $4,
+                        channelListUpdater: $5
+                    )
+                },
+                pollsRepositoryBuilder: {
+                    PollsRepository_Mock(
+                        database: $0,
+                        apiClient: $1
+                    )
+                },
+                draftMessagesRepositoryBuilder: {
+                    DraftMessagesRepository_Mock(
+                        database: $0,
+                        apiClient: $1
+                    )
+                },
+                channelListUpdaterBuilder: {
+                    ChannelListUpdater_Spy(
+                        database: $0,
+                        apiClient: $1
+                    )
+                },
+                messageRepositoryBuilder: {
+                    MessageRepository_Mock(
+                        database: $0,
+                        apiClient: $1
+                    )
+                },
+                offlineRequestsRepositoryBuilder: {
+                    OfflineRequestsRepository_Mock(
+                        messageRepository: $0,
+                        database: $1,
+                        apiClient: $2,
+                        maxHoursThreshold: $3
                     )
                 }
             )
@@ -146,29 +230,57 @@ extension ChatClient {
             environment: .mock
         )
     }
-    
+
     var mockAPIClient: APIClient_Spy {
         apiClient as! APIClient_Spy
     }
     
+    var mockChannelListUpdater: ChannelListUpdater_Spy {
+        channelListUpdater as! ChannelListUpdater_Spy
+    }
+
     var mockWebSocketClient: WebSocketClient_Mock {
         webSocketClient as! WebSocketClient_Mock
     }
-    
+
     var mockDatabaseContainer: DatabaseContainer_Spy {
         databaseContainer as! DatabaseContainer_Spy
     }
-    
-    var mockSyncRepository: SyncRepository_Spy {
-        syncRepository as! SyncRepository_Spy
+
+    var mockSyncRepository: SyncRepository_Mock {
+        syncRepository as! SyncRepository_Mock
+    }
+
+    var mockMessageRepository: MessageRepository_Mock {
+        messageRepository as! MessageRepository_Mock
+    }
+
+    var mockOfflineRequestsRepository: OfflineRequestsRepository_Mock {
+        offlineRequestsRepository as! OfflineRequestsRepository_Mock
+    }
+
+    var mockAuthenticationRepository: AuthenticationRepository_Mock {
+        authenticationRepository as! AuthenticationRepository_Mock
     }
     
-    var mockMessageRepository: MessageRepository_Spy {
-        messageRepository as! MessageRepository_Spy
+    var mockPollsRepository: PollsRepository_Mock {
+        pollsRepository as! PollsRepository_Mock
     }
-    
-    var mockOfflineRequestsRepository: OfflineRequestsRepository_Spy {
-        offlineRequestsRepository as! OfflineRequestsRepository_Spy
+
+    var mockDraftMessagesRepository: DraftMessagesRepository_Mock {
+        draftMessagesRepository as! DraftMessagesRepository_Mock
+    }
+
+    var mockRemindersRepository: RemindersRepository_Mock {
+        remindersRepository as! RemindersRepository_Mock
+    }
+
+    var mockUserGroupsRepository: UserGroupsRepository_Mock {
+        userGroupsRepository as! UserGroupsRepository_Mock
+    }
+
+    var mockRolesRepository: RolesRepository_Mock {
+        rolesRepository as! RolesRepository_Mock
     }
 
     func simulateProvidedConnectionId(connectionId: ConnectionId?) {
@@ -179,59 +291,165 @@ extension ChatClient {
             )
             return
         }
-        webSocketClient(mockWebSocketClient, didUpdateConnectionState: .connected(connectionId: connectionId))
+        webSocketClient(mockWebSocketClient, didUpdateConnectionState: .connected(healthCheckInfo: HealthCheckInfo(connectionId: connectionId)))
     }
 }
 
 extension ChatClient.Environment {
     static var mock: ChatClient.Environment {
         .init(
-            apiClientBuilder: APIClient_Spy.init,
+            apiClientBuilder: {
+                APIClient_Spy(
+                    sessionConfiguration: $0,
+                    requestEncoder: $1,
+                    requestDecoder: $2,
+                    attachmentDownloader: $3,
+                    cdnStorage: $4
+                )
+            },
             webSocketClientBuilder: {
                 WebSocketClient_Mock(
                     sessionConfiguration: $0,
-                    requestEncoder: $1,
-                    eventDecoder: $2,
-                    eventNotificationCenter: $3
+                    eventDecoder: $1,
+                    eventNotificationCenter: $2
                 )
             },
             databaseContainerBuilder: {
                 DatabaseContainer_Spy(
-                    kind: .onDisk(databaseFileURL: .newTemporaryFileURL()),
-                    shouldFlushOnStart: $1,
-                    shouldResetEphemeralValuesOnStart: $2,
-                    localCachingSettings: $3,
-                    deletedMessagesVisibility: $4,
-                    shouldShowShadowedMessages: $5
+                    kind: .inMemory,
+                    chatClientConfig: $1
                 )
             },
-            requestEncoderBuilder: DefaultRequestEncoder.init,
-            requestDecoderBuilder: DefaultRequestDecoder.init,
-            eventDecoderBuilder: EventDecoder.init,
-            notificationCenterBuilder: EventNotificationCenter.init,
-            clientUpdaterBuilder: ChatClientUpdater_Mock.init,
-            syncRepositoryBuilder: SyncRepository_Spy.init,
-            messageRepositoryBuilder: MessageRepository_Spy.init,
-            offlineRequestsRepositoryBuilder: OfflineRequestsRepository_Spy.init
+            requestEncoderBuilder: {
+                DefaultRequestEncoder(baseURL: $0, apiKey: $1)
+            },
+            requestDecoderBuilder: {
+                DefaultRequestDecoder()
+            },
+            eventDecoderBuilder: {
+                EventDecoder()
+            },
+            notificationCenterBuilder: {
+                PersistentEventNotificationCenter(database: $0, manualEventHandler: $1)
+            },
+            authenticationRepositoryBuilder: {
+                AuthenticationRepository_Mock(
+                    apiClient: $0,
+                    databaseContainer: $1,
+                    connectionRepository: $2,
+                    tokenExpirationRetryStrategy: $3,
+                    timerType: $4
+                )
+            },
+            syncRepositoryBuilder: {
+                SyncRepository_Mock(
+                    config: $0,
+                    offlineRequestsRepository: $1,
+                    eventNotificationCenter: $2,
+                    database: $3,
+                    apiClient: $4,
+                    channelListUpdater: $5
+                )
+            },
+            pollsRepositoryBuilder: {
+                PollsRepository_Mock(
+                    database: $0,
+                    apiClient: $1
+                )
+            },
+            draftMessagesRepositoryBuilder: {
+                DraftMessagesRepository_Mock(
+                    database: $0,
+                    apiClient: $1
+                )
+            },
+            remindersRepositoryBuilder: RemindersRepository_Mock.init,
+            userGroupsRepositoryBuilder: UserGroupsRepository_Mock.init,
+            rolesRepositoryBuilder: RolesRepository_Mock.init,
+            channelListUpdaterBuilder: {
+                ChannelListUpdater_Spy(
+                    database: $0,
+                    apiClient: $1
+                )
+            },
+            messageRepositoryBuilder: {
+                MessageRepository_Mock(
+                    database: $0,
+                    apiClient: $1
+                )
+            },
+            offlineRequestsRepositoryBuilder: {
+                OfflineRequestsRepository_Mock(
+                    messageRepository: $0,
+                    database: $1,
+                    apiClient: $2,
+                    maxHoursThreshold: $3
+                )
+            }
         )
     }
 
     static var withZeroEventBatchingPeriod: Self {
         .init(
             webSocketClientBuilder: {
-                var webSocketEnvironment = WebSocketClient.Environment()
-                webSocketEnvironment.eventBatcherBuilder = {
-                    Batcher<Event>(period: 0, handler: $0)
-                }
-                
+                let webSocketEnvironment = WebSocketClient.Environment(eventBatchingPeriod: 0)
                 return WebSocketClient(
                     sessionConfiguration: $0,
-                    requestEncoder: $1,
-                    eventDecoder: $2,
-                    eventNotificationCenter: $3,
-                    environment: webSocketEnvironment
+                    eventDecoder: $1,
+                    eventNotificationCenter: $2,
+                    webSocketClientType: .coordinator,
+                    environment: webSocketEnvironment,
+                    connectRequest: nil
                 )
             }
+        )
+    }
+}
+
+extension ChatClient {
+    convenience init(config: ChatClientConfig, environment: ChatClient.Environment) {
+        self.init(
+            config: config,
+            environment: environment,
+            factory: ChatClientFactory(config: config, environment: environment)
+        )
+    }
+}
+
+extension AppSettings {
+    static func mock(
+        name: String = "Stream iOS",
+        fileUploadConfig: UploadConfig? = nil,
+        imageUploadConfig: UploadConfig? = nil,
+        autoTranslationEnabled: Bool = false,
+        asyncUrlEnrichEnabled: Bool = false
+    ) -> AppSettings {
+        .init(
+            asyncUrlEnrichEnabled: asyncUrlEnrichEnabled,
+            autoTranslationEnabled: autoTranslationEnabled,
+            fileUploadConfig: fileUploadConfig ?? .mock(),
+            id: 1,
+            imageUploadConfig: imageUploadConfig ?? .mock(),
+            name: name,
+            placement: ""
+        )
+    }
+}
+
+extension AppSettings.UploadConfig {
+    static func mock(
+        allowedFileExtensions: [String] = [],
+        blockedFileExtensions: [String] = [],
+        allowedMimeTypes: [String] = [],
+        blockedMimeTypes: [String] = [],
+        sizeLimitInBytes: Int64? = nil
+    ) -> AppSettings.UploadConfig {
+        .init(
+            allowedFileExtensions: allowedFileExtensions,
+            allowedMimeTypes: allowedMimeTypes,
+            blockedFileExtensions: blockedFileExtensions,
+            blockedMimeTypes: blockedMimeTypes,
+            sizeLimit: sizeLimitInBytes.map(Int.init) ?? 0
         )
     }
 }

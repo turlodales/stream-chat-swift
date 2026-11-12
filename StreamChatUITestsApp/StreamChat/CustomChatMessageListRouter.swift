@@ -1,13 +1,12 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
-import StreamChatUI
 import StreamChat
+import StreamChatUI
 
 final class CustomMessageListRouter: ChatMessageListRouter {
-
     var onThreadViewWillAppear: ((ThreadVC) -> Void)?
 
     override func showThread(messageId: MessageId, cid: ChannelId, client: ChatClient) {
@@ -26,4 +25,20 @@ final class CustomMessageListRouter: ChatMessageListRouter {
         rootNavigationController?.show(threadVC, sender: self)
     }
 
+    override func showThread(messageId: MessageId, at replyId: MessageId?, cid: ChannelId, client: ChatClient) {
+        let threadVC = components.threadVC.init()
+        threadVC.initialReplyId = replyId
+        threadVC.channelController = client.channelController(for: cid)
+        threadVC.messageController = client.messageController(
+            cid: cid,
+            messageId: messageId
+        )
+
+        if let vc = threadVC as? ThreadVC {
+            vc.onViewWillAppear = { [weak self] _ in
+                self?.onThreadViewWillAppear?(vc)
+            }
+        }
+        rootNavigationController?.show(threadVC, sender: self)
+    }
 }

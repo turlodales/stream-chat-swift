@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -25,7 +25,7 @@ final class QueuedRequestDTO_Tests: XCTestCase {
         let id = String.newUniqueId
         let date = Date()
         let endpoint = Endpoint<EmptyResponse>(
-            path: .guest,
+            path: .createGuest,
             method: .post,
             queryItems: nil,
             requiresConnectionId: true,
@@ -49,7 +49,7 @@ final class QueuedRequestDTO_Tests: XCTestCase {
         let databaseEndpointData = try XCTUnwrap(request?.endpoint)
         XCTAssertEqual(databaseEndpointData, endpointData)
         let databaseEndpoint = try JSONDecoder.stream.decode(Endpoint<EmptyResponse>.self, from: databaseEndpointData)
-        XCTAssertEqual(databaseEndpoint.path.value, "guest")
+        XCTAssertEqual(databaseEndpoint.path.value, "/api/v2/guest")
         XCTAssertEqual(databaseEndpoint.method, .post)
         XCTAssertNil(databaseEndpoint.queryItems)
         XCTAssertTrue(databaseEndpoint.requiresConnectionId)
@@ -95,11 +95,11 @@ final class QueuedRequestDTO_Tests: XCTestCase {
     }
 
     private func createRequests(count: Int) throws {
-        func createRequest(index: Int) throws {
+        @Sendable func createRequest(index: Int) throws {
             let id = "request\(index)"
             let date = Date()
             let endpoint = Endpoint<EmptyResponse>(
-                path: .sendMessage(.init(type: .messaging, id: "\(index)")),
+                path: .sendMessage(type: ChannelType.messaging.rawValue, id: "\(index)"),
                 method: .post,
                 queryItems: nil,
                 requiresConnectionId: true,

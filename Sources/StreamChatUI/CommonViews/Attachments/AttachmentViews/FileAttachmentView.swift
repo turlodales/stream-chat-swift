@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -8,7 +8,7 @@ import UIKit
 /// A view that displays the file attachment.
 open class FileAttachmentView: _View, AppearanceProvider {
     open var height: CGFloat = 54
-    
+
     public struct Content {
         /// The title of the attachment.
         var title: String
@@ -16,20 +16,20 @@ open class FileAttachmentView: _View, AppearanceProvider {
         var size: Int64
         /// The attachment type.
         var iconName: String?
-        
+
         public init(title: String, size: Int64, iconName: String?) {
             self.title = title
             self.size = size
             self.iconName = iconName
         }
     }
-    
+
     public var content: Content? {
         didSet {
             updateContentIfNeeded()
         }
     }
-    
+
     public private(set) lazy var fileNameLabel = UILabel()
         .withoutAutoresizingMaskConstraints
         .withBidirectionalLanguagesSupport
@@ -39,7 +39,7 @@ open class FileAttachmentView: _View, AppearanceProvider {
         .withoutAutoresizingMaskConstraints
         .withBidirectionalLanguagesSupport
         .withAdjustingFontForContentSizeCategory
-    
+
     public private(set) lazy var fileNameAndSizeStack: ContainerStackView = {
         let stack = ContainerStackView(arrangedSubviews: [fileNameLabel, fileSizeLabel])
         stack.axis = .vertical
@@ -56,36 +56,34 @@ open class FileAttachmentView: _View, AppearanceProvider {
 
     override open func setUpAppearance() {
         super.setUpAppearance()
-        
-        backgroundColor = appearance.colorPalette.background
+
+        backgroundColor = appearance.colorPalette.backgroundCoreApp
         layer.cornerRadius = 15
         layer.masksToBounds = true
         layer.borderWidth = 1
-        layer.borderColor = appearance.colorPalette.border.cgColor
+        layer.borderColor = appearance.colorPalette.borderCoreDefault.cgColor
 
         fileIconImageView.contentMode = .center
 
-        fileSizeLabel.textColor = appearance.colorPalette.subtitleText
+        fileSizeLabel.textColor = appearance.colorPalette.textSecondary
         fileSizeLabel.font = appearance.fonts.subheadlineBold
 
-        fileNameLabel.textColor = appearance.colorPalette.text
+        fileNameLabel.textColor = appearance.colorPalette.textPrimary
         fileNameLabel.font = appearance.fonts.bodyBold
         fileNameLabel.lineBreakMode = .byTruncatingMiddle
     }
 
     override open func setUpLayout() {
         super.setUpLayout()
-        
+
         addSubview(fileIconImageView)
         addSubview(fileNameAndSizeStack)
 
         NSLayoutConstraint.activate([
-            heightAnchor.pin(equalToConstant: height),
-            
+            heightAnchor.pin(greaterThanOrEqualToConstant: height),
             fileIconImageView.leadingAnchor.pin(equalTo: layoutMarginsGuide.leadingAnchor),
             fileIconImageView.topAnchor.pin(equalTo: layoutMarginsGuide.topAnchor),
             fileIconImageView.bottomAnchor.pin(equalTo: layoutMarginsGuide.bottomAnchor),
-            
             fileNameAndSizeStack.leadingAnchor.pin(
                 equalToSystemSpacingAfter: fileIconImageView.trailingAnchor,
                 multiplier: 2
@@ -97,13 +95,13 @@ open class FileAttachmentView: _View, AppearanceProvider {
             fileNameAndSizeStack.trailingAnchor.pin(equalTo: layoutMarginsGuide.trailingAnchor, constant: -30)
         ])
     }
-    
+
     override open func updateContent() {
         super.updateContent()
-        
+
         guard let content = content else { return }
-        let icon = content.iconName.flatMap { appearance.images.documentPreviews[$0] }
-            ?? appearance.images.fileFallback
+        let iconName = content.iconName.map { $0.lowercased() }
+        let icon = iconName.flatMap { appearance.images.fileIconPreviews[$0] } ?? appearance.images.iconOther
         fileNameLabel.text = content.title
         fileIconImageView.image = icon
         fileSizeLabel.text = AttachmentFile.sizeFormatter.string(fromByteCount: content.size)

@@ -1,12 +1,12 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
 
 /// Mock implementation of `InternetConnection`
-final class InternetConnection_Mock: InternetConnection {
+final class InternetConnection_Mock: InternetConnection, @unchecked Sendable {
     private(set) var monitorMock: InternetConnectionMonitor_Mock!
     private(set) var init_notificationCenter: NotificationCenter!
 
@@ -21,22 +21,22 @@ final class InternetConnection_Mock: InternetConnection {
 }
 
 /// Mock implementation of `InternetConnectionMonitor`
-final class InternetConnectionMonitor_Mock: InternetConnectionMonitor {
+final class InternetConnectionMonitor_Mock: InternetConnectionMonitor, @unchecked Sendable {
     weak var delegate: InternetConnectionDelegate?
-    
-    var status: InternetConnection.Status = .unknown {
+
+    var status: InternetConnectionStatus = .unknown {
         didSet {
             delegate?.internetConnectionStatusDidChange(status: status)
         }
     }
-    
+
     var isStarted = false
-    
+
     func start() {
         isStarted = true
         status = .available(.great)
     }
-    
+
     func stop() {
         isStarted = false
         status = .unknown

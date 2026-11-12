@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -7,6 +7,17 @@
 import XCTest
 
 final class ChannelListPayload_Tests: XCTestCase {
+    private var database: DatabaseContainer_Spy!
+    
+    override func setUpWithError() throws {
+        // Clean up any db files left behind
+        FileManager.removeAllTemporaryFiles()
+    }
+    
+    override func tearDownWithError() throws {
+        database = nil
+    }
+    
     func test_channelQueryJSON_isSerialized_withDefaultExtraData() throws {
         // GIVEN
         let url = XCTestCase.mockData(fromJSONFile: "ChannelsQuery")
@@ -31,6 +42,305 @@ final class ChannelListPayload_Tests: XCTestCase {
         }
     }
 
+    func test_decode_shouldReturnChannelsIfOneChannelHasMissingRequiredProperties() throws {
+        /// Channel List JSON with 3 channels, the first channel has multiple missing required properties:
+        /// - channel.members.first.user.updatedAt
+        /// - channel.pinnedMessages.first.user.updatedAt
+        /// - channel.reads.first.user.updatedAt
+        let url = XCTestCase.mockData(fromJSONFile: "PartiallyFailingChannelListPayload")
+
+        let payload = try JSONDecoder.default.decode(ChannelListPayload.self, from: url)
+        XCTAssertEqual(payload.channels.count, 3)
+        XCTAssertEqual(payload.channels[0].members.count, 1)
+        XCTAssertEqual(payload.channels[0].pinnedMessages.count, 0)
+        XCTAssertEqual(payload.channels[0].read?.count, 1)
+    }
+
+    func test_decode_shouldReturnChannelsIfOneChannelCompletelyFailsParsing() throws {
+        /// Channel List JSON with 3 channels, the first channel has a missing `createdBy.user.updateAt`,
+        /// which is mandatory, so it will skip this channel, and return only 2 channels.
+        let url = XCTestCase.mockData(fromJSONFile: "FailingChannelListPayload")
+
+        let payload = try JSONDecoder.default.decode(ChannelListPayload.self, from: url)
+        XCTAssertEqual(payload.channels.count, 2)
+    }
+
+    func test_decode_shouldReturnChannelsIfOneChannelFailsParsing() throws {
+        var root = try channelsQueryJSONObject()
+        var channels = try XCTUnwrap(root["channels"] as? [[String: Any]])
+        channels[0].removeValue(forKey: "channel")
+        root["channels"] = channels
+        let data = try JSONSerialization.data(withJSONObject: root)
+
+        let payload = try JSONDecoder.default.decode(ChannelListPayload.self, from: data)
+
+        XCTAssertEqual(payload.channels.count, 19)
+    }
+
+    func test_decode_shouldReturnChannelIfOneMessageFailsParsing() throws {
+        var root = try channelsQueryJSONObject()
+        var channels = try XCTUnwrap(root["channels"] as? [[String: Any]])
+        var messages = try XCTUnwrap(channels[0]["messages"] as? [[String: Any]])
+        messages[0].removeValue(forKey: "id")
+        channels[0]["messages"] = messages
+        root["channels"] = channels
+        let data = try JSONSerialization.data(withJSONObject: root)
+
+        let payload = try JSONDecoder.default.decode(ChannelListPayload.self, from: data)
+
+        XCTAssertEqual(payload.channels.count, 20)
+        XCTAssertEqual(payload.channels[0].messages.count, 24)
+    }
+
+    func test_decode_threadsDefaultToEmptyWhenMissing() throws {
+        var root = try channelsQueryJSONObject()
+        var channels = try XCTUnwrap(root["channels"] as? [[String: Any]])
+        channels[0].removeValue(forKey: "threads")
+        root["channels"] = channels
+        let data = try JSONSerialization.data(withJSONObject: root)
+
+        let payload = try JSONDecoder.default.decode(ChannelListPayload.self, from: data)
+
+        XCTAssertEqual(payload.channels.count, 20)
+        XCTAssertEqual(payload.channels[0].threads.count, 0)
+    }
+
+    func test_groupedQueryChannelsPayload_shouldReturnChannelsIfOneChannelFailsParsing() throws {
+        let root = try channelsQueryJSONObject()
+        var channels = try XCTUnwrap(root["channels"] as? [[String: Any]])
+        channels[0].removeValue(forKey: "channel")
+        let groupedRoot: [String: Any] = ["groups": ["all": ["channels": channels]]]
+        let data = try JSONSerialization.data(withJSONObject: groupedRoot)
+
+        let payload = try JSONDecoder.default.decode(GroupedQueryChannelsResponse.self, from: data)
+
+        XCTAssertEqual(payload.groups["all"]?.channels.count, 19)
+    }
+
+    func test_channelListPayload_decodesPredefinedFilter() throws {
+        let json = """
+        {
+          "channels": [],
+          "predefined_filter": {
+            "name": "user_per_channel_type_channels",
+            "filter": { "members": { "$in": ["r2-d2"] }, "type": "messaging" },
+            "sort": [
+              { "direction": -1, "field": "last_message_at", "type": "string" },
+              { "direction": -1, "field": "created_at", "type": "string" }
+            ]
+          }
+        }
+        """.data(using: .utf8)!
+
+        let payload = try JSONDecoder.default.decode(ChannelListPayload.self, from: json)
+
+        let predefined = try XCTUnwrap(payload.predefinedFilter)
+        XCTAssertEqual(predefined.name, "user_per_channel_type_channels")
+        XCTAssertEqual(predefined.filter["type"], .string("messaging"))
+        XCTAssertEqual(predefined.filter["members"], .dictionary(["$in": .array([.string("r2-d2")])]))
+        XCTAssertEqual(predefined.sort?.count, 2)
+        XCTAssertEqual(predefined.sort?.first?.field, "last_message_at")
+        XCTAssertEqual(predefined.sort?.first?.direction, -1)
+    }
+
+    func test_channelListPayload_predefinedFilter_isNilWhenAbsent() throws {
+        let json = "{ \"channels\": [] }".data(using: .utf8)!
+
+        let payload = try JSONDecoder.default.decode(ChannelListPayload.self, from: json)
+
+        XCTAssertNil(payload.predefinedFilter)
+    }
+
+    func test_groupedQueryChannelsPayload_decodesGroupsMap() throws {
+        let channelId = ChannelId(type: .messaging, id: "bucket-channel")
+        let json = """
+        {
+          "groups": {
+            "all": {
+              "channels": [
+                {
+                  "channel": {
+                    "cid": "\(channelId.rawValue)",
+                    "id": "\(channelId.id)",
+                    "type": "\(channelId.type.rawValue)",
+                    "custom": {
+                      "name": "Support",
+                      "image": "https://getstream.imgix.net/images/random_svg/stream_logo.svg"
+                    },
+                    "created_at": "2024-01-01T00:00:00.000Z",
+                    "updated_at": "2024-01-02T00:00:00.000Z",
+                    "frozen": false,
+                    "disabled": false,
+                    "config": {
+                      "typing_events": true,
+                      "read_events": true,
+                      "connect_events": true,
+                      "search": true,
+                      "reactions": true,
+                      "replies": true,
+                      "quotes": true,
+                      "uploads": true,
+                      "url_enrichment": true,
+                      "mutes": true,
+                      "message_retention": "infinite",
+                      "max_message_length": 5000,
+                      "created_at": "2024-01-01T00:00:00.000Z",
+                      "updated_at": "2024-01-02T00:00:00.000Z",
+                      "commands": []
+                    },
+                    "own_capabilities": [],
+                    "member_count": 0
+                  },
+                  "members": [],
+                  "messages": [],
+                  "threads": [],
+                  "pinned_messages": [],
+                  "watchers": [],
+                  "watcher_count": 0,
+                  "read": []
+                }
+              ],
+              "unread_channels": 1
+            }
+          },
+          "duration": "12ms"
+        }
+        """.data(using: .utf8)!
+
+        let payload = try JSONDecoder.default.decode(GroupedQueryChannelsResponse.self, from: json)
+
+        XCTAssertEqual(payload.groups.keys.sorted(), ["all"])
+        XCTAssertEqual(payload.groups["all"]?.channels.map(\.channel.cid), [channelId])
+        XCTAssertEqual(payload.groups["all"]?.unreadChannels, 1)
+    }
+
+    func test_groupedQueryChannelsPayload_decodesNextCursor() throws {
+        let json = """
+        {
+          "groups": {
+            "current": {
+              "channels": [],
+              "unread_channels": 0,
+              "next": "current-next-cursor",
+              "prev": "current-prev-cursor"
+            }
+          },
+          "duration": "5ms"
+        }
+        """.data(using: .utf8)!
+
+        let payload = try JSONDecoder.default.decode(GroupedQueryChannelsResponse.self, from: json)
+
+        XCTAssertEqual("current-next-cursor", payload.groups["current"]?.next)
+        XCTAssertEqual("current-prev-cursor", payload.groups["current"]?.prev)
+    }
+
+    func test_groupedQueryChannelsPayload_cursorsAreNilWhenMissing() throws {
+        let json = """
+        {
+          "groups": {
+            "all": { "channels": [], "unread_channels": 0 }
+          },
+          "duration": "5ms"
+        }
+        """.data(using: .utf8)!
+
+        let payload = try JSONDecoder.default.decode(GroupedQueryChannelsResponse.self, from: json)
+
+        XCTAssertNil(payload.groups["all"]?.next)
+        XCTAssertNil(payload.groups["all"]?.prev)
+    }
+
+    func test_groupedQueryChannelsRequestBody_allGroups_encodesWithoutGroupsKey() throws {
+        let body = GroupedQueryChannelsRequest(groups: nil, limit: 10, presence: false, watch: true)
+
+        let encoded = try JSONEncoder.stream.encode(body)
+        let json = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+
+        XCTAssertEqual(10, json?["limit"] as? Int)
+        XCTAssertEqual(true, json?["watch"] as? Bool)
+        XCTAssertEqual(false, json?["presence"] as? Bool)
+        XCTAssertNil(json?["groups"])
+    }
+
+    func test_groupedQueryChannelsRequestBody_paginatedGroup_encodesWithGroupsKeyAndCursor() throws {
+        let body = GroupedQueryChannelsRequest(
+            groups: ["old": .init(limit: 5, next: "old-cursor")],
+            limit: nil,
+            presence: true,
+            watch: false
+        )
+
+        let encoded = try JSONEncoder.stream.encode(body)
+        let json = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        let groups = json?["groups"] as? [String: [String: Any]]
+
+        XCTAssertNil(json?["limit"])
+        XCTAssertEqual(false, json?["watch"] as? Bool)
+        XCTAssertEqual(true, json?["presence"] as? Bool)
+        XCTAssertEqual(5, groups?["old"]?["limit"] as? Int)
+        XCTAssertEqual("old-cursor", groups?["old"]?["next"] as? String)
+        XCTAssertNil(groups?["old"]?["prev"])
+    }
+
+    func test_groupedQueryChannelsPayload_defaultsUnreadCountersWhenMissing() throws {
+        let channelId = ChannelId(type: .messaging, id: "bucket-channel")
+        let json = """
+        {
+          "groups": {
+            "expired": {
+              "channels": [
+                {
+                  "channel": {
+                    "custom": {},
+                    "cid": "\(channelId.rawValue)",
+                    "id": "\(channelId.id)",
+                    "type": "\(channelId.type.rawValue)",
+                    "created_at": "2024-01-01T00:00:00.000Z",
+                    "updated_at": "2024-01-02T00:00:00.000Z",
+                    "frozen": false,
+                    "disabled": false,
+                    "config": {
+                      "typing_events": true,
+                      "read_events": true,
+                      "connect_events": true,
+                      "search": true,
+                      "reactions": true,
+                      "replies": true,
+                      "quotes": true,
+                      "uploads": true,
+                      "url_enrichment": true,
+                      "mutes": true,
+                      "message_retention": "infinite",
+                      "max_message_length": 5000,
+                      "created_at": "2024-01-01T00:00:00.000Z",
+                      "updated_at": "2024-01-02T00:00:00.000Z",
+                      "commands": []
+                    },
+                    "own_capabilities": [],
+                    "member_count": 0
+                  },
+                  "members": [],
+                  "messages": [],
+                  "threads": [],
+                  "pinned_messages": [],
+                  "watchers": [],
+                  "watcher_count": 0,
+                  "read": []
+                }
+              ]
+            }
+          },
+          "duration": "12ms"
+        }
+        """.data(using: .utf8)!
+
+        let payload = try JSONDecoder.default.decode(GroupedQueryChannelsResponse.self, from: json)
+
+        XCTAssertEqual(payload.groups["expired"]?.channels.map(\.channel.cid), [channelId])
+        XCTAssertNil(payload.groups["expired"]?.unreadChannels)
+    }
+
     func saveChannelListPayload(_ payload: ChannelListPayload, database: DatabaseContainer_Spy, timeout: TimeInterval = 20) {
         let writeCompleted = expectation(description: "DB write complete")
         database.write({ session in
@@ -46,36 +356,38 @@ final class ChannelListPayload_Tests: XCTestCase {
 
     func test_hugeChannelListQuery_save_DB_empty() throws {
         let decodedPayload = createHugeChannelList()
+        let timeout: TimeInterval = 180
+        database = DatabaseContainer_Spy(kind: .onDisk(databaseFileURL: .newTemporaryFileURL()))
         measure {
-            let databaseContainer = DatabaseContainer_Spy()
-            saveChannelListPayload(decodedPayload, database: databaseContainer)
+            saveChannelListPayload(decodedPayload, database: database, timeout: timeout)
         }
     }
 
     func test_hugeChannelListQuery_save_DB_filled() throws {
         let decodedPayload = createHugeChannelList()
-        let databaseContainer = DatabaseContainer_Spy()
+        database = DatabaseContainer_Spy(kind: .onDisk(databaseFileURL: .newTemporaryFileURL()))
+        let timeout: TimeInterval = 180
 
-        saveChannelListPayload(decodedPayload, database: databaseContainer)
+        saveChannelListPayload(decodedPayload, database: database, timeout: timeout)
 
         measure {
-            saveChannelListPayload(decodedPayload, database: databaseContainer)
+            saveChannelListPayload(decodedPayload, database: database, timeout: timeout)
         }
     }
-    
+
     func createHugeChannelList() -> ChannelListPayload {
         let userCount = 600
         let channelCount = 20
         let messageCount = 25
         let channelReadCount = 20
-        
+
         let users = (0..<max(userCount, 30)).map { userIndex in UserPayload.dummy(userId: "\(userIndex)") }
         let channels = (0..<channelCount).map { channelIndex -> ChannelPayload in
             let channelUsers = users.shuffled().prefix(30)
-            
+
             let channelCreatedDate = Date.unique
             let lastMessageDate = Date.unique(after: channelCreatedDate)
-            
+
             let cid = ChannelId(type: .messaging, id: "\(channelIndex)")
             let channelOwner = channelUsers.randomElement()!
             let channelDetail = ChannelDetailPayload(
@@ -83,7 +395,6 @@ final class ChannelListPayload_Tests: XCTestCase {
                 name: .unique,
                 imageURL: .unique(),
                 extraData: [:],
-                typeRawValue: cid.type.rawValue,
                 lastMessageAt: lastMessageDate,
                 createdAt: channelCreatedDate,
                 deletedAt: nil,
@@ -94,6 +405,7 @@ final class ChannelListPayload_Tests: XCTestCase {
                     reactionsEnabled: true,
                     typingEventsEnabled: true,
                     readEventsEnabled: true,
+                    deliveryEventsEnabled: false,
                     connectEventsEnabled: true,
                     uploadsEnabled: true,
                     repliesEnabled: true,
@@ -112,8 +424,16 @@ final class ChannelListPayload_Tests: XCTestCase {
                     ],
                     createdAt: channelCreatedDate,
                     updatedAt: .unique
-                ),
+                ), filterTags: [
+                    "football"
+                ],
+                ownCapabilities: [
+                    "join-channel",
+                    "delete-channel"
+                ],
+                isDisabled: false,
                 isFrozen: true,
+                isBlocked: false,
                 isHidden: false,
                 members: channelUsers.map {
                     MemberPayload.dummy(
@@ -125,10 +445,11 @@ final class ChannelListPayload_Tests: XCTestCase {
                     )
                 },
                 memberCount: 100,
+                messageCount: 100,
                 team: .unique,
                 cooldownDuration: .random(in: 0...120)
             )
-            
+
             let messages = (0..<messageCount).map { messageIndex -> MessagePayload in
                 let messageId = "\(channelIndex)-\(messageIndex)"
                 let messageCreatedDate = Date.unique(after: channelCreatedDate)
@@ -178,14 +499,13 @@ final class ChannelListPayload_Tests: XCTestCase {
                     isSilent: false,
                     isShadowed: false,
                     attachments: messageIndex % 2 == 0 ? [.dummy()] : [],
-                    channel: channelDetail,
                     pinned: false,
                     pinnedBy: nil,
                     pinnedAt: nil,
                     pinExpires: nil
                 )
             }
-            
+
             return ChannelPayload(
                 channel: channelDetail,
                 watcherCount: 0,
@@ -199,19 +519,31 @@ final class ChannelListPayload_Tests: XCTestCase {
                     isMemberBanned: false
                 ),
                 messages: messages,
+                pendingMessages: nil,
                 pinnedMessages: [],
                 channelReads: (0..<channelReadCount).map { i in
                     ChannelReadPayload(
                         user: channelUsers[i],
                         lastReadAt: .unique(after: channelCreatedDate),
-                        unreadMessagesCount: (0..<10).randomElement()!
+                        lastReadMessageId: .unique,
+                        unreadMessagesCount: (0..<10).randomElement()!,
+                        lastDeliveredAt: nil,
+                        lastDeliveredMessageId: nil
                     )
                 },
-                isHidden: false
+                isHidden: false,
+                draft: nil,
+                activeLiveLocations: [],
+                pushPreference: nil
             )
         }
-        
+
         return ChannelListPayload(channels: channels)
+    }
+
+    private func channelsQueryJSONObject() throws -> [String: Any] {
+        let data = XCTestCase.mockData(fromJSONFile: "ChannelsQuery")
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
 
@@ -227,55 +559,61 @@ final class ChannelPayload_Tests: XCTestCase {
         XCTAssertEqual(payload.watcherCount, 7)
         XCTAssertEqual(payload.watchers?.count, 3)
         XCTAssertEqual(payload.members.count, 4)
-        XCTAssertEqual(payload.isHidden, true)
+        XCTAssertEqual(payload.hidden, true)
         XCTAssertEqual(payload.watchers?.first?.id, "cilvia")
-        
+
         XCTAssertEqual(payload.messages.count, 25)
         let firstMessage = payload.messages.first(where: { $0.id == "broken-waterfall-5-7aede36b-b89f-4f45-baff-c40c7c1875d9" })!
-        
-        XCTAssertEqual(firstMessage.type, MessageType.regular)
+
+        XCTAssertEqual(firstMessage.type, MessageType.regular.rawValue)
         XCTAssertEqual(firstMessage.user.id, "broken-waterfall-5")
         XCTAssertEqual(firstMessage.createdAt, "2020-06-09T08:10:40.800912Z".toDate())
         XCTAssertEqual(firstMessage.updatedAt, "2020-06-09T08:10:40.800912Z".toDate())
         XCTAssertNil(firstMessage.deletedAt)
         XCTAssertEqual(firstMessage.text, "sadfadf")
         XCTAssertNil(firstMessage.command)
-        XCTAssertNil(firstMessage.args)
         XCTAssertNil(firstMessage.parentId)
-        XCTAssertFalse(firstMessage.showReplyInChannel)
+        XCTAssertNotEqual(firstMessage.showInChannel, true)
         XCTAssert(firstMessage.mentionedUsers.isEmpty)
         XCTAssert(firstMessage.reactionScores.isEmpty)
         XCTAssertEqual(firstMessage.replyCount, 0)
-        XCTAssertFalse(firstMessage.isSilent)
+        XCTAssertFalse(firstMessage.silent)
 
-        XCTAssertEqual(payload.pinnedMessages.map(\.id), ["broken-waterfall-5-7aede36b-b89f-4f45-baff-c40c7c1875d9"])
+        XCTAssertEqual(payload.pendingMessages?.count ?? 0, 1)
+        let pendingMessage = try XCTUnwrap(payload.pendingMessages?.first?.message)
+        XCTAssertEqual(pendingMessage.text, "My pending message")
         
+        XCTAssertEqual(payload.pinnedMessages.map(\.id), ["broken-waterfall-5-7aede36b-b89f-4f45-baff-c40c7c1875d9"])
+
         let channel = payload.channel
         XCTAssertEqual(channel.cid, try! ChannelId(cid: "messaging:general"))
         XCTAssertEqual(channel.createdAt, "2019-05-10T14:03:49.505006Z".toDate())
         XCTAssertNotNil(channel.createdBy)
-        XCTAssertEqual(channel.typeRawValue, "messaging")
-        XCTAssertEqual(channel.isFrozen, true)
+        XCTAssertEqual(channel.type, "messaging")
+        XCTAssertEqual(channel.disabled, true)
+        XCTAssertEqual(channel.frozen, true)
         XCTAssertEqual(channel.memberCount, 4)
+        XCTAssertEqual(channel.messageCount, 5)
         XCTAssertEqual(channel.updatedAt, "2019-05-10T14:03:49.505006Z".toDate())
-        XCTAssertEqual(channel.cooldownDuration, 10)
+        XCTAssertEqual(channel.cooldown, 10)
         XCTAssertEqual(channel.team, "GREEN")
-        
+
         XCTAssertEqual(channel.name, "The water cooler")
         XCTAssertEqual(
             channel.imageURL?.absoluteString,
             "https://images.unsplash.com/photo-1512138664757-360e0aad5132?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=2851&q=80"
         )
-        
-        let firstChannelRead = payload.channelReads.first!
-        XCTAssertEqual(firstChannelRead.lastReadAt, "2020-06-10T07:43:11.812841984Z".toDate())
-        XCTAssertEqual(firstChannelRead.unreadMessagesCount, 0)
+
+        let firstChannelRead = try XCTUnwrap(payload.read?.first)
+        XCTAssertEqual(firstChannelRead.lastRead, "2020-06-10T07:43:11.812841984Z".toDate())
+        XCTAssertEqual(firstChannelRead.unreadMessages, 0)
         XCTAssertEqual(firstChannelRead.user.id, "broken-waterfall-5")
-        
+
         let config = channel.config
         XCTAssertEqual(config.reactionsEnabled, true)
         XCTAssertEqual(config.typingEventsEnabled, true)
         XCTAssertEqual(config.readEventsEnabled, true)
+        XCTAssertEqual(config.deliveryEventsEnabled, false)
         XCTAssertEqual(config.connectEventsEnabled, true)
         XCTAssertEqual(config.uploadsEnabled, true)
         XCTAssertEqual(config.repliesEnabled, true)
@@ -285,6 +623,12 @@ final class ChannelPayload_Tests: XCTestCase {
         XCTAssertEqual(config.urlEnrichmentEnabled, true)
         XCTAssertEqual(config.messageRetention, "infinite")
         XCTAssertEqual(config.maxMessageLength, 5000)
+        XCTAssertEqual(config.skipLastMsgAtUpdateForSystemMsg, true)
+        XCTAssertEqual(config.sharedLocationsEnabled, true)
+        XCTAssertEqual(config.scheduledMessagesMaxPerChannel, 10)
+        XCTAssertEqual(config.scheduledMessagesMaxPerUser, 100)
+        XCTAssertEqual(config.scheduledMessagesMaxLeadTime, 2_592_000)
+        XCTAssertEqual(config.scheduledMessagesMinLeadTime, 60)
         XCTAssertEqual(
             config.commands,
             [.init(name: "giphy", description: "Post a random gif to the channel", set: "fun_set", args: "[text]")]
@@ -292,9 +636,25 @@ final class ChannelPayload_Tests: XCTestCase {
         XCTAssertEqual(config.createdAt, "2019-03-21T15:49:15.40182Z".toDate())
         XCTAssertEqual(config.updatedAt, "2020-03-17T18:54:09.460881Z".toDate())
 
-        XCTAssertEqual(payload.membership?.user.id, "broken-waterfall-5")
+        XCTAssertEqual(payload.membership?.user?.id, "broken-waterfall-5")
+        XCTAssertEqual(payload.channel.filterTags, ["football"])
+        XCTAssertEqual(payload.channel.ownCapabilities?.count, 27)
+        XCTAssertEqual(payload.activeLiveLocations?.count, 1)
+        XCTAssertNotNil(payload.pushPreferences)
+        XCTAssertEqual(payload.pushPreferences?.level, "all")
+        XCTAssertNil(payload.pushPreferences?.disabledUntil)
     }
-    
+
+    func test_channelConfig_whenScheduledMessagesAreDisabled_hasNoScheduledMessagesLimits() throws {
+        let data = XCTestCase.mockData(fromJSONFile: "ChannelPayload")
+        let config = try JSONDecoder.default.decode(ChannelDetailPayload.self, from: data).config
+
+        XCTAssertNil(config.scheduledMessagesMaxPerChannel)
+        XCTAssertNil(config.scheduledMessagesMaxPerUser)
+        XCTAssertNil(config.scheduledMessagesMaxLeadTime)
+        XCTAssertNil(config.scheduledMessagesMinLeadTime)
+    }
+
     func test_newestMessage_whenMessagesAreSortedDesc() throws {
         // GIVEN
         let earlierMessage: MessagePayload = .dummy(
@@ -302,13 +662,13 @@ final class ChannelPayload_Tests: XCTestCase {
             authorUserId: .unique,
             createdAt: .init()
         )
-        
+
         let laterMessage: MessagePayload = .dummy(
             messageId: .unique,
             authorUserId: .unique,
             createdAt: earlierMessage.createdAt.addingTimeInterval(10)
         )
-        
+
         // WHEN
         let payload: ChannelPayload = .dummy(
             messages: [
@@ -316,11 +676,11 @@ final class ChannelPayload_Tests: XCTestCase {
                 earlierMessage
             ]
         )
-        
+
         // THEN
         XCTAssertEqual(payload.newestMessage?.id, laterMessage.id)
     }
-    
+
     func test_newestMessage_whenMessagesAreSortedAsc() throws {
         // GIVEN
         let earlierMessage: MessagePayload = .dummy(
@@ -328,13 +688,13 @@ final class ChannelPayload_Tests: XCTestCase {
             authorUserId: .unique,
             createdAt: .init()
         )
-        
+
         let laterMessage: MessagePayload = .dummy(
             messageId: .unique,
             authorUserId: .unique,
             createdAt: earlierMessage.createdAt.addingTimeInterval(10)
         )
-        
+
         // WHEN
         let payload: ChannelPayload = .dummy(
             messages: [
@@ -342,8 +702,216 @@ final class ChannelPayload_Tests: XCTestCase {
                 laterMessage
             ]
         )
-        
+
         // THEN
         XCTAssertEqual(payload.newestMessage?.id, laterMessage.id)
+    }
+    
+    // MARK: - ChannelPayload.asModel() Tests
+    
+    func test_channelPayload_asModel_convertsAllPropertiesCorrectly() {
+        let currentUserId = "current-user-id"
+        let cid = ChannelId(type: .messaging, id: "test-channel")
+        
+        let createdByPayload = UserPayload.dummy(userId: "creator-user-id", name: "Channel Creator")
+        let memberPayload = MemberPayload.dummy(user: UserPayload.dummy(userId: "member-user-id"), role: .member)
+        let watcherPayload = UserPayload.dummy(userId: "watcher-user-id", name: "Channel Watcher")
+        let messagePayload = MessagePayload.dummy(messageId: "message-id", authorUserId: "author-id")
+        let pinnedMessagePayload = MessagePayload.dummy(messageId: "pinned-message-id", authorUserId: "pinned-author-id")
+        let pendingMessagePayload = MessagePayload.dummy(messageId: "pending-message-id", authorUserId: "pending-author-id")
+        
+        let channelReadPayload = ChannelReadPayload(
+            user: UserPayload.dummy(userId: "reader-user-id", name: "Reader User"),
+            lastReadAt: Date(timeIntervalSince1970: 1_609_459_400),
+            lastReadMessageId: "last-read-message-id",
+            unreadMessagesCount: 5,
+            lastDeliveredAt: nil,
+            lastDeliveredMessageId: nil
+        )
+        
+        let membershipPayload = MemberPayload.dummy(user: .dummy(userId: currentUserId), role: .admin)
+
+        let channel = ChannelDetailPayload(
+            cid: cid,
+            name: "Test Channel",
+            imageURL: URL(string: "https://example.com/channel.png"),
+            extraData: ["custom_field": .string("custom_value")],
+            lastMessageAt: Date(timeIntervalSince1970: 1_609_459_500),
+            createdAt: Date(timeIntervalSince1970: 1_609_459_200),
+            deletedAt: Date(timeIntervalSince1970: 1_609_459_600),
+            updatedAt: Date(timeIntervalSince1970: 1_609_459_300),
+            truncatedAt: Date(timeIntervalSince1970: 1_609_459_250),
+            createdBy: createdByPayload,
+            config: ChannelConfig(),
+            filterTags: ["football"],
+            ownCapabilities: ["send-message", "upload-file"],
+            isDisabled: true,
+            isFrozen: true,
+            isBlocked: true,
+            isHidden: true,
+            members: [memberPayload],
+            memberCount: 10,
+            messageCount: 10,
+            team: "team-id",
+            cooldownDuration: 30
+        )
+        
+        let typingUsers = Set([ChatUser.mock(id: "typing-user-id", name: "Typing User")])
+        let unreadCount = ChannelUnreadCount(messages: 3, mentions: 1)
+        
+        let payload = ChannelPayload(
+            channel: channel,
+            watcherCount: 5,
+            watchers: [watcherPayload],
+            members: [memberPayload],
+            membership: membershipPayload,
+            messages: [messagePayload],
+            pendingMessages: [pendingMessagePayload],
+            pinnedMessages: [pinnedMessagePayload],
+            channelReads: [channelReadPayload],
+            isHidden: true,
+            draft: nil,
+            activeLiveLocations: [],
+            pushPreference: nil
+        )
+        
+        let chatChannel = payload.asModel(
+            currentUserId: currentUserId,
+            currentlyTypingUsers: typingUsers,
+            typingUsers: nil,
+            unreadCount: unreadCount
+        )
+        
+        XCTAssertEqual(chatChannel.cid, cid)
+        XCTAssertEqual(chatChannel.name, "Test Channel")
+        XCTAssertEqual(chatChannel.imageURL, URL(string: "https://example.com/channel.png"))
+        XCTAssertEqual(chatChannel.lastMessageAt, Date(timeIntervalSince1970: 1_609_459_500))
+        XCTAssertEqual(chatChannel.createdAt, Date(timeIntervalSince1970: 1_609_459_200))
+        XCTAssertEqual(chatChannel.updatedAt, Date(timeIntervalSince1970: 1_609_459_300))
+        XCTAssertEqual(chatChannel.deletedAt, Date(timeIntervalSince1970: 1_609_459_600))
+        XCTAssertEqual(chatChannel.truncatedAt, Date(timeIntervalSince1970: 1_609_459_250))
+        XCTAssertEqual(chatChannel.isHidden, true)
+        XCTAssertEqual(chatChannel.createdBy?.id, "creator-user-id")
+        XCTAssertNotNil(chatChannel.config)
+        XCTAssertEqual(chatChannel.filterTags, ["football"])
+        XCTAssertTrue(chatChannel.ownCapabilities.contains(.sendMessage))
+        XCTAssertTrue(chatChannel.ownCapabilities.contains(.uploadFile))
+        XCTAssertEqual(chatChannel.isFrozen, true)
+        XCTAssertEqual(chatChannel.isDisabled, true)
+        XCTAssertEqual(chatChannel.isBlocked, true)
+        XCTAssertEqual(chatChannel.lastActiveMembers.count, 1)
+        XCTAssertEqual(chatChannel.lastActiveMembers.first?.id, "member-user-id")
+        XCTAssertEqual(chatChannel.membership?.id, currentUserId)
+        XCTAssertEqual(chatChannel.currentlyTypingUsers, typingUsers)
+        XCTAssertEqual(chatChannel.lastActiveWatchers.count, 1)
+        XCTAssertEqual(chatChannel.lastActiveWatchers.first?.id, "watcher-user-id")
+        XCTAssertEqual(chatChannel.team, "team-id")
+        XCTAssertEqual(chatChannel.unreadCount, unreadCount)
+        XCTAssertEqual(chatChannel.watcherCount, 5)
+        XCTAssertEqual(chatChannel.memberCount, 10)
+        XCTAssertEqual(chatChannel.messageCount, 10)
+        XCTAssertEqual(chatChannel.reads.count, 1)
+        XCTAssertEqual(chatChannel.reads.first?.user.id, "reader-user-id")
+        XCTAssertEqual(chatChannel.cooldownDuration, 30)
+        XCTAssertEqual(chatChannel.extraData, ["custom_field": .string("custom_value")])
+        XCTAssertEqual(chatChannel.latestMessages.count, 1)
+        XCTAssertEqual(chatChannel.latestMessages.first?.id, "message-id")
+        XCTAssertEqual(chatChannel.pinnedMessages.count, 1)
+        XCTAssertEqual(chatChannel.pinnedMessages.first?.id, "pinned-message-id")
+        XCTAssertEqual(chatChannel.pendingMessages.count, 1)
+        XCTAssertEqual(chatChannel.pendingMessages.first?.id, "pending-message-id")
+        XCTAssertNil(chatChannel.muteDetails)
+        XCTAssertEqual(chatChannel.latestMessages.first?.id, "message-id")
+        XCTAssertTrue(chatChannel.activeLiveLocations.isEmpty)
+    }
+    
+    func test_channelPayload_asModel_withMinimalData_handlesCorrectly() {
+        let currentUserId = "current-user-id"
+        let cid = ChannelId(type: .messaging, id: "minimal-channel")
+        
+        let channel = ChannelDetailPayload(
+            cid: cid,
+            name: "Minimal Channel",
+            imageURL: nil,
+            extraData: [:],
+            lastMessageAt: Date(timeIntervalSince1970: 1_609_459_200),
+            createdAt: Date(timeIntervalSince1970: 1_609_459_200),
+            deletedAt: nil,
+            updatedAt: Date(timeIntervalSince1970: 1_609_459_200),
+            truncatedAt: nil,
+            createdBy: nil,
+            config: ChannelConfig(),
+            filterTags: nil,
+            ownCapabilities: nil,
+            isDisabled: false,
+            isFrozen: false,
+            isBlocked: nil,
+            isHidden: nil,
+            members: nil,
+            memberCount: 0,
+            messageCount: nil,
+            team: nil,
+            cooldownDuration: 0
+        )
+        
+        let payload = ChannelPayload(
+            channel: channel,
+            watcherCount: nil,
+            watchers: nil,
+            members: [],
+            membership: nil,
+            messages: [],
+            pendingMessages: nil,
+            pinnedMessages: [],
+            channelReads: [],
+            isHidden: nil,
+            draft: nil,
+            activeLiveLocations: [],
+            pushPreference: nil
+        )
+        
+        let chatChannel = payload.asModel(
+            currentUserId: currentUserId,
+            currentlyTypingUsers: nil,
+            typingUsers: nil,
+            unreadCount: nil
+        )
+        
+        XCTAssertEqual(chatChannel.cid, cid)
+        XCTAssertEqual(chatChannel.name, "Minimal Channel")
+        XCTAssertNil(chatChannel.imageURL)
+        XCTAssertEqual(chatChannel.lastMessageAt, Date(timeIntervalSince1970: 1_609_459_200))
+        XCTAssertEqual(chatChannel.createdAt, Date(timeIntervalSince1970: 1_609_459_200))
+        XCTAssertEqual(chatChannel.updatedAt, Date(timeIntervalSince1970: 1_609_459_200))
+        XCTAssertNil(chatChannel.deletedAt)
+        XCTAssertNil(chatChannel.truncatedAt)
+        XCTAssertEqual(chatChannel.isHidden, false)
+        XCTAssertNil(chatChannel.createdBy)
+        XCTAssertNotNil(chatChannel.config)
+        XCTAssertTrue(chatChannel.filterTags.isEmpty)
+        XCTAssertTrue(chatChannel.ownCapabilities.isEmpty)
+        XCTAssertEqual(chatChannel.isFrozen, false)
+        XCTAssertEqual(chatChannel.isDisabled, false)
+        XCTAssertEqual(chatChannel.isBlocked, false)
+        XCTAssertTrue(chatChannel.lastActiveMembers.isEmpty)
+        XCTAssertNil(chatChannel.membership)
+        XCTAssertTrue(chatChannel.currentlyTypingUsers.isEmpty)
+        XCTAssertTrue(chatChannel.lastActiveWatchers.isEmpty)
+        XCTAssertNil(chatChannel.team)
+        XCTAssertEqual(chatChannel.unreadCount, .noUnread)
+        XCTAssertEqual(chatChannel.watcherCount, 0)
+        XCTAssertEqual(chatChannel.memberCount, 0)
+        XCTAssertEqual(chatChannel.messageCount, nil)
+        XCTAssertTrue(chatChannel.reads.isEmpty)
+        XCTAssertEqual(chatChannel.cooldownDuration, 0)
+        XCTAssertEqual(chatChannel.extraData, [:])
+        XCTAssertTrue(chatChannel.latestMessages.isEmpty)
+        XCTAssertTrue(chatChannel.pinnedMessages.isEmpty)
+        XCTAssertTrue(chatChannel.pendingMessages.isEmpty)
+        XCTAssertNil(chatChannel.muteDetails)
+        XCTAssertTrue(chatChannel.latestMessages.isEmpty)
+        XCTAssertNil(chatChannel.lastMessageFromCurrentUser)
+        XCTAssertNil(chatChannel.draftMessage)
+        XCTAssertTrue(chatChannel.activeLiveLocations.isEmpty)
     }
 }

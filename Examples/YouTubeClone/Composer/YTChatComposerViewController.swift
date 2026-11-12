@@ -1,21 +1,21 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
 import StreamChatUI
 import UIKit
 
-final class YTChatComposerViewController: ComposerVC {
+class YTChatComposerViewController: ComposerVC {
     // We need to cast the composerView to our new `YTChatMessageComposerView`
     // so that we can have access to the new `emojiButton`.
     var ytMessageComposerView: YTChatMessageComposerView? {
         composerView as? YTChatMessageComposerView
     }
-    
+
     override func setUp() {
         super.setUp()
-        
+
         if let ytMessageComposerView = ytMessageComposerView {
             ytMessageComposerView
                 .emojiButton
@@ -25,11 +25,11 @@ final class YTChatComposerViewController: ComposerVC {
                 .addTarget(self, action: #selector(showPayOptions(sender:)), for: .touchUpInside)
         }
     }
-    
+
     override func typingMention(in textView: UITextView) -> (String, NSRange)? {
         nil // Don't show suggestions
     }
-    
+
     override func typingCommand(in textView: UITextView) -> String? {
         nil // Don't show commands
     }
@@ -46,9 +46,9 @@ final class YTChatComposerViewController: ComposerVC {
             break
         }
     }
-    
+
     // MARK: - Private Helpers
-    
+
     @objc func showEmojiPicker(sender: UIButton) {
         // For the sake of keeping things simple for this demo app,
         // we use an alert controller to select emojis.
@@ -58,7 +58,6 @@ final class YTChatComposerViewController: ComposerVC {
             preferredStyle: .actionSheet
         )
         ["😃", "😇", "😅", "😂"].forEach { emoji in
-
             let action = UIAlertAction(title: emoji, style: .default) { _ in
                 let inputTextView = self.composerView.inputMessageView.textView
                 inputTextView.replaceSelectedText(emoji)
@@ -66,12 +65,12 @@ final class YTChatComposerViewController: ComposerVC {
 
             sheetAlertController.addAction(action)
         }
-        
+
         let cancelAction = UIAlertAction(title: "Cancel", style: .cancel, handler: nil)
         sheetAlertController.addAction(cancelAction)
         present(sheetAlertController, animated: true)
     }
-    
+
     @objc func showPayOptions(sender: UIButton) {
         let sheetAlertController = UIAlertController(
             title: "Options",
@@ -84,7 +83,7 @@ final class YTChatComposerViewController: ComposerVC {
             }
             sheetAlertController.addAction(action)
         }
-        
+
         let cancelAction = UIAlertAction(title: "Close", style: .cancel, handler: nil)
         sheetAlertController.addAction(cancelAction)
         present(sheetAlertController, animated: true)

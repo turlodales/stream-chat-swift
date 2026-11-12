@@ -1,407 +1,174 @@
 default_platform :ios
+opt_out_usage
+skip_docs
 
 require 'json'
 require 'net/http'
+require 'xcodeproj'
 import 'Sonarfile'
 import 'Allurefile'
 
-xcode_version = ENV['XCODE_VERSION'] || '13.4.1'
-# The number of times the stress test suite is ran
+xcode_version = ENV['XCODE_VERSION'] || '26.2'
+xcode_project = 'StreamChat.xcodeproj'
+sdk_names = ['StreamChat', 'StreamChatUI', 'StreamChatCommonUI', 'StreamChatAI', 'StreamChatA2UI', 'StreamChatOpenUI']
+github_repo = ENV['GITHUB_REPOSITORY'] || 'GetStream/stream-chat-swift'
 stress_tests_cycles = 50
+derived_data_path = 'derived_data'
+source_packages_path = 'spm_cache'
+metrics_git = 'git@github.com:GetStream/stream-internal-metrics.git'
+xcmetrics_path = "metrics/#{github_repo.split('/').last}-xcmetrics.json"
+testlab_bucket = 'gs://test-lab-af3rt9m4yh360-mqm1zzm767nhc'
+swift_environment_path = File.absolute_path('../Sources/StreamChat/Generated/SystemEnvironment+Version.swift')
+is_localhost = !is_ci
+mock_server_driver_port = 4566
+e2e_coverage_dir = File.expand_path('test_output/e2e_coverage')
+e2e_coverage_map_path = File.expand_path('test_output/e2e_coverage_map.json')
+e2e_coverage_map_artifact = 'e2e-coverage-map'
+e2e_selection_path = File.expand_path("../#{derived_data_path}/Build/e2e_selection.json")
+@force_check = false
+@impact = nil
+xcodebuild_formatter = FastlaneCore::Globals.verbose? ? '' : nil
 
-before_all do
+before_all do |lane|
+  @impact = impact_analysis
   if is_ci
     setup_ci
-    xcversion(version: "~> #{xcode_version}")
+    setup_git_config
+    select_xcode(version: xcode_version) unless [:sonar_upload, :allure_launch, :allure_upload, :copyright, :merge_main].include?(lane)
   end
 end
 
-desc "Build .xcframeworks"
-lane :build_xcframeworks do
-  output_directory = "#{Dir.pwd}/../Products"
-  %w[StreamChatUI StreamChat].each do |scheme|
-    create_xcframework(
-      project: 'StreamChat.xcodeproj',
-      scheme: scheme,
-      destinations: ['iOS'],
-      include_BCSymbolMaps: true,
-      include_debug_symbols: true,
-      xcframework_output_directory: output_directory,
-      remove_xcarchives: true
-    )
-    sh('../Scripts/removeUnneededSymbols.sh', scheme, output_directory)
-  end
+after_all do |lane|
+  stop_mock_server if lane == :test_e2e_mock
 end
 
 desc 'Start a new release'
 lane :release do |options|
-  # Ensure we have a clean git status
-  ensure_git_status_clean unless options[:no_ensure_clean]
+  extra_changes = lambda do |release_version|
+    # Set the framework version in SystemEnvironment+Version.swift
+    old_content = File.read(swift_environment_path)
+    current_version = old_content[/version: String = "([^"]+)"/, 1]
+    new_content = old_content.gsub(current_version, release_version)
+    File.open(swift_environment_path, 'w') { |f| f.puts(new_content) }
 
-  # Ensure we have a release type
-  UI.user_error!('Please use type parameter with one of the options: type:patch, type:minor, type:major') unless %w[patch minor major].include?(options[:type])
+    # Update sdk sizes
+    Dir.chdir('fastlane') { update_img_shields_sdk_sizes }
+  end
 
-  # Ensure We Have the GITHUB Token
-  UI.user_error!('Please set GITHUB_TOKEN environment value. See https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token') if ENV['GITHUB_TOKEN'].nil?
+  lint_swift_package
+  check_unsafe_flags
 
-  # Version Number
-  version_number = increment_version_number_in_plist(bump_type: options[:type], xcodeproj: 'StreamChat.xcodeproj', target: 'StreamChat')
-
-  UI.user_error!("Tag for version #{version_number} already exists!") if git_tag_exists(tag: version_number)
-
-  # Checkout New Release Branch
-  sh("git checkout -b release/#{version_number}")
-
-  # Set version on the SDK & Project
-  increment_version_number_in_plist(version_number: version_number, xcodeproj: 'StreamChat.xcodeproj', target: 'StreamChat')
-  set_SDK_version(version: version_number)
-  increment_version_number_in_plist(version_number: version_number, xcodeproj: 'StreamChat.xcodeproj', target: 'StreamChatUI')
-
-  # Set the framework version on the artifacts
-  file = File.read('../StreamChatArtifacts.json')
-  data_hash = JSON.parse(file)
-
-  data_hash[version_number.to_s] = "https://github.com/GetStream/stream-chat-swift/releases/download/#{version_number}/StreamChat-All.zip"
-  File.write('../StreamChatArtifacts.json', JSON.dump(data_hash))
-
-  changes = touch_changelog(release_version: version_number)
-
-  # Make sure the podspecs actually build before pushing
-  # Disabled now since `StreamChatUI` pod lints it against `StreamChat`s latest version instead of `develop` branch
-  # pod_lib_lint(podspec: "StreamChat.podspec", allow_warnings: true)
-  # pod_lib_lint(podspec: "StreamChatUI.podspec", allow_warnings: true)
-
-  # Bump Podspec Version
-  version_bump_podspec(path: 'StreamChat.podspec', version_number: version_number)
-  version_bump_podspec(path: 'StreamChatUI.podspec', version_number: version_number)
-
-  # Bump XCFramework Version
-  version_bump_podspec(path: 'StreamChat-XCFramework.podspec', version_number: version_number)
-  version_bump_podspec(path: 'StreamChatUI-XCFramework.podspec', version_number: version_number)
-
-  # Stage all changes
-  sh('git add -A')
-
-  UI.user_error!('Not committing changes') unless prompt(text: 'Will commit changes. All looking good?', boolean: true)
-
-  sh("git commit -m 'Bump #{version_number}'")
-
-  UI.user_error!('Not pushing changes') unless prompt(text: 'Will push changes. All looking good?', boolean: true)
-
-  push_to_git_remote(tags: false)
-
-  # Open a new PR
-  create_pull_request(
-    api_token: ENV['GITHUB_TOKEN'],
-    repo: 'GetStream/stream-chat-swift',
-    title: "#{version_number} Release",
-    head: "release/#{version_number}",
-    base: 'main',
-    body: changes.to_s
+  release_ios_sdk(
+    skip_git_status_check: false,
+    version: options[:version],
+    bump_type: options[:type],
+    sdk_names: sdk_names,
+    github_repo: github_repo,
+    extra_changes: extra_changes,
+    create_pull_request: true
   )
+end
 
-  UI.success("Successfully started release #{version_number}")
+lane :merge_release do |options|
+  merge_release_to_main(author: options[:author])
+  sh('gh workflow run release-publish.yml --ref main')
+end
+
+lane :merge_main do
+  merge_main_to_develop
+  update_release_version_to_snapshot(file_path: swift_environment_path)
+  ensure_git_branch(branch: 'develop')
+  sh("git add #{swift_environment_path}")
+  sh("git commit -m 'Update release version to snapshot'")
+  sh('git push')
 end
 
 desc 'Completes an SDK Release'
 lane :publish_release do |options|
-  version = options[:version] || ''
-  UI.user_error!('You need to pass the version of the release') unless version.length > 0
+  release_version = get_sdk_version_from_environment
+  UI.user_error!("Release #{release_version} has already been published.") if git_tag_exists(tag: release_version, remote: true)
+  UI.user_error!('Release version cannot be empty') if release_version.to_s.empty?
+  File.write(ENV['GITHUB_ENV'], "RELEASE_VERSION=#{release_version}\n", mode: 'a') if ENV['GITHUB_ENV']
+  ensure_git_branch(branch: 'main')
 
-  # Create XCFrameworks
-  xcversion(version: xcode_version)
-  sh('cd .. && make frameworks')
-
-  changes = read_changelog(version: version)
-
-  # Create Github Release
-  github_release = set_github_release(
-    repository_name: 'GetStream/stream-chat-swift',
-    api_token: ENV['GITHUB_TOKEN'],
-    name: version,
-    tag_name: version,
-    commitish: 'main',
-    description: changes,
-    upload_assets: ['Products/StreamChat.zip', 'Products/StreamChatUI.zip', 'Products/StreamChat-All.zip']
+  publish_ios_sdk(
+    skip_git_status_check: false,
+    version: release_version,
+    sdk_names: sdk_names,
+    github_repo: github_repo
   )
-
-  spm_github_release_url = update_spm(version: version)
-  push_pods(sync: options[:sync])
-  # TODO: Update stream-chat-swift-integration-apps
-
-  UI.success("🎉🎉🎉🎉🎉 Github releases successfully created:\n 👉 stream-chat-swift: #{github_release['html_url']}\n👉 stream-chat-swift-spm: #{spm_github_release_url}")
 end
 
-desc 'Read CHANGELOG'
-private_lane :read_changelog do |options|
-  version = options[:version] || ''
-  UI.user_error!('You need to pass the version of the release you want to obtain the changelog from') unless version.length > 0
-
-  UI.message("Getting changelog for #{version}")
-  reading_changelog = false
-  changes = ''
-  changelog_lines = File.readlines('../CHANGELOG.md')
-  changelog_lines.each do |line|
-    start_token = '# ['
-    if reading_changelog
-      break if line.start_with?(start_token)
-
-      changes << line
-    end
-
-    reading_changelog = true if line.start_with?("#{start_token}#{version}")
-  end
-
-  UI.user_error!("No changelog found for #{version}") unless changes.length > 0
-  UI.success("Changelog for #{version}: \n#{changes}")
-  changes
+lane :get_sdk_version_from_environment do
+  version = File.read(swift_environment_path).match(/String\s+=\s+"([^"]+)"/)[1]
+  version.downcase.include?('beta') ? version : version.split('-').first
 end
 
-desc 'Update XCFrameworks and submit to the SPM repository'
-private_lane :update_spm do |options|
-  version = options[:version] || ''
-  UI.user_error!('You need to pass the version of the release you want to obtain the changelog from') unless version.length > 0
-
-  # Generate Checksums
-  stream_chat_checksum = sh('swift package compute-checksum ../Products/StreamChat.zip').strip
-  stream_chat_ui_checksum = sh('swift package compute-checksum ../Products/StreamChatUI.zip').strip
-
-  initial_directory = Dir.pwd
-
-  # Update SPM Repo
-  spm_directory_name = 'StreamSPM'
-  spm_directory = "../../#{spm_directory_name}"
-  sh("git clone git@github.com:GetStream/stream-chat-swift-spm.git ../../#{spm_directory_name}")
-  Dir.chdir(spm_directory)
-
-  result = sh('basename `git rev-parse --show-toplevel`').strip
-  UI.error("Not using #{spm_directory_name} repo") unless result.to_s == spm_directory_name
-
-  file_lines = File.readlines('Package.swift')
-  file_data = ''
-  previous_module = ''
-
-  file_lines.each do |line|
-    formatted_line =
-      case previous_module
-      when 'StreamChat'
-        line.gsub(/(checksum: ")[a-z0-9]+(")/, "\\1#{stream_chat_checksum}\\2")
-      when "StreamChatUI"
-        line.gsub(/(checksum: ")[a-z0-9]+(")/, "\\1#{stream_chat_ui_checksum}\\2")
-      end
-
-    url_pattern = %r{(releases/download/)[.0-9]+(/)}
-    if line.match(url_pattern)
-      formatted_line = line.gsub(url_pattern, "\\1#{version}\\2")
-      previous_module = line.match(/([a-zA-Z]+).zip/).to_s.gsub(/.zip/, '')
-    end
-
-    file_data << formatted_line
-  end
-
-  # Write the new changes
-  File.open('./Package.swift', 'w') { |file| file << file_data }
-
-  # Update the repo
-  sh('git add -A')
-  sh("git commit -m 'Bump #{version}'")
-  sh('git push')
-
-  github_release = set_github_release(
-    repository_name: 'GetStream/stream-chat-swift-spm',
-    api_token: ENV['GITHUB_TOKEN'],
-    name: version,
-    tag_name: version,
-    commitish: 'main',
-    description: "https://github.com/GetStream/stream-chat-swift/releases/tag/#{version}"
+private_lane :appstore_api_key do
+  @appstore_api_key ||= app_store_connect_api_key(
+    key_id: 'MT3PRT8TB7',
+    issuer_id: '69a6de96-0738-47e3-e053-5b8c7c11a4d1',
+    key_content: ENV.fetch('APPSTORE_API_KEY', nil),
+    in_house: false
   )
-
-  UI.message("Moving back to fastlane's directory - #{initial_directory}")
-  Dir.chdir(initial_directory)
-
-  # Clean Up
-  sh("rm -rf #{spm_directory}")
-  UI.success("New SPM release available: #{github_release['html_url']}")
-  github_release['html_url']
-end
-
-desc 'Pushes the StreamChat and StreamChatUI SDK podspecs to Cocoapods trunk'
-lane :push_pods do |options|
-  def release_pod(sync:, podspec:, dry:)
-    UI.message("Starting to push podspec: #{podspec}")
-
-    pod_push(path: podspec, allow_warnings: true, synchronous: sync) if dry == false
-  rescue StandardError => e
-    UI.message(e)
-    UI.message("pod_push failed for #{podspec}. Waiting a minute until retry for trunk to get updated...")
-    sleep(60) # sleep for a minute, wait until trunk gets updates
-    release_pod(sync: sync, podspec: podspec, dry: dry)
-  end
-
-  # The == 1 comparison makes sure truthy values are converted to bool
-  # and falsy (false and nil) values are converted to bool false
-
-  # When sync is false, pod trunk push is run asynchronously
-  sync = options[:sync] == 1
-
-  # When dry option is specified - `dry:1`, the lane is executed in test/safe mode
-  # that won't cause pod_push action to fire.
-  dry = options[:dry] == 1
-
-  ['StreamChat.podspec', 'StreamChat-XCFramework.podspec'].each do |podspec|
-    release_pod(sync: sync, podspec: podspec, dry: dry)
-  end
-
-  ['StreamChatUI.podspec', 'StreamChatUI-XCFramework.podspec'].each do |podspec|
-    release_pod(sync: sync, podspec: podspec, dry: dry)
-  end
-end
-
-lane :set_SDK_version do |options|
-  path_to_version_file = '../Sources/StreamChat/Generated/SystemEnvironment+Version.swift'
-  version_generated_file = "//
-// Copyright © 2022 Stream.io Inc. All rights reserved.
-//
-// ⚠️  Generated file, please use `fastlane :bump_SDK_version or fastlane release major|minor|patch` lanes
-
-import Foundation
-
-extension SystemEnvironment {
-  /// A Stream Chat version.
-  public static let version: String = \"#{options[:version]}\"
-}
-"
-  File.write(path_to_version_file, version_generated_file)
 end
 
 desc "If `readonly: true` (by default), installs all Certs and Profiles necessary for development and ad-hoc.\nIf `readonly: false`, recreates all Profiles necessary for development and ad-hoc, updates them locally and remotely."
 lane :match_me do |options|
-  # Get `:readonly` value, fallback to `true` if it's missing.
-  readonly = options.fetch(:readonly, true)
-
-  %w[development adhoc appstore].each do |type|
-    match(
-      type: type,
-      app_identifier: [
-        'io.getstream.StreamChat',
-        'io.getstream.iOS.ChatDemoApp',
-        'io.getstream.iOS.ChatDemoAppTwo',
-        'io.getstream.iOS.ChatDemoApp.DemoAppPush',
-        'io.getstream.iOS.iMessageClone',
-        'io.getstream.iOS.SlackClone',
-        'io.getstream.iOS.MessengerClone',
-        'io.getstream.iOS.YouTubeClone',
-        'io.getstream.iOS.DemoAppSwiftUI'
-      ],
-      readonly: readonly,
-      force_for_new_devices: !is_ci
-    )
-  end
-end
-
-desc 'Register new device, regenerates profiles, updates them remotely and locally'
-lane :register_new_device_and_recreate_profiles do
-  device_name = prompt(text: 'Enter the device name: ')
-  device_udid = prompt(text: 'Enter the device UDID: ')
-
-  register_device(name: device_name, udid: device_udid)
-  match_me(readonly: false)
+  app_identifiers = [
+    'io.getstream.StreamChat',
+    'io.stream.StreamChatUI',
+    'io.getstream.iOS.ChatDemoApp',
+    'io.getstream.iOS.ChatDemoAppTwo',
+    'io.getstream.iOS.ChatDemoApp.DemoAppPush',
+    'io.getstream.iOS.iMessageClone',
+    'io.getstream.iOS.SlackClone',
+    'io.getstream.iOS.MessengerClone',
+    'io.getstream.iOS.YouTubeClone',
+    'io.getstream.iOS.DemoAppUIKit',
+    'io.getstream.iOS.ChatDemoApp.DemoShare',
+    'io.getstream.iOS.StreamChatMockServer',
+    'io.getstream.iOS.StreamChatUITestsApp',
+    'io.getstream.iOS.StreamChatUITestsAppUITests.xctrunner'
+  ]
+  custom_match(
+    api_key: appstore_api_key,
+    app_identifier: app_identifiers,
+    readonly: options[:readonly],
+    register_device: options[:register_device]
+  )
 end
 
 desc 'Builds the latest version of Demo app and uploads it to TestFlight'
-lane :testflight_build do
-  # Ask around if you're wandering where you can get this key from
-  api_key = app_store_connect_api_key(
-    key_id: 'MT3PRT8TB7',
-    issuer_id: '69a6de96-0738-47e3-e053-5b8c7c11a4d1',
-    key_content: ENV['APPSTORE_API_KEY'],
-    in_house: false
-  )
-
-  # We take the version of the latest build available on TestFlight to find out the next available build number
-  build_number = latest_testflight_build_number(
-    app_identifier: 'io.getstream.iOS.ChatDemoApp',
-    api_key: api_key
-  ) + 1
-
-  # If version number is different from %d.%d.%d e.g. 3.2.1-beta-6.0 we won't be able to build a test flight build
-  # so we take the current version and strip first %d.%d.%d out of it
-  version_number = get_version_number(
-    xcodeproj: 'StreamChat.xcodeproj',
-    target: 'StreamChat'
-  )[/\d+\.\d+\.\d/]
-
-  %w[StreamChat StreamChatUI].each do |target|
-    increment_version_number_in_plist(
-      version_number: version_number,
-      xcodeproj: 'StreamChat.xcodeproj',
-      target: target
-    )
-  end
-
-  increment_build_number_in_plist(
-    xcodeproj: 'StreamChat.xcodeproj',
-    target: 'DemoApp',
-    build_number: build_number.to_s
-  )
-
-  increment_build_number_in_plist(
-    xcodeproj: 'StreamChat.xcodeproj',
-    target: 'DemoAppPush',
-    build_number: build_number.to_s
-  )
+lane :uikit_testflight_build do |options|
+  is_manual_upload = is_localhost || ENV['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
+  configuration = options[:configuration].to_s.empty? ? 'Release' : options[:configuration]
 
   match_me
 
-  gym(
-    project: 'StreamChat.xcodeproj',
-    scheme: 'DemoApp',
-    configuration: 'Release',
-    export_method: 'app-store',
-    export_options: './fastlane/testflight_export_options.plist', # We have to pass manually since `gym` detects profiles from `match` and that breaks it
-    clean: true,
-    include_symbols: true,
-    output_directory: 'archives'
-  )
+  sdk_version = get_sdk_version_from_environment
+  UI.important("[TestFlight] Uploading DemoApp version: #{sdk_version}")
 
-  external_groups = []
-  changelog =
-    if ENV['GITHUB_EVENT_NAME'] == 'pull_request'
-      sha = ENV['GITHUB_SHA'] ? ENV['GITHUB_SHA'][0..8] : sh('git rev-parse --short HEAD')
-      "This is the build for Regression testing on release candidate v#{version_number} (sha: #{sha})."
-    else
-      external_groups << 'Public Link'
-      "This is the official sample app built with Stream's iOS Chat SDK v#{version_number}. It's designed " \
-      'to highlight engaging features and new improvements to the SDK, but remember that this is just one ' \
-      'possible implementation. You can start your own by borrowing and customizing the code from this ' \
-      "sample, or build something completely different using Stream's components."
-    end
-
-  pilot(
-    api_key: api_key,
-    team_id: '118902954',
+  testflight_build(
+    api_key: appstore_api_key,
+    xcode_project: xcode_project,
+    sdk_target: 'StreamChat',
+    app_target: 'DemoApp',
+    app_version: sdk_version,
     app_identifier: 'io.getstream.iOS.ChatDemoApp',
-    app_platform: 'ios',
-    ipa: 'archives/ChatSample.ipa',
-    groups: external_groups,
-    distribute_external: external_groups.any?,
-    reject_build_waiting_for_review: true,
-    changelog: changelog
+    configuration: configuration,
+    extensions: ['DemoShare'],
+    use_changelog: true,
+    is_manual_upload: is_manual_upload
   )
-
-  next unless ENV['GITHUB_EVENT_NAME'] == 'pull_request'
-
-  pr_number = JSON.parse(ENV['GITHUB_EVENT'])['pull_request']['number']
-  message = "Build for regression testing №#{build_number} has been uploaded to TestFlight 🎁"
-  sh("gh pr comment #{pr_number} -b '#{message}'")
 end
 
 desc 'Get next PR number from github to be used in CHANGELOG'
 lane :get_next_issue_number do
-  result = github_api(api_token: ENV['FASTLANE_GITHUB_TOKEN'], path: '/repos/GetStream/stream-chat-swift/issues')
+  result = github_api(api_token: ENV.fetch('FASTLANE_GITHUB_TOKEN', nil), path: "/repos/#{github_repo}/issues")
 
   next_issue_number = result[:json][0]['number'] + 1
-  next_issue_link = "[##{next_issue_number}](https://github.com/GetStream/stream-chat-swift/issues/#{next_issue_number})"
+  next_issue_link = "[##{next_issue_number}](https://github.com/#{github_repo}/issues/#{next_issue_number})"
 
   clipboard(value: next_issue_link)
 
@@ -410,171 +177,627 @@ lane :get_next_issue_number do
   UI.success('Next markdown link is copied to your clipboard! ⬆️')
 end
 
-# Adds "CI=TRUE" environment variable to the provided test plan file
-def add_ci_env_var_to(test_plan_file)
-  return unless is_ci
-
-  data_hash = JSON.parse(File.read(test_plan_file))
-
-  # Create the `environmentVariableEntries` array if it doesn't exist
-  data_hash['defaultOptions']['environmentVariableEntries'] ||= []
-
-  # Append the `CI` ENV variable
-  data_hash['defaultOptions']['environmentVariableEntries'] << { 'key' => 'CI', 'value' => 'TRUE' }
-  File.write(test_plan_file, JSON.pretty_generate(data_hash))
-
-  UI.success("✅ `CI=TRUE` ENV variable added to #{test_plan_file}")
-  UI.message("Current testplan ENV variables:\n#{data_hash['defaultOptions']['environmentVariableEntries']}")
-end
-
 desc 'Runs tests in Debug config'
 lane :test do |options|
-  next unless check_required?(:unit)
+  next unless is_check_required(sources: @impact[:llc][:sources], force_check: @force_check, required_checks: @impact[:llc][:checks])
 
-  add_ci_env_var_to('../Tests/StreamChatTests/StreamChatTestPlan.xctestplan')
+  scheme = 'StreamChat'
+  update_testplan_on_ci(path: "Tests/#{scheme}Tests/#{scheme}FlakyTests.xctestplan")
 
-  number_of_retries = options[:cron] ? 1 : 0
+  scan_with_retries(
+    scan_options: {
+      project: xcode_project,
+      scheme: scheme,
+      testplan: "#{scheme}FlakyTests",
+      clean: is_localhost,
+      derived_data_path: derived_data_path,
+      cloned_source_packages_path: source_packages_path,
+      devices: options[:device],
+      destination: options[:destination],
+      skip_detect_devices: !options[:destination].nil?,
+      build_for_testing: options[:build_for_testing],
+      skip_build: options[:skip_build],
+      xcodebuild_formatter: xcodebuild_formatter
+    }
+  )
+
+  next if options[:build_for_testing]
+
+  update_testplan_on_ci(path: "Tests/#{scheme}Tests/#{scheme}.xctestplan")
+
+  scan_options = {
+    project: xcode_project,
+    scheme: scheme,
+    testplan: scheme,
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path,
+    devices: options[:device],
+    destination: options[:destination],
+    skip_detect_devices: !options[:destination].nil?,
+    skip_build: true,
+    xcodebuild_formatter: xcodebuild_formatter
+  }
+
+  scan_with_retries(scan_options: scan_options, retries: options[:cron] ? 3 : 2)
+
+  slather
+end
+
+lane :start_mock_server do |options|
+  mock_server_repo = 'stream-chat-test-mock-server'
+  stop_mock_server if is_localhost
+
+  if options[:local_server]
+    mock_server_repo = options[:local_server]
+  else
+    branch = options[:branch].to_s.empty? ? 'main' : options[:branch]
+    sh("rm -rf #{mock_server_repo}") if File.directory?(mock_server_repo)
+    sh("git clone -b #{branch} https://github.com/#{github_repo.split('/').first}/#{mock_server_repo}.git")
+  end
+
+  pids = sh("lsof -ti :#{mock_server_driver_port} || true", log: false).strip
+  sh("kill -9 #{pids} || true", log: false) unless pids.empty?
+
+  Dir.chdir(mock_server_repo) do
+    FileUtils.mkdir_p('logs')
+    sh("bundle exec ruby driver.rb #{mock_server_driver_port} > logs/driver.log 2>&1 &")
+  end
+end
+
+lane :stop_mock_server do
+  begin
+    Net::HTTP.get_response(URI("http://localhost:#{mock_server_driver_port}/stop"))
+  rescue StandardError
+    nil
+  end
+end
+
+lane :build_test_app_and_frameworks do
+  scan(
+    project: xcode_project,
+    scheme: 'StreamChatUITestsApp',
+    testplan: 'StreamChatUITestsApp',
+    result_bundle: true,
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path,
+    clean: is_localhost,
+    build_for_testing: true,
+    xcodebuild_formatter: xcodebuild_formatter
+  )
+end
+
+lane :xcmetrics do |options|
+  next unless is_check_required(sources: @impact[:xcmetrics][:sources], force_check: @force_check, required_checks: @impact[:xcmetrics][:checks])
+
+  ['test_output/', 'metrics/', "../#{derived_data_path}/Build/Products"].each { |dir| FileUtils.remove_dir(dir, force: true) }
+
+  match_me
 
   scan(
-    project: 'StreamChat.xcodeproj',
-    scheme: 'StreamChat',
-    testplan: 'StreamChatTestPlan',
-    configuration: 'Debug',
-    clean: true,
-    devices: options[:device],
-    build_for_testing: options[:build_for_testing],
-    number_of_retries: number_of_retries
+    project: xcode_project,
+    scheme: 'StreamChatUITestsApp',
+    testplan: 'Performance',
+    result_bundle: true,
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path,
+    clean: is_localhost,
+    sdk: 'iphoneos',
+    skip_detect_devices: true,
+    build_for_testing: true,
+    xcodebuild_formatter: xcodebuild_formatter
   )
+
+  firebase_error = ''
+  xcodebuild_output = ''
+  ios_version = '16.6'
+  device_model = 'iphone14pro'
+  Dir.chdir("../#{derived_data_path}/Build/Products") do
+    begin
+      sh("zip -r MyTests.zip .")
+      sh("gcloud firebase test ios run --project #{github_repo.split('/').last} --test MyTests.zip --timeout 7m --results-dir test_output --device 'model=#{device_model},version=#{ios_version},orientation=portrait'")
+    rescue StandardError => e
+      UI.error("Test failed on Firebase:\n#{e}")
+      firebase_error = e
+    end
+
+    sh("gsutil cp -r #{testlab_bucket}/test_output/#{device_model}-#{ios_version}-en-portrait/xcodebuild_output.log xcodebuild_output.log")
+    xcodebuild_output = File.read('xcodebuild_output.log')
+  end
+
+  warning_status = '🟡' # Warning if a branch is #{max_tolerance} less performant than the benchmark
+  fail_status = '🔴' # Failure if a branch is more than #{max_tolerance} less performant than the benchmark
+  success_status = '🟢' # Success if a branch is more performant or equals to the benchmark
+
+  sh("git clone #{metrics_git} #{File.dirname(xcmetrics_path)}")
+  performance_benchmarks = JSON.parse(File.read(xcmetrics_path))
+  expected_performance = performance_benchmarks['benchmark']
+  actual_performance = xcmetrics_log_parser(log: xcodebuild_output)
+
+  two_frames_ms = (2 * 1000.0 / 120).ceil(1) # The Firebase device runs at 120 Hz; it logs a dropped frame as 8.34 ms
+
+  table_header = '## SDK Performance'
+  markdown_table = "#{table_header}\n| `target` | `metric` | `benchmark` | `branch` | `performance` | `status` |\n| - | - | - | - | - | - |\n"
+  ['testMessageListScrollTime', 'testChannelListScrollTime'].each do |test_name|
+    next if test_name == 'testChannelListScrollTime' # Delete this line and return the test to the testplan as soon as PBE-5666 is solved
+
+    min_hitch_tolerance = {
+      'hitches_total_duration' => two_frames_ms,
+      'hitch_time_ratio' => two_frames_ms / expected_performance[test_name]['duration']['value'],
+      'number_of_hitches' => 2
+    }
+
+    index = 0
+    ['hitches_total_duration', 'duration', 'hitch_time_ratio', 'frame_rate', 'number_of_hitches'].each do |metric|
+      is_frame_rate = metric == 'frame_rate'
+      benchmark_value = expected_performance[test_name][metric]['value']
+      branch_value = actual_performance[test_name][metric]['value']
+      value_extension = actual_performance[test_name][metric]['ext']
+      # Hitches are whole dropped frames, so 10% of a few hitches is less than one frame: allow at least two
+      max_tolerance = [benchmark_value * 0.1, min_hitch_tolerance.fetch(metric, 0)].max
+
+      benchmark_value_avoids_zero_division = benchmark_value == 0 ? 1 : benchmark_value
+      diff = is_frame_rate ? branch_value - benchmark_value : benchmark_value - branch_value
+      diff = (diff * 100.0 / benchmark_value_avoids_zero_division).round(2)
+      diff_emoji = if diff > 0
+                     '🔼'
+                   elsif diff.zero?
+                     '🟰'
+                   else
+                     '🔽'
+                   end
+
+      status_emoji =
+        if is_frame_rate
+          if branch_value < benchmark_value && branch_value >= benchmark_value - max_tolerance
+            warning_status
+          elsif branch_value < benchmark_value
+            fail_status
+          else
+            success_status
+          end
+        else
+          if branch_value > benchmark_value && branch_value <= benchmark_value + max_tolerance
+            warning_status
+          elsif branch_value > benchmark_value
+            fail_status
+          else
+            success_status
+          end
+        end
+
+      title = metric.to_s.gsub('_', ' ').capitalize
+      target = index.zero? ? test_name.match(/(?<=test)(.*?)(?=ScrollTime)/).to_s : ''
+      index += 1
+
+      markdown_table << "| #{target} | #{title} | #{benchmark_value} #{value_extension} | #{branch_value} #{value_extension} | #{diff}% #{diff_emoji} | #{status_emoji} |\n"
+      FastlaneCore::PrintTable.print_values(
+        title: title,
+        config: {
+          benchmark: "#{benchmark_value} #{value_extension}",
+          branch: "#{branch_value} #{value_extension}",
+          diff: "#{diff}% #{diff_emoji}",
+          status: status_emoji
+        }
+      )
+    end
+  end
+
+  UI.user_error!("See Firebase error above ☝️") unless firebase_error.to_s.empty?
+
+  pr_comment(text: markdown_table, edit_last_comment_with_text: table_header) if is_ci
+
+  UI.user_error!("#{table_header} benchmark failed.") if markdown_table.include?(fail_status)
+end
+
+private_lane :xcmetrics_log_parser do |options|
+  log = options[:log]
+  method = 'Scroll_DraggingAndDeceleration'
+  metrics_definitions = {
+    'hitches_total_duration' => { 'name' => 'Hitches Total Duration', 'unit' => 'ms' },
+    'duration' => { 'name' => 'Duration', 'unit' => 's' },
+    'hitch_time_ratio' => { 'name' => 'Hitch Time Ratio', 'unit' => 'ms per s' },
+    'frame_rate' => { 'name' => 'Frame Rate', 'unit' => 'fps' },
+    'number_of_hitches' => { 'name' => 'Number of Hitches', 'unit' => 'hitches', 'ext' => '' }
+  }
+  metrics = {}
+
+  ['testMessageListScrollTime', 'testChannelListScrollTime'].each do |test_name|
+    next if test_name == 'testChannelListScrollTime' # Delete this line and return the test to the testplan as soon as PBE-5666 is solved
+
+    metrics[test_name] = metrics_definitions.to_h do |metric, definition|
+      # One slow iteration skews the average, so compare the median of all iterations instead
+      match = log.match(/#{test_name}\]' measured \[#{definition['name']} \(#{method}\), #{definition['unit']}\] average: [\d.]+, relative standard deviation: [\d.]+%, values: \[([^\]]+)\]/)
+      UI.user_error!("#{definition['name']} not found for #{test_name}") if match.nil?
+
+      values = match[1].split(',').map(&:to_f).sort
+      median = values.size.odd? ? values[values.size / 2] : (values[(values.size / 2) - 1] + values[values.size / 2]) / 2.0
+      [metric, { 'value' => median.round(2), 'ext' => definition.fetch('ext', definition['unit']) }]
+    end
+  end
+
+  metrics
+end
+
+desc 'Runs e2e ui tests using real backend server in Debug config'
+lane :test_e2e do |options|
+  scan_options = {
+    project: xcode_project,
+    scheme: 'StreamChatUITestsApp',
+    testplan: 'Backend',
+    result_bundle: true,
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path,
+    clean: is_localhost,
+    test_without_building: options[:test_without_building],
+    devices: options[:device],
+    prelaunch_simulator: is_ci,
+    xcodebuild_formatter: xcodebuild_formatter
+  }
+
+  scan_with_retries(scan_options: scan_options)
 end
 
 desc 'Runs e2e ui tests using mock server in Debug config'
 lane :test_e2e_mock do |options|
-  next unless check_required?(:e2e)
+  next unless is_check_required(sources: @impact[:e2e][:sources], force_check: @force_check, required_checks: @impact[:e2e][:checks])
 
-  add_ci_env_var_to('../StreamChatUITestsAppUITests/StreamChatUITestsApp.xctestplan')
-
-  ios = options[:ios]
-  device = ios && ios != 'latest' ? "#{options[:device]} (#{ios})" : options[:device]
-  build_for_testing = is_ci && options[:cron].nil?
-  number_of_retries = options[:cron] ? 2 : 1
+  start_mock_server(local_server: options[:local_server], branch: options[:mock_server_branch])
+  allow_photo_library_access(device: options[:device])
 
   scan_options = {
-    project: 'StreamChat.xcodeproj',
+    project: xcode_project,
     scheme: 'StreamChatUITestsApp',
     testplan: 'StreamChatUITestsApp',
-    configuration: 'Debug',
-    devices: device,
-    number_of_retries: number_of_retries
+    result_bundle: true,
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path,
+    clean: is_localhost && !options[:test_without_building],
+    test_without_building: options[:test_without_building],
+    devices: options[:device],
+    prelaunch_simulator: is_ci,
+    xcodebuild_formatter: xcodebuild_formatter
   }
-  scan(scan_options.merge(clean: true, build_for_testing: build_for_testing))
 
-  if build_for_testing
-    parallelize_tests_on_ci(
-      scan: scan_options,
-      derived_data: lane_context[SharedValues::SCAN_DERIVED_DATA_PATH],
-      batch: options[:batch]
-    )
+  if options[:coverage]
+    scan(scan_options.merge(build_for_testing: true, code_coverage: true))
+    scan_options[:test_without_building] = true
+    scan_options[:clean] = false
+    FileUtils.rm_rf(e2e_coverage_dir)
+    ENV['TEST_RUNNER_E2E_COVERAGE_DIR'] = e2e_coverage_dir
+  end
+
+  if ENV['MATRIX_SIZE'] && options[:batch]
+    tests = File.exist?(e2e_selection_path) ? JSON.parse(File.read(e2e_selection_path))['tests'] : all_e2e_tests
+    slice_size = [(tests.size / ENV['MATRIX_SIZE'].to_f).ceil, 1].max
+    only_testing_batch = tests.each_slice(slice_size).to_a[options[:batch].to_i].to_a
+    UI.important("Tests in total: #{tests.size}. Running #{only_testing_batch.size} of them ⌛️")
+    next if only_testing_batch.empty?
+
+    scan_options[:only_testing] = only_testing_batch
+  end
+
+  failed_tests = []
+  begin
+    scan_with_retries(scan_options: scan_options)
+  rescue StandardError
+    # Only the tests that failed on the last attempt stay failed for the coverage map, keyed as `Class/method`.
+    failed_tests = retreive_failed_tests.map { |test| test.delete_suffix('()') }
+    raise
+  ensure
+    build_e2e_coverage_map(failed_tests: failed_tests) if options[:coverage]
   end
 end
 
-private_lane :parallelize_tests_on_ci do |options|
-  xctestrun = Dir.glob("#{options[:derived_data]}/Build/Products/*.xctestrun").first
-  tests = retrieve_tests(xctestrun: xctestrun).values.flatten
-  slice_size = (tests.size / ENV['MATRIX_SIZE'].to_f).ceil
-  only_testing = []
-  tests.each_slice(slice_size) { |test| only_testing << test }
-  only_testing_batch = only_testing[options[:batch].to_i]
-
-  UI.success("Tests in total: #{only_testing.flatten.size}. Running #{only_testing_batch.size} of them ⌛️")
-  scan(
-    options[:scan].merge(
-      test_without_building: true,
-      derived_data_path: options[:derived_data],
-      only_testing: only_testing_batch
+desc 'Picks the e2e tests the pull request can affect and exposes how many CI batches they need'
+lane :select_e2e_tests do |options|
+  all_tests = all_e2e_tests
+  UI.user_error!('No e2e tests found in the built xctestrun') if all_tests.empty?
+  tests = []
+  # A manual run's tip may be a "Merge develop" commit, which the selection would mistake for a pull request merge.
+  run_all_reason =
+    if is_ci && ENV['GITHUB_EVENT_NAME'] != 'pull_request'
+      'not a pull request'
+    elsif ENV['GITHUB_HEAD_REF'].to_s.start_with?('release/') || ENV['GITHUB_BASE_REF'] == 'main'
+      'release pull request'
+    end
+  if run_all_reason
+    UI.important("Running all #{all_tests.size} tests: #{run_all_reason}")
+    tests = all_tests
+    File.write(e2e_selection_path, JSON.generate(run_all: true, tests: tests, reasons: [run_all_reason]))
+  elsif is_check_required(sources: @impact[:e2e][:sources], force_check: @force_check, required_checks: @impact[:e2e][:checks])
+    selection = select_impacted_tests(
+      all_tests: all_tests,
+      coverage_map: options[:coverage_map],
+      coverage_map_artifact: e2e_coverage_map_artifact,
+      diff_base: options[:diff_base],
+      changed_files: options[:changed_files]&.split(','),
+      source_paths: ['Sources', 'StreamChatUITestsApp'],
+      test_paths: ['StreamChatUITestsAppUITests/Tests'],
+      ignore_paths: ['**/*.md', '**/*.stencil', '**/*.yml', 'Sources/*/Info.plist'],
+      run_all_paths: [
+        'StreamChatUITestsAppUITests/Tests/BaseTestCase',
+        'StreamChatUITestsAppUITests/Extensions',
+        'StreamChatUITestsAppUITests/Pages',
+        'StreamChatUITestsAppUITests/Robots',
+        'StreamChatUITestsAppUITests/StreamChatUITestsApp.xctestplan',
+        'StreamChatUITestsAppUITests/StreamChatUITests.swift',
+        'TestTools/StreamChatTestMockServer',
+        'Package.swift'
+      ],
+      # Changes to code nearly every test runs (launch, login, channel list) take one test per class; the nightly run covers the rest.
+      hot_test_ratio: 0.9,
+      output_path: e2e_selection_path
     )
+    tests = selection['tests']
+  else
+    File.write(e2e_selection_path, JSON.generate(run_all: false, tests: [], reasons: ['no e2e sources changed']))
+  end
+
+  # Up to 3 batches, none bigger than a third of the suite, so a small selection takes fewer runners.
+  max_batches = 3
+  batch_size = (all_tests.size / max_batches.to_f).ceil
+  batches = (0...[(tests.size / batch_size.to_f).ceil, max_batches].min).to_a
+  UI.important("E2E batches: #{batches.size}")
+  File.write(ENV['GITHUB_OUTPUT'], "e2e_batches=#{batches.to_json}\n", mode: 'a') if ENV['GITHUB_OUTPUT']
+  batches
+end
+
+private_lane :build_e2e_coverage_map do |options|
+  next UI.important('No e2e coverage was collected') if Dir.glob("#{e2e_coverage_dir}/*/*/*.profraw").empty?
+
+  app = Dir.glob(File.expand_path("../#{derived_data_path}/Build/Products/*-iphonesimulator/StreamChatUITestsApp.app")).first
+  executable = ["#{app}/StreamChatUITestsApp.debug.dylib", "#{app}/StreamChatUITestsApp"].find { |path| File.exist?(path) }
+  frameworks = Dir.glob("#{app}/Frameworks/*.framework").map { |framework| "#{framework}/#{File.basename(framework, '.framework')}" }
+
+  build_test_coverage_map(
+    coverage_dir: e2e_coverage_dir,
+    binaries: [executable] + frameworks,
+    output_path: e2e_coverage_map_path,
+    previous_map_artifact: e2e_coverage_map_artifact,
+    failed_tests: options[:failed_tests]
   )
+end
+
+# The test runner saves a video to the photo library. Granting access up front avoids the system prompt,
+# which can be dismissed as "Don't Allow" when it's not answered in time and then stays denied for every retry.
+private_lane :allow_photo_library_access do |options|
+  next UI.important('No device is given, photo library access is not granted') unless options[:device]
+
+  name, os_version = options[:device].match(/^(.+?)(?: \(([\d.]+)\))?$/).captures
+  simulators = FastlaneCore::DeviceManager.simulators('iOS')
+  simulator =
+    if os_version
+      simulators.find { |device| device.name == name && Gem::Version.new(device.os_version) == Gem::Version.new(os_version) }
+    else
+      # Same pick as `scan` makes for a device without a version, so both target the same simulator.
+      Scan::DetectValues.highest_compatible_simulator(simulators, name)
+    end
+  UI.user_error!("No simulator matches #{options[:device]}, photo library access cannot be granted") unless simulator
+
+  sh("xcrun simctl bootstatus #{simulator.udid} -b")
+  sh("xcrun simctl privacy #{simulator.udid} grant photos-add io.getstream.iOS.StreamChatUITestsAppUITests.xctrunner")
+end
+
+private_lane :all_e2e_tests do
+  xctestrun = Dir.glob(File.expand_path("../#{derived_data_path}/Build/Products/*.xctestrun")).first
+  retrieve_xctest_names(xctestrun: xctestrun).values.flatten
+end
+
+# Runs scan and re-runs only the tests that failed, up to `retries` times.
+# Every attempt recalculates the failing set from the previous run's result
+# bundle, so a shrinking set of flaky tests converges instead of dragging
+# the whole suite along.
+private_lane :scan_with_retries do |options|
+  scan_options = options[:scan_options].merge(result_bundle: true)
+  attempts_left = options[:retries] || 3
+  retry_number = 0
+  Dir.glob(File.expand_path("test_output/#{scan_options[:scheme]}-retry-*.xcresult")).each { |bundle| FileUtils.rm_rf(bundle) }
+
+  begin
+    scan(scan_options)
+  rescue StandardError
+    raise if attempts_left.zero?
+
+    failed_tests = retreive_failed_tests
+    raise if failed_tests.empty?
+
+    attempts_left -= 1
+    UI.important("Re-running #{failed_tests.size} failed tests ⌛️ (#{attempts_left} retries left)")
+    # scan replaces the default result bundle on every run, so each retry keeps its own next to the full first run.
+    scan_options = scan_options.merge(
+      only_testing: failed_tests,
+      clean: false,
+      result_bundle_path: File.expand_path("test_output/#{scan_options[:scheme]}-retry-#{retry_number += 1}.xcresult")
+    )
+    retry
+  end
+end
+
+# The tests that failed in the last scan, as `Bundle/Suite/test()` for `only_testing`.
+# Read from the result bundle rather than scan's junit report: scan skips the report when the
+# formatted output lacks a test summary, as xcbeautify's does for Swift Testing, and the report
+# names Swift Testing tests by their display names, which `only_testing` doesn't accept.
+private_lane :retreive_failed_tests do
+  result_bundle_path = lane_context[SharedValues::SCAN_GENERATED_XCRESULT_PATH]
+  next [] if result_bundle_path.nil? || !File.directory?(result_bundle_path)
+
+  begin
+    results = JSON.parse(sh('xcrun', 'xcresulttool', 'get', 'test-results', 'tests', '--path', result_bundle_path, log: false))
+  rescue StandardError => e
+    UI.error("Couldn't read the failed tests from #{result_bundle_path}: #{e.message}")
+    next []
+  end
+
+  failed_tests = []
+  collect_failed = lambda do |node, bundle|
+    bundle = node['name'] if ['Unit test bundle', 'UI test bundle'].include?(node['nodeType'])
+    if node['nodeType'] == 'Test Case'
+      failed_tests << "#{bundle}/#{node['nodeIdentifier']}" if node['result'] == 'Failed' && bundle && node['nodeIdentifier']
+    else
+      node.fetch('children', []).each { |child| collect_failed.call(child, bundle) }
+    end
+  end
+  results.fetch('testNodes', []).each { |node| collect_failed.call(node, nil) }
+
+  failed_tests.uniq
 end
 
 desc 'Runs ui tests in Debug config'
 lane :test_ui do |options|
-  next unless check_required?(:ui)
+  next unless is_check_required(sources: @impact[:ui][:sources], force_check: @force_check, required_checks: @impact[:ui][:checks])
 
-  add_ci_env_var_to('../Tests/StreamChatUITests/StreamChatUITestPlan.xctestplan')
+  record_mode = options[:record].to_s == 'true'
+  scheme = 'StreamChatUI'
+  remove_snapshots if record_mode
+  update_testplan_on_ci(path: "Tests/#{scheme}Tests/#{scheme}.xctestplan")
 
-  scan(
-    project: 'StreamChat.xcodeproj',
-    scheme: 'StreamChatUI',
-    testplan: 'StreamChatUITestPlan',
-    configuration: 'Debug',
-    clean: true,
-    devices: options[:device],
-    build_for_testing: options[:build_for_testing]
+  scan_with_retries(
+    scan_options: {
+      project: xcode_project,
+      scheme: scheme,
+      testplan: scheme,
+      clean: is_localhost,
+      derived_data_path: derived_data_path,
+      cloned_source_packages_path: source_packages_path,
+      build_for_testing: options[:build_for_testing],
+      skip_build: options[:skip_build],
+      result_bundle: true,
+      devices: options[:device],
+      destination: options[:destination],
+      skip_detect_devices: !options[:destination].nil?,
+      fail_build: !record_mode,
+      xcodebuild_formatter: xcodebuild_formatter
+    },
+    retries: record_mode ? 0 : 1
+  )
+
+  if record_mode && is_ci
+    png_files = git_status(ext: '.png').map { |_, png| png }.flatten
+    next if png_files.empty?
+
+    # Discard all files apart from the snapshots
+    Dir.chdir('..') do
+      png_files.each { |png| sh("git add #{png}") || true }
+      sh('git restore .')
+    end
+
+    pr_create(
+      title: '[CI] Snapshots',
+      base_branch: current_branch,
+      head_branch: "#{current_branch}-snapshots-#{Time.now.to_i}"
+    )
+  end
+end
+
+desc 'Runs common ui tests in Debug config'
+lane :test_common_ui do |options|
+  next unless is_check_required(sources: @impact[:common_ui][:sources], force_check: @force_check, required_checks: @impact[:common_ui][:checks])
+
+  scheme = 'StreamChatCommonUI'
+  update_testplan_on_ci(path: "Tests/#{scheme}Tests/#{scheme}.xctestplan")
+
+  scan_with_retries(
+    scan_options: {
+      project: xcode_project,
+      scheme: scheme,
+      testplan: scheme,
+      clean: is_localhost,
+      derived_data_path: derived_data_path,
+      cloned_source_packages_path: source_packages_path,
+      build_for_testing: options[:build_for_testing],
+      skip_build: options[:skip_build],
+      result_bundle: true,
+      devices: options[:device],
+      destination: options[:destination],
+      skip_detect_devices: !options[:destination].nil?,
+      xcodebuild_formatter: xcodebuild_formatter
+    },
+    retries: options[:cron] ? 3 : 2
   )
 end
 
-desc 'Runs ui tests in Release config'
-lane :test_ui_release do |options|
-  add_ci_env_var_to('../Tests/StreamChatUITests/StreamChatUITestPlan.xctestplan')
+desc 'Runs AI tests in Debug config'
+lane :test_ai do |options|
+  next unless is_check_required(sources: @impact[:ai][:sources], force_check: @force_check, required_checks: @impact[:ai][:checks])
 
-  scan(
-    project: 'StreamChat.xcodeproj',
-    scheme: 'StreamChatUI',
-    testplan: 'StreamChatUITestPlan',
-    configuration: 'ReleaseTests',
-    clean: true,
-    devices: options[:device]
+  scheme = 'StreamChatAI'
+  update_testplan_on_ci(path: "Tests/#{scheme}Tests/#{scheme}.xctestplan")
+
+  scan_with_retries(
+    scan_options: {
+      project: xcode_project,
+      scheme: scheme,
+      testplan: scheme,
+      clean: is_localhost,
+      derived_data_path: derived_data_path,
+      cloned_source_packages_path: source_packages_path,
+      build_for_testing: options[:build_for_testing],
+      skip_build: options[:skip_build],
+      result_bundle: true,
+      devices: options[:device],
+      destination: options[:destination],
+      skip_detect_devices: !options[:destination].nil?,
+      xcodebuild_formatter: xcodebuild_formatter
+    },
+    retries: options[:cron] ? 3 : 2
   )
 end
 
-desc 'Runs tests in Release config'
-lane :test_release do |options|
-  add_ci_env_var_to('../Tests/StreamChatTests/StreamChatTestPlan.xctestplan')
+desc 'Runs A2UI tests in Debug config'
+lane :test_a2ui do |options|
+  next unless is_check_required(sources: @impact[:a2ui][:sources], force_check: @force_check, required_checks: @impact[:a2ui][:checks])
 
-  scan(
-    project: 'StreamChat.xcodeproj',
-    scheme: 'StreamChat',
-    testplan: 'StreamChatTestPlan',
-    configuration: 'ReleaseTests',
-    clean: true,
-    devices: options[:device]
+  scheme = 'StreamChatA2UI'
+  update_testplan_on_ci(path: "Tests/#{scheme}Tests/#{scheme}.xctestplan")
+
+  scan_with_retries(
+    scan_options: {
+      project: xcode_project,
+      scheme: scheme,
+      testplan: scheme,
+      clean: is_localhost,
+      derived_data_path: derived_data_path,
+      cloned_source_packages_path: source_packages_path,
+      build_for_testing: options[:build_for_testing],
+      skip_build: options[:skip_build],
+      result_bundle: true,
+      devices: options[:device],
+      destination: options[:destination],
+      skip_detect_devices: !options[:destination].nil?,
+      xcodebuild_formatter: xcodebuild_formatter
+    },
+    retries: options[:cron] ? 3 : 2
   )
 end
 
-desc 'Runs tests in Release config on macOS'
-lane :test_release_macos do
-  add_ci_env_var_to('../Tests/StreamChatTests/StreamChatTestPlan.xctestplan')
+desc 'Runs OpenUI tests in Debug config'
+lane :test_openui do |options|
+  next unless is_check_required(sources: @impact[:openui][:sources], force_check: @force_check, required_checks: @impact[:openui][:checks])
 
-  match_macos
+  scheme = 'StreamChatOpenUI'
+  update_testplan_on_ci(path: "Tests/#{scheme}Tests/#{scheme}.xctestplan")
 
-  scan(
-    project: 'StreamChat.xcodeproj',
-    scheme: 'StreamChat',
-    testplan: 'StreamChatTestPlan',
-    configuration: 'ReleaseTests',
-    clean: true,
-    disable_xcpretty: true,
-    destination: 'platform=macOS,arch=x86_64' # will select first from macOS and macOS Catalyst. Let's hope it always will be macOS
+  scan_with_retries(
+    scan_options: {
+      project: xcode_project,
+      scheme: scheme,
+      testplan: scheme,
+      clean: is_localhost,
+      derived_data_path: derived_data_path,
+      cloned_source_packages_path: source_packages_path,
+      build_for_testing: options[:build_for_testing],
+      skip_build: options[:skip_build],
+      result_bundle: true,
+      devices: options[:device],
+      destination: options[:destination],
+      skip_detect_devices: !options[:destination].nil?,
+      xcodebuild_formatter: xcodebuild_formatter
+    },
+    retries: options[:cron] ? 3 : 2
   )
 end
 
-desc 'Runs tests in Debug config on macOS'
-lane :test_debug_macos do
-  add_ci_env_var_to('../Tests/StreamChatTests/StreamChatTestPlan.xctestplan')
-
-  match_macos
-
-  scan(
-    project: 'StreamChat.xcodeproj',
-    scheme: 'StreamChat',
-    testplan: 'StreamChatTestPlan',
-    configuration: 'Debug',
-    clean: true,
-    disable_xcpretty: true,
-    destination: 'platform=macOS,arch=x86_64' # will select first from macOS and macOS Catalyst. Let's hope it always will be macOS
-  )
-end
-
-def match_macos
+private_lane :match_macos do
   %w[development appstore].each do |type|
     match(
       type: type,
@@ -587,18 +810,18 @@ end
 desc 'Runs stress tests for Debug config'
 lane :stress_test do
   scan(
-    project: 'StreamChat.xcodeproj',
+    project: xcode_project,
     scheme: 'StreamChat',
     clean: true,
     build_for_testing: true,
     devices: options[:device]
   )
 
-  add_ci_env_var_to('../Tests/StreamChatTests/StreamChatStressTestPlan.xctestplan')
+  update_testplan_on_ci(path: 'Tests/StreamChatTests/StreamChatStressTestPlan.xctestplan')
 
   stress_tests_cycles.times do
     scan(
-      project: 'StreamChat.xcodeproj',
+      project: xcode_project,
       scheme: 'StreamChat',
       test_without_building: true,
       testplan: 'StreamChatStressTestPlan',
@@ -606,174 +829,366 @@ lane :stress_test do
       xcpretty_args: '--test' # simplify logs
     )
   end
-end
-
-desc 'Runs stress tests in Release config'
-lane :stress_test_release do |options|
-  scan(
-    project: 'StreamChat.xcodeproj',
-    scheme: 'StreamChat',
-    configuration: 'ReleaseTests',
-    clean: true,
-    build_for_testing: true,
-    devices: options[:device]
-  )
-
-  add_ci_env_var_to('../Tests/StreamChatTests/StreamChatStressTestPlan.xctestplan')
-
-  stress_tests_cycles.times do
-    scan(
-      project: 'StreamChat.xcodeproj',
-      scheme: 'StreamChat',
-      configuration: 'ReleaseTests',
-      test_without_building: true,
-      testplan: 'StreamChatStressTestPlan',
-      devices: options[:device],
-      xcpretty_args: '--test' # simplify logs
-    )
-  end
-end
-
-desc 'Builds Sample app'
-lane :build_sample do |options|
-  build_example_app('StreamChatSample', options)
 end
 
 desc 'Builds Demo app'
 lane :build_demo do |options|
-  build_example_app('DemoApp', options)
+  options[:scheme] = 'DemoApp'
+  build_example_app(options)
 end
 
 desc 'Builds iMessageClone app'
 lane :build_imessage_clone do |options|
-  build_example_app('iMessage', options)
+  options[:scheme] = 'iMessage'
+  build_example_app(options)
 end
 
 desc 'Builds SlackClone app'
 lane :build_slack_clone do |options|
-  build_example_app('Slack', options)
+  options[:scheme] = 'Slack'
+  build_example_app(options)
 end
 
 desc 'Builds MessengerClone app'
 lane :build_messenger_clone do |options|
-  build_example_app('Messenger', options)
+  options[:scheme] = 'Messenger'
+  build_example_app(options)
 end
 
 desc 'Builds YouTubeClone app'
 lane :build_youtube_clone do |options|
-  build_example_app('YouTube', options)
+  options[:scheme] = 'YouTube'
+  build_example_app(options)
 end
 
-def build_example_app(scheme, options)
-  return unless check_required?(:sample_apps)
+private_lane :build_example_app do |options|
+  next unless is_check_required(sources: @impact[:sample_apps][:sources], force_check: @force_check, required_checks: @impact[:sample_apps][:checks])
 
   scan(
-    project: 'StreamChat.xcodeproj',
-    scheme: scheme,
-    clean: true,
+    project: xcode_project,
+    scheme: options[:scheme],
+    clean: is_localhost,
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path,
     build_for_testing: true,
-    devices: options[:device]
+    devices: options[:device],
+    xcodebuild_formatter: xcodebuild_formatter
   )
 end
 
 desc 'Test SPM Integration'
 lane :spm_integration do
-  next unless check_required?(:integration)
+  next unless is_check_required(sources: @impact[:integration][:sources], force_check: @force_check, required_checks: @impact[:integration][:checks])
 
-  build_app(
+  gym(
     project: 'Integration/SPM/SwiftPackageManager.xcodeproj',
     scheme: 'SwiftPackageManager',
     skip_package_ipa: true,
     skip_archive: true,
-    destination: 'generic/platform=iOS Simulator'
+    clean: is_localhost,
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path,
+    destination: 'generic/platform=iOS Simulator',
+    xcodebuild_formatter: xcodebuild_formatter
   )
 end
 
-desc 'Test CocoaPods Integration'
-lane :cocoapods_integration do
-  next unless check_required?(:integration)
+desc 'Builds StreamChat for tvOS'
+lane :build_tvos do
+  next unless is_check_required(sources: @impact[:tvos][:sources], force_check: @force_check, required_checks: @impact[:tvos][:checks])
 
-  cocoapods(
-    clean_install: true,
-    podfile: 'Integration/CocoaPods/'
-  )
-
-  build_app(
-    workspace: 'Integration/CocoaPods/CocoaPods.xcworkspace',
-    scheme: 'CocoaPods',
+  sh('xcrun simctl list runtimes | grep -q "tvOS $(xcrun --sdk appletvsimulator --show-sdk-version)" || xcodebuild -downloadPlatform tvOS') if is_ci
+  gym(
+    project: xcode_project,
+    scheme: 'StreamChat',
     skip_package_ipa: true,
     skip_archive: true,
-    clean: true,
-    destination: 'generic/platform=iOS Simulator'
+    clean: is_localhost,
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path,
+    destination: 'generic/platform=tvOS Simulator',
+    xcodebuild_formatter: xcodebuild_formatter
   )
 end
 
-desc 'Build and upload DemoApp to Emerge'
-lane :emerge_upload do
-  # Build and upload Release config
-  build_ios_app(
-    project: 'StreamChat.xcodeproj',
-    scheme: 'DemoApp',
-    skip_package_ipa: true,
-    skip_archive: false,
-    clean: true
-  )
-
-  if is_ci
-    if ENV['GITHUB_EVENT_NAME'] == 'pull_request'
-      pr_num = ENV['GITHUB_PR_NUM']
-      # The commit SHA has to be passed from workflow
-      # see https://stackoverflow.com/questions/68061051/get-commit-sha-in-github-actions
-      sha = ENV['GITHUB_COMMIT_SHA']
-    else
-      # This is a PR merge to main
-      pr_num = nil
-      sha = ENV['GITHUB_SHA']
-    end
-    repo_name = ENV['GITHUB_REPOSITORY']
-  else
-    pr_num = nil
-    commit = last_git_commit
-    sha = commit[:commit_hash]
-    repo_name = 'GetStream/stream-chat-swift'
-  end
-
-  emerge(
-    build_type: 'release',
-    repo_name: repo_name,
-    pr_number: pr_num,
-    sha: sha
-  )
+private_lane :update_testplan_on_ci do |options|
+  update_testplan(path: options[:path], env_vars: { key: 'CI', value: 'TRUE' }) if is_ci
 end
 
 desc 'Run fastlane linting'
 lane :rubocop do
-  next unless check_required?(:ruby)
+  next unless is_check_required(sources: @impact[:ruby][:sources], force_check: @force_check, required_checks: @impact[:ruby][:checks])
 
   sh('bundle exec rubocop')
 end
 
-def check_required?(type)
-  return true if ENV['GITHUB_EVENT_NAME'] != 'pull_request'
+desc 'Run PR linting'
+lane :lint_pr do
+  danger(dangerfile: 'Dangerfile') if is_ci
+end
 
-  sources = {
-    e2e: %w[Sources StreamChatUITestsAppUITests StreamChatUITestsApp StreamChat.xcodeproj],
-    unit: %w[Sources Tests StreamChat.xcodeproj],
-    ui: %w[Sources Tests/StreamChatUITests Tests/UISDKdocumentationTests StreamChat.xcodeproj],
-    sample_apps: %w[Sources Examples DemoApp StreamChatSample StreamChat.xcodeproj],
-    integration: %w[Sources Integration StreamChat.xcodeproj],
-    ruby: %w[fastlane]
-  }
-
-  pr_number = JSON.parse(ENV['GITHUB_EVENT'])['pull_request']['number']
-
-  changed_files = sh("gh pr view #{pr_number} --json files -q '.files[].path'").split("\n")
-
-  return true if changed_files.size == 100 # TODO: https://github.com/cli/cli/issues/5368
-
-  changed_files.select! do |path|
-    sources[type.to_sym].any? { |required| path.start_with?(required) }
+desc 'Run source code formatting/linting'
+lane :run_swift_format do |options|
+  Dir.chdir('..') do
+    strict = options[:strict] ? '--lint' : nil
+    sh("swiftformat #{strict} --config .swiftformat .")
+    sh("swiftlint lint --config .swiftlint.yml --fix --progress --reporter json") unless strict
+    sh("swiftlint lint --config .swiftlint.yml --strict --progress --reporter json")
   end
+end
 
-  changed_files.size.positive?
+lane :install_runtime do |options|
+  install_ios_runtime(version: options[:ios], custom_script: 'Scripts/install_ios_runtime.sh')
+end
+
+desc 'Remove UI snapshots'
+private_lane :remove_snapshots do |options|
+  snapshots_path = "../Tests/StreamChatUITests/**/__Snapshots__/**/*.png"
+  if options[:only_unchanged]
+    pnf_files = git_status(ext: '.png')
+    changed_snapshots = (pnf_files[:a] + pnf_files[:m]).map { |f| File.expand_path(f) }
+    Dir.glob(snapshots_path).select { |f| File.delete(f) unless changed_snapshots.include?(File.expand_path(f)) }
+  else
+    Dir.glob(snapshots_path).select { |f| File.delete(f) }
+  end
+end
+
+lane :impact_analysis do
+  {
+    e2e: {
+      sources: ['Sources', 'DemoApp', 'StreamChatUITestsAppUITests', 'StreamChatUITestsApp', 'TestTools/StreamChatTestMockServer', 'Package.swift'],
+      checks: ['Test E2E UI (Debug) Result']
+    },
+    llc: {
+      sources: ['Sources/StreamChat', 'Tests/StreamChatTests', 'Tests/Shared', 'TestTools/StreamChatTestTools', 'Package.swift'],
+      checks: ['Test LLC (Debug)', 'Build SDKs (Old Xcode)']
+    },
+    tvos: {
+      sources: ['Sources/StreamChat', 'Package.swift', 'StreamChat.xcodeproj'],
+      checks: ['Build LLC (tvOS)']
+    },
+    ui: {
+      sources: ['Sources', 'Tests/StreamChatUITests', 'Tests/Shared', 'Package.swift'],
+      checks: ['Test UI (Debug)', 'Build SDKs (Old Xcode)']
+    },
+    common_ui: {
+      sources: ['Sources', 'Tests/StreamChatCommonUITests', 'Tests/Shared', 'Package.swift'],
+      checks: ['Test Common UI (Debug)', 'Build SDKs (Old Xcode)']
+    },
+    ai: {
+      sources: ['Sources/StreamChatAI', 'Tests/StreamChatAITests', 'Package.swift'],
+      checks: ['Test AI (Debug)', 'Build SDKs (Old Xcode)']
+    },
+    a2ui: {
+      sources: ['Sources/StreamChatAI', 'Sources/StreamChatA2UI', 'Tests/StreamChatA2UITests', 'Package.swift'],
+      checks: ['Test A2UI (Debug)', 'Build SDKs (Old Xcode)']
+    },
+    openui: {
+      sources: ['Sources/StreamChatAI', 'Sources/StreamChatOpenUI', 'Tests/StreamChatOpenUITests', 'Package.swift'],
+      checks: ['Test OpenUI (Debug)', 'Build SDKs (Old Xcode)']
+    },
+    sample_apps: {
+      sources: ['Sources', 'Examples', 'DemoApp', 'Package.swift'],
+      checks: ['Build Demo App + Example Apps']
+    },
+    integration: {
+      sources: ['Sources', 'Integration', 'Package.swift'],
+      checks: ['Test Integration']
+    },
+    ruby: {
+      sources: ['fastlane', 'Gemfile', 'Gemfile.lock'],
+      checks: ['Automated Code Review']
+    },
+    public_interface: {
+      sources: ['Sources'],
+      checks: ['Automated Code Review']
+    },
+    size: {
+      sources: ['Sources', 'StreamChat.xcodeproj'],
+      checks: ['Size Metrics']
+    },
+    xcmetrics: {
+      sources: ['Sources', 'Package.swift'],
+      checks: ['Performance Metrics']
+    }
+  }
+end
+
+lane :copyright do
+  update_copyright(ignore: [derived_data_path, source_packages_path, 'vendor/'])
+  next unless is_ci
+
+  pr_create(
+    title: '[CI] Update Copyright',
+    head_branch: "ci/update-copyright-#{Time.now.to_i}"
+  )
+end
+
+desc 'Regenerate Sourcery code (predefined channel-list filter/sort mappings)'
+lane :generate do
+  Dir.chdir('..') { sh('make generate') }
+end
+
+desc 'Fail if generated code is stale (run `make generate` and commit the result)'
+lane :validate_generated_code do
+  generate
+  Dir.chdir('..') do
+    changed = sh('git status --porcelain Sources/StreamChat/Generated/PredefinedFilter+Generated.swift', log: false).strip
+    UI.user_error!('Generated code is stale. Run `make generate` and commit the result.') unless changed.empty?
+  end
+end
+
+lane :validate_public_interface do
+  next unless is_check_required(sources: @impact[:public_interface][:sources], force_check: @force_check, required_checks: @impact[:public_interface][:checks])
+
+  # Get branch names
+  original_branch = current_branch
+  target_branch = ENV['GITHUB_BASE_REF'] || (original_branch.include?('release/') ? 'main' : 'develop')
+  UI.important("Target branch: #{target_branch} 🕊️")
+
+  # Run the analysis on the current branch
+  sh('interface-analyser analysis ../Sources/ public_interface_current.json')
+
+  # Checkout the target branch
+  sh("git fetch origin #{target_branch}")
+  sh("git checkout #{target_branch}")
+
+  # Run the analysis on the target branch
+  sh('interface-analyser analysis ../Sources/ public_interface_previous.json')
+
+  # Run diff
+  report_path = 'interface-analyser-report.md'
+  sh("interface-analyser diff public_interface_current.json public_interface_previous.json #{report_path}")
+
+  # Check if report exists and is non-zero in size
+  diff =
+    if File.exist?(report_path) && File.size(report_path) > 0
+      File.read(report_path).strip
+    else
+      '🚀 No changes affecting the public interface.'
+    end
+
+  # Generate markdown table for the PR comment
+  header = '## Public Interface'
+  content = "#{header}\n#{diff}"
+
+  # Post PR comment if running in CI
+  pr_comment(text: content, edit_last_comment_with_text: header) if is_ci
+
+  # Checkout the original branch
+  sh("git fetch origin #{original_branch}")
+  sh("git checkout #{original_branch}")
+end
+
+lane :show_frameworks_sizes do |options|
+  next unless is_check_required(sources: @impact[:size][:sources], force_check: @force_check, required_checks: @impact[:size][:checks])
+
+  sizes = options[:sizes] || frameworks_sizes
+  show_sdk_size(branch_sizes: sizes, github_repo: github_repo)
+  update_img_shields_sdk_sizes(sizes: sizes, open_pr: options[:open_pr]) if options[:update_readme]
+end
+
+lane :update_img_shields_sdk_sizes do |options|
+  update_sdk_size_in_readme(
+    open_pr: options[:open_pr] || false,
+    readme_path: 'README.md',
+    sizes: options[:sizes] || frameworks_sizes
+  )
+end
+
+private_lane :frameworks_sizes do
+  root_dir = 'Build/SDKSize'
+  archive_dir = "#{root_dir}/DemoApp.xcarchive"
+
+  # Cleanup the previous builds
+  FileUtils.rm_rf("../#{root_dir}/")
+
+  match_me
+
+  gym(
+    scheme: 'DemoApp',
+    configuration: 'Release',
+    archive_path: archive_dir,
+    export_method: 'ad-hoc',
+    export_options: 'fastlane/sdk_size_export_options.plist',
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path
+  )
+
+  # Parse the thinned size of Assets.car from Packaging.log
+  packaging_log_path = "#{Gym.cache[:temporary_output_path]}/Packaging.log"
+  UI.message("Successfully exported the Packaging log file: \n#{packaging_log_path}")
+  assets_size_regex = %r{\b(\d+)\sbytes\sfor\s./Payload/ChatSample.app/Frameworks/StreamChatCommonUI.framework/Assets.car\b}
+  match = File.read(packaging_log_path).match(assets_size_regex)
+  assets_thinned_size = match[1].to_i
+
+  frameworks_path = "../#{archive_dir}/Products/Library/Frameworks/ChatSample.app/Frameworks"
+  stream_chat_size = File.size("#{frameworks_path}/StreamChat.framework/StreamChat")
+  stream_chat_ui_size = File.size("#{frameworks_path}/StreamChatUI.framework/StreamChatUI")
+  stream_chat_common_ui_size = File.size("#{frameworks_path}/StreamChatCommonUI.framework/StreamChatCommonUI")
+  # StreamCore and StreamCoreUI are linked into the framework, but an app with StreamChat already has them
+  shared_core_size = linked_objects_size(linkmap: '../linkmaps/StreamChatAI-arm64-LinkMap.txt', objects: ['StreamCore.o', 'StreamCoreUI.o'])
+  stream_chat_ai_size = File.size("#{frameworks_path}/StreamChatAI.framework/StreamChatAI") - shared_core_size
+  stream_chat_a2ui_size = File.size("#{frameworks_path}/StreamChatA2UI.framework/StreamChatA2UI")
+  stream_chat_open_ui_size = File.size("#{frameworks_path}/StreamChatOpenUI.framework/StreamChatOpenUI")
+
+  stream_chat_size_kb = stream_chat_size / 1024.0
+  stream_chat_ui_size_kb = stream_chat_ui_size / 1024.0
+  stream_chat_common_ui_size_kb = (stream_chat_common_ui_size + assets_thinned_size) / 1024.0
+  stream_chat_ai_size_kb = stream_chat_ai_size / 1024.0
+  stream_chat_a2ui_size_kb = stream_chat_a2ui_size / 1024.0
+  stream_chat_open_ui_size_kb = stream_chat_open_ui_size / 1024.0
+
+  {
+    StreamChat: stream_chat_size_kb.round(0),
+    StreamChatUI: stream_chat_ui_size_kb.round(0),
+    StreamChatCommonUI: stream_chat_common_ui_size_kb.round(0),
+    StreamChatAI: stream_chat_ai_size_kb.round(0),
+    StreamChatA2UI: stream_chat_a2ui_size_kb.round(0),
+    StreamChatOpenUI: stream_chat_open_ui_size_kb.round(0)
+  }
+end
+
+# The bytes the given object files, such as a package's, take in a linked binary
+private_lane :linked_objects_size do |options|
+  object_ids = []
+  section = nil
+  File.foreach(options[:linkmap], encoding: 'ISO-8859-1').sum do |line|
+    if line.start_with?('#')
+      section = :objects if line.start_with?('# Object files:')
+      section = :symbols if line.start_with?('# Symbols:')
+      section = nil if line.start_with?('# Sections:', '# Dead Stripped Symbols:')
+      next 0
+    end
+
+    case section
+    when :objects
+      match = line.match(/^\[\s*(\d+)\]\s+(.+)$/)
+      object_ids << match[1].to_i if match && options[:objects].include?(File.basename(match[2].strip))
+      0
+    when :symbols
+      match = line.match(/^0x\h+\s+0x(\h+)\s+\[\s*(\d+)\]/)
+      match && object_ids.include?(match[2].to_i) ? match[1].to_i(16) : 0
+    else
+      0
+    end
+  end
+end
+
+lane :size_analyze do
+  next unless is_check_required(sources: @impact[:size][:sources], force_check: @force_check, required_checks: @impact[:size][:checks])
+
+  gym(
+    scheme: 'DemoApp',
+    configuration: 'Release',
+    skip_archive: true,
+    skip_package_ipa: true,
+    skip_package_pkg: true,
+    skip_codesigning: true,
+    derived_data_path: derived_data_path,
+    cloned_source_packages_path: source_packages_path,
+    xcodebuild_formatter: xcodebuild_formatter
+  )
+
+  show_detailed_sdk_size(sdk_names: sdk_names, threshold: 42)
 end

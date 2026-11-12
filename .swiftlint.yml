@@ -1,90 +1,86 @@
 excluded:
   - Scripts
-  - Package.swift
-  - Dependencies
-  - Sources/StreamChatUI/Generated
+  - Sources/StreamChat/Generated
+  - Sources/StreamChatCommonUI/Generated
   - Sources/StreamChatUI/StreamSwiftyGif
-  - Sources/StreamChatUI/StreamSwiftyMarkdown
-  - Sources/StreamChatUI/StreamNuke
   - Sources/StreamChat/StreamStarscream
-  - vendor
-  - UISDKdocumentation
+  - Sources/StreamChatUI/StreamDifferenceKit
+  - Sources/StreamChatAI/StreamSplash
+  - Sources/StreamChatAI/StreamMarkdownUI
+  - Sources/StreamChatAI/StreamNetworkImage
   - Tests
-  - TestTools
-  - Carthage
   - Pods
   - .build
+  - spm_cache
+  - vendor/bundle
+  - derived_data
 
-disabled_rules:
-  - large_tuple
-  - multiple_closures_with_trailing_closure
-  - todo
-  - function_parameter_count
-  - type_name
-  - nesting
-  - identifier_name
-  - file_length
-  - type_body_length
-  - opening_brace
-  - line_length
-  - constraints_forbidden
-
-opt_in_rules:
-  - convenience_type
-  - empty_string
-  - fatal_error_message
-  - first_where
-  - modifier_order
-  - toggle_bool
-  - identical_operands
-  - joined_default_parameter
-  - unavailable_function
-  - overridden_super_call
-  - explicit_init
-  - redundant_optional_initialization
-  - syntactic_sugar
-  - multiline_arguments
-  - multiline_function_chains
-  - unused_import
-  - attributes
+only_rules:
+  - attribute_name_spacing
+  - closing_brace
+  - colon
+  - comma
+  - comment_spacing
+  - control_statement
+  - custom_rules
+  - cyclomatic_complexity
+  - duplicate_imports
+  - empty_enum_arguments
+  - empty_parameters
+  - empty_parentheses_with_trailing_closure
   - file_name_no_space
+  - joined_default_parameter
+  - leading_whitespace
+  - legacy_cggeometry_functions
+  - legacy_constant
+  - legacy_constructor
+  - legacy_nsgeometry_functions
+  - mark
+  - multiline_arguments
+  - no_space_in_method_call
+  - prefer_type_checking
+  - private_over_fileprivate
+  - private_unit_test
+  - protocol_property_accessors_order
+  - redundant_discardable_let
+  - redundant_objc_attribute
+  - redundant_optional_initialization
+  - redundant_sendable
+  - redundant_void_return
+  - return_arrow_whitespace
+  - syntactic_sugar
+  - toggle_bool
+  - trailing_comma
+  - trailing_newline
+  - trailing_semicolon
+  - unneeded_break_in_switch
+  - unneeded_override
+  - unused_closure_parameter
+  - unused_control_flow_label
+  - unused_import
+  - vertical_whitespace
+  - void_return
 
 multiline_arguments:
   only_enforce_after_first_closure_on_first_line: true
 
-attributes:
-  always_on_same_line: ["@IBAction", "@NSManaged", "@objc"]
-  always_on_line_above: ["@discardableResult"]
-
-trailing_whitespace:
-  ignores_empty_lines: true
-
-function_body_length:
-  warning: 120
-  error: 200
-
 file_name_no_space:
   severity: error
 
-identifier_name:
-  excluded: [r, g, b, a, x, y, z, dx, dy, dz, i, j, k, id, op, or, me, at, to, in]
-  allowed_symbols: ["_"]
-  validates_start_with_lowercase: false
-
 cyclomatic_complexity:
   ignores_case_statements: true
-  warning: 25
-  error: 30
+  warning: 35
+  error: 40
 
 custom_rules:
-  constraints_forbidden:
-    included: ".*StreamChatUI" # Matches all StreamChatUI files
-    excluded: ".*(?:_Tests)" # Doesn't apply to tests
-    regex: "Anchor(.constraint)\\("
+  regular_constraints_forbidden:
+    included: "Sources/StreamChatUI"
+    regex: "(.constraint)\\("
     capture_group: 1
     match_kinds:
       - identifier
-    message: "Plain constraints methods are forbidden. Use `pin(...)` alternative"
+    message: "Regular constraint methods are forbidden. Use `.pin()` instead."
+
   coredata_date_forbidden:
     included: "Sources/StreamChat/Database/DTOs"
     regex: "@NSManaged(| \\S*)* var \\S*: (NS)?Date"

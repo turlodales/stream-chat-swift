@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -13,10 +13,10 @@ final class ChannelMemberListUpdater_Tests: XCTestCase {
     var query: ChannelMemberListQuery!
 
     var listUpdater: ChannelMemberListUpdater!
-    
+
     override func setUp() {
         super.setUp()
-        
+
         webSocketClient = WebSocketClient_Mock()
         apiClient = APIClient_Spy()
         database = DatabaseContainer_Spy()
@@ -24,7 +24,7 @@ final class ChannelMemberListUpdater_Tests: XCTestCase {
 
         listUpdater = .init(database: database, apiClient: apiClient)
     }
-    
+
     override func tearDown() {
         apiClient.cleanUp()
         AssertAsync {
@@ -37,192 +37,195 @@ final class ChannelMemberListUpdater_Tests: XCTestCase {
         query = nil
         super.tearDown()
     }
-    
+
     // MARK: - Load
-    
+
     func test_load_happyPath_whenChannelExistsLocally() throws {
         // Save channel to the database.
         try database.createChannel(cid: query.cid)
-        
+
         // Simulate `load` call.
-        var completionCalled = false
-        listUpdater.load(query) { error in
-            XCTAssertNil(error)
+        nonisolated(unsafe) var completionCalled = false
+        listUpdater.load(query) { result in
+            XCTAssertNil(result.error)
             completionCalled = true
         }
-        
+
         // Assert members endpoint is called.
-        let membersEndpoint: Endpoint<ChannelMemberListPayload> = .channelMembers(query: query)
+        let membersEndpoint: Endpoint<MembersResponse> = .queryMembers(payload: query.asQueryMembersPayload())
         AssertAsync.willBeEqual(apiClient.request_endpoint, AnyEndpoint(membersEndpoint))
-        
+
         // Simulate members response.
-        let payload = ChannelMemberListPayload(members: [
+        let payload = MembersResponse.dummy(members: [
             .dummy(user: .dummy(userId: .unique)),
             .dummy(user: .dummy(userId: .unique)),
             .dummy(user: .dummy(userId: .unique))
         ])
         apiClient.test_simulateResponse(.success(payload))
-        
+
         AssertAsync.willBeTrue(completionCalled)
-        
+
         // Load query.
         var queryDTO: ChannelMemberListQueryDTO? {
             database.viewContext.channelMemberListQuery(queryHash: query.queryHash)
         }
-        
+
         AssertAsync {
             // Assert query is saved to the database.
             Assert.willBeTrue(queryDTO != nil)
             // Assert query members are saved to the database.
-            Assert.willBeEqual(Set(queryDTO?.members.map(\.user.id) ?? []), Set(payload.members.map(\.user.id)))
+            Assert.willBeEqual(Set(queryDTO?.members.map(\.user.id) ?? []), Set(payload.members.map(\.user!.id)))
         }
     }
-    
-    func test_load_happyPath_whenChannelDoesNotExistsLocally() {
+
+    func test_load_happyPath_whenChannelDoesNotExistsLocally() throws {
         // Simulate `load` call.
-        var completionCalled = false
-        listUpdater.load(query) { error in
-            XCTAssertNil(error)
+        nonisolated(unsafe) var completionCalled = false
+        listUpdater.load(query) { result in
+            XCTAssertNil(result.error)
             completionCalled = true
         }
-        
+
         // Assert channel endpoint is called.
-        let channelEndpoint: Endpoint<ChannelPayload> = .updateChannel(query: .init(cid: query.cid))
+        let channelEndpoint = ChannelQuery(cid: query.cid).endpoint
         AssertAsync.willBeEqual(apiClient.request_endpoint, AnyEndpoint(channelEndpoint))
-        
+        AssertAsync.willBeEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(query.cid.type.rawValue)/\(query.cid.id)/query")
+
         // Simulate successful channel response.
         let dummyChannelPayload = dummyPayload(with: query.cid)
         apiClient.test_simulateResponse(.success(dummyChannelPayload))
-        
-        let membersEndpoint: Endpoint<ChannelMemberListPayload> = .channelMembers(query: query)
+
+        let membersEndpoint: Endpoint<MembersResponse> = .queryMembers(payload: query.asQueryMembersPayload())
         AssertAsync {
             // Assert members endpoint is called.
             Assert.willBeEqual(self.apiClient.request_endpoint, AnyEndpoint(membersEndpoint))
         }
-        
+
         // Simulate members response.
-        let payload = ChannelMemberListPayload(members: [
+        let payload = MembersResponse.dummy(members: [
             .dummy(user: .dummy(userId: .unique)),
             .dummy(user: .dummy(userId: .unique)),
             .dummy(user: .dummy(userId: .unique))
         ])
         apiClient.test_simulateResponse(.success(payload))
-        
+
         // Assert completion is called.
         AssertAsync.willBeTrue(completionCalled)
-        
+
         // Load query.
         var queryDTO: ChannelMemberListQueryDTO? {
             FetchCache.clear()
             return database.viewContext.channelMemberListQuery(queryHash: query.queryHash)
         }
-        
+
         // Load channel.
         var channelDTO: ChannelDTO? {
             FetchCache.clear()
             return database.viewContext.channel(cid: query.cid)
         }
-        
+
         AssertAsync {
             // Assert channel is saved to the database.
             Assert.willBeTrue(channelDTO != nil)
             // Assert query is saved to the database.
             Assert.willBeTrue(queryDTO != nil)
             // Assert query members are saved to the database.
-            Assert.willBeEqual(Set(queryDTO?.members.map(\.user.id) ?? []), Set(payload.members.map(\.user.id)))
+            Assert.willBeEqual(Set(queryDTO?.members.map(\.user.id) ?? []), Set(payload.members.map(\.user!.id)))
         }
     }
-    
-    func test_load_propagatesChannelNetworkError() {
+
+    func test_load_propagatesChannelNetworkError() throws {
         // Simulate `load` call and catch the error.
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         listUpdater.load(query) {
-            completionCalledError = $0
+            completionCalledError = $0.error
         }
-        
+
         // Assert channel endpoint is called.
-        let channelEndpoint: Endpoint<ChannelPayload> = .updateChannel(query: .init(cid: query.cid))
+        let channelEndpoint = ChannelQuery(cid: query.cid).endpoint
         AssertAsync.willBeEqual(apiClient.request_endpoint, AnyEndpoint(channelEndpoint))
-        
+        AssertAsync.willBeEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(query.cid.type.rawValue)/\(query.cid.id)/query")
+
         // Simulate channel response with failure.
         let networkError = TestError()
         apiClient.test_simulateResponse(Result<ChannelPayload, Error>.failure(networkError))
-        
-        // Assert the channel network error is propogated.
+
+        // Assert the channel network error is propagated.
         AssertAsync.willBeEqual(completionCalledError as? TestError, networkError)
     }
-    
-    func test_load_propagatesChannelDatabaseError() {
+
+    func test_load_propagatesChannelDatabaseError() throws {
         // Update database to throw the error.
         let databaseError = TestError()
         database.write_errorResponse = databaseError
-        
+
         // Simulate `load` call and catch the error.
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         listUpdater.load(query) {
-            completionCalledError = $0
+            completionCalledError = $0.error
         }
-        
+
         // Assert channel endpoint is called.
-        let channelEndpoint: Endpoint<ChannelPayload> = .updateChannel(query: .init(cid: query.cid))
+        let channelEndpoint = ChannelQuery(cid: query.cid).endpoint
         AssertAsync.willBeEqual(apiClient.request_endpoint, AnyEndpoint(channelEndpoint))
-        
+        AssertAsync.willBeEqual(apiClient.request_endpoint?.path.value, "/api/v2/chat/channels/\(query.cid.type.rawValue)/\(query.cid.id)/query")
+
         // Simulate channel response with  success.
         apiClient.test_simulateResponse(.success(dummyPayload(with: query.cid)))
-        
-        // Assert the channel database error is propogated.
+
+        // Assert the channel database error is propagated.
         AssertAsync.willBeEqual(completionCalledError as? TestError, databaseError)
     }
-    
+
     func test_load_propagatesMembersNetworkError() throws {
         // Save channel to the database.
         try database.createChannel(cid: query.cid)
-        
+
         // Simulate `load` call and catch the error.
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         listUpdater.load(query) {
-            completionCalledError = $0
+            completionCalledError = $0.error
         }
-        
+
         // Assert members endpoint is called.
-        let membersEndpoint: Endpoint<ChannelMemberListPayload> = .channelMembers(query: query)
+        let membersEndpoint: Endpoint<MembersResponse> = .queryMembers(payload: query.asQueryMembersPayload())
         AssertAsync.willBeEqual(apiClient.request_endpoint, AnyEndpoint(membersEndpoint))
 
         // Simulate members response with failure.
         let networkError = TestError()
-        apiClient.test_simulateResponse(Result<ChannelMemberListPayload, Error>.failure(networkError))
-        
-        // Assert the members network call error is propogated.
+        apiClient.test_simulateResponse(Result<MembersResponse, Error>.failure(networkError))
+
+        // Assert the members network call error is propagated.
         AssertAsync.willBeEqual(completionCalledError as? TestError, networkError)
     }
-    
+
     func test_load_propagatesMembersDatabaseError() throws {
         // Save channel to the database.
         try database.createChannel(cid: query.cid)
-        
+
         // Simulate `load` call and catch the error.
-        var completionCalledError: Error?
+        nonisolated(unsafe) var completionCalledError: Error?
         listUpdater.load(query) {
-            completionCalledError = $0
+            completionCalledError = $0.error
         }
-        
+
         // Assert members endpoint is called.
-        let membersEndpoint: Endpoint<ChannelMemberListPayload> = .channelMembers(query: query)
+        let membersEndpoint: Endpoint<MembersResponse> = .queryMembers(payload: query.asQueryMembersPayload())
         AssertAsync.willBeEqual(apiClient.request_endpoint, AnyEndpoint(membersEndpoint))
-        
+
         // Update database to throw the error.
         let databaseError = TestError()
         database.write_errorResponse = databaseError
-        
+
         // Simulate members response with success.
-        let payload = ChannelMemberListPayload(members: [
+        let payload = MembersResponse.dummy(members: [
             .dummy(user: .dummy(userId: .unique)),
             .dummy(user: .dummy(userId: .unique)),
             .dummy(user: .dummy(userId: .unique))
         ])
         apiClient.test_simulateResponse(.success(payload))
-        
-        // Assert the database error is propogated.
+
+        // Assert the database error is propagated.
         AssertAsync.willBeEqual(completionCalledError as? TestError, databaseError)
     }
 }

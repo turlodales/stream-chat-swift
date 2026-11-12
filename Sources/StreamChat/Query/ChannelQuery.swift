@@ -1,11 +1,11 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
 /// A channel query.
-public struct ChannelQuery: Encodable {
+public struct ChannelQuery: Encodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case data
         case messages
@@ -20,14 +20,19 @@ public struct ChannelQuery: Encodable {
     /// A pagination for messages (see `MessagesPagination`).
     public var pagination: MessagesPagination?
     /// A number of members for the channel to be retrieved.
-    public let membersLimit: Int?
+    public var membersLimit: Int? { membersPagination?.pageSize }
     /// A number of watchers for the channel to be retrieved.
     public let watchersLimit: Int?
     /// A query options.
     public var options: QueryOptions = .all
-    /// ChannelCreatePayload that is needed only when creating channel
-    let channelPayload: ChannelEditDetailPayload?
-    
+    /// Whether the channel is loaded with the current user's scheduled messages in it,
+    /// available in ``ChatChannel/scheduledMessages``. Defaults to `false`.
+    public var includeScheduledMessages = false
+    /// Channel data that is needed only when creating channel
+    let channelInput: ChannelInput?
+    /// A pagination for members for the channel to be retrieved.
+    let membersPagination: Pagination?
+
     /// `ChannelId` this query handles.
     /// If `id` part is missing then it's impossible to create valid `ChannelId`.
     public var cid: ChannelId? {
@@ -48,24 +53,47 @@ public struct ChannelQuery: Encodable {
         membersLimit: Int? = nil,
         watchersLimit: Int? = nil
     ) {
+        let membersPagination: Pagination? = {
+            guard let membersLimit else { return nil }
+            return Pagination(pageSize: membersLimit)
+        }()
+        let messagesPagination = MessagesPagination(pageSize: pageSize ?? .messagesPageSize, parameter: paginationParameter)
+        self.init(
+            cid: cid,
+            pageSize: pageSize,
+            messagesPagination: messagesPagination,
+            membersPagination: membersPagination,
+            watchersLimit: watchersLimit
+        )
+    }
+    
+    /// Init a channel query with base values.
+    init(
+        cid: ChannelId,
+        pageSize: Int?,
+        messagesPagination: MessagesPagination?,
+        membersPagination: Pagination?,
+        watchersLimit: Int?
+    ) {
         id = cid.id
         type = cid.type
-        channelPayload = nil
-        
-        pagination = MessagesPagination(pageSize: pageSize, parameter: paginationParameter)
-        self.membersLimit = membersLimit
+        channelInput = nil
+        pagination = messagesPagination
+        self.membersPagination = membersPagination
         self.watchersLimit = watchersLimit
     }
 
     /// Init a channel query.
     /// - Parameters:
-    ///   - channelPayload: a payload that has data needed for channel creation.
-    init(channelPayload: ChannelEditDetailPayload) {
-        id = channelPayload.id
-        type = channelPayload.type
-        self.channelPayload = channelPayload
+    ///   - type: the type of the channel.
+    ///   - id: the id of the channel, `nil` when the backend generates it.
+    ///   - channelInput: the data needed for channel creation.
+    init(type: ChannelType, id: String?, channelInput: ChannelInput) {
+        self.id = id
+        self.type = type
+        self.channelInput = channelInput
         pagination = nil
-        membersLimit = nil
+        membersPagination = nil
         watchersLimit = nil
     }
 
@@ -77,10 +105,11 @@ public struct ChannelQuery: Encodable {
         self.init(
             cid: cid,
             pageSize: channelQuery.pagination?.pageSize,
-            paginationParameter: channelQuery.pagination?.parameter,
-            membersLimit: channelQuery.membersLimit,
+            messagesPagination: channelQuery.pagination,
+            membersPagination: channelQuery.membersPagination,
             watchersLimit: channelQuery.watchersLimit
         )
+        includeScheduledMessages = channelQuery.includeScheduledMessages
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -89,34 +118,39 @@ public struct ChannelQuery: Encodable {
         try options.encode(to: encoder)
 
         // Only needed for channel creation
-        try container.encodeIfPresent(channelPayload, forKey: .data)
-        
+        try container.encodeIfPresent(channelInput, forKey: .data)
+
         try pagination.map { try container.encode($0, forKey: .messages) }
-        try membersLimit.map { try container.encode(Pagination(pageSize: $0), forKey: .members) }
+        try membersPagination.map { try container.encode($0, forKey: .members) }
         try watchersLimit.map { try container.encode(Pagination(pageSize: $0), forKey: .watchers) }
     }
 }
 
-extension ChannelQuery: APIPathConvertible {
-    var apiPath: String { cid?.apiPath ?? type.rawValue }
-}
-
-/// An answer for an invite to a channel.
-struct ChannelInvitePayload: Encodable {
-    struct Message: Encodable {
-        let message: String?
+extension ChannelQuery {
+    var endpoint: Endpoint<ChannelStateResponse> {
+        let request = ChannelGetOrCreateRequest(
+            data: channelInput,
+            includeScheduledMessages: includeScheduledMessages ? true : nil,
+            members: membersPagination?.toPaginationParams(),
+            messages: pagination?.toMessagePaginationParams(),
+            presence: options.contains(.presence),
+            state: options.contains(.state),
+            watch: options.contains(.watch),
+            watchers: watchersLimit.map { Pagination(pageSize: $0).toPaginationParams() }
+        )
+        let requiresConnectionId = options.contains(oneOf: [.presence, .watch])
+        if let id {
+            return .getOrCreateChannel(
+                type: type.rawValue,
+                id: id,
+                channelGetOrCreateRequest: request,
+                requiresConnectionId: requiresConnectionId
+            )
+        }
+        return .getOrCreateDistinctChannel(
+            type: type.rawValue,
+            channelGetOrCreateRequest: request,
+            requiresConnectionId: requiresConnectionId
+        )
     }
-    
-    private enum CodingKeys: String, CodingKey {
-        case accept = "accept_invite"
-        case reject = "reject_invite"
-        case message
-    }
-
-    /// Accept the invite.
-    let accept: Bool?
-    /// Reject the invite.
-    let reject: Bool?
-    /// Additional message.
-    let message: Message?
 }

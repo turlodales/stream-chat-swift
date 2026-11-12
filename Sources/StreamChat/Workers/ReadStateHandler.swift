@@ -1,0 +1,116 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+/// A handler which enables marking channels read and unread.
+///
+/// Only one mark read or unread request is allowed to be active.
+final class ReadStateHandler: @unchecked Sendable {
+    private let authenticationRepository: AuthenticationRepository
+    private let channelUpdater: ChannelUpdater
+    private let messageRepository: MessageRepository
+    private let config: ChatClientConfig
+    @Atomic private var markingRead = false
+    @Atomic private(set) var isMarkedAsUnread = false
+
+    init(
+        authenticationRepository: AuthenticationRepository,
+        channelUpdater: ChannelUpdater,
+        messageRepository: MessageRepository,
+        config: ChatClientConfig
+    ) {
+        self.authenticationRepository = authenticationRepository
+        self.channelUpdater = channelUpdater
+        self.messageRepository = messageRepository
+        self.config = config
+    }
+
+    func markRead(_ channel: ChatChannel, completion: @escaping @Sendable (Error?) -> Void) {
+        guard let currentUserId = authenticationRepository.currentUserId else {
+            completion(nil)
+            return
+        }
+
+        // A mark-read request is already in flight. Still clear any newly arrived local
+        // unreads so jump-to-unread / unread badges don't flicker while waiting on the API.
+        if markingRead {
+            channelUpdater.markReadLocally(cid: channel.cid, userId: currentUserId, completion: completion)
+            return
+        }
+
+        markingRead = true
+
+        if config.isLocalUnreadCountEnabled && !channel.config.readEventsEnabled {
+            channelUpdater.markReadLocally(cid: channel.cid, userId: currentUserId) { error in
+                self.markingRead = false
+                self.isMarkedAsUnread = false
+                completion(error)
+            }
+            return
+        }
+
+        channelUpdater.markRead(cid: channel.cid, userId: currentUserId) { error in
+            self.markingRead = false
+            self.isMarkedAsUnread = false
+            completion(error)
+        }
+    }
+    
+    func markRead(_ channel: ChatChannel) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            markRead(channel) { error in
+                continuation.resume(with: error)
+            }
+        }
+    }
+    
+    func markUnread(
+        from request: MarkUnreadRequest,
+        in channel: ChatChannel,
+        completion: @escaping @Sendable (Result<ChatChannel, Error>) -> Void
+    ) {
+        guard !markingRead,
+              let currentUserId = authenticationRepository.currentUserId
+        else {
+            completion(.success(channel))
+            return
+        }
+        markingRead = true
+        messageRepository.getMessage(before: request, in: channel.cid) { [weak self] result in
+            switch result {
+            case .success(let lastReadMessageId):
+                self?.channelUpdater.markUnread(
+                    cid: channel.cid,
+                    userId: currentUserId,
+                    from: request,
+                    lastReadMessageId: lastReadMessageId
+                ) { [weak self] result in
+                    if case .success = result {
+                        self?.isMarkedAsUnread = true
+                    }
+                    self?.markingRead = false
+                    completion(result)
+                }
+            case .failure(let error):
+                self?.markingRead = false
+                completion(.failure(error))
+            }
+        }
+    }
+    
+    func markUnread(
+        from request: MarkUnreadRequest,
+        in channel: ChatChannel
+    ) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            markUnread(
+                from: request,
+                in: channel
+            ) { result in
+                continuation.resume(with: result.error)
+            }
+        }
+    }
+}

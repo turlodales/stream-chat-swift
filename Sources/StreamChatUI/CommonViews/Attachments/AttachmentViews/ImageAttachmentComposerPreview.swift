@@ -1,22 +1,29 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
+import StreamChatCommonUI
 import UIKit
 
 /// A view that displays image attachment preview in composer.
 open class ImageAttachmentComposerPreview: _View, ThemeProvider {
     open var width: CGFloat = 100
     open var height: CGFloat = 100
-    
+
     /// Local URL of the image preview to show.
     public var content: URL? {
         didSet {
             updateContentIfNeeded()
         }
     }
-    
+
+    /// A thumbnail provided by the photos picker. When set, it is shown immediately
+    /// instead of loading the image from `content`.
+    public var previewImage: UIImage? {
+        didSet { updateContentIfNeeded() }
+    }
+
     /// The image view that displays the image of the attachment.
     open private(set) lazy var imageView: UIImageView = UIImageView()
         .withoutAutoresizingMaskConstraints
@@ -28,23 +35,33 @@ open class ImageAttachmentComposerPreview: _View, ThemeProvider {
         layer.cornerRadius = 11
 
         imageView.contentMode = .scaleAspectFill
+        if #available(iOS 17.0, *) {
+            imageView.preferredImageDynamicRange = .standard
+        }
     }
 
     override open func setUpLayout() {
         super.setUpLayout()
-        
+
         embed(imageView)
 
         widthAnchor.pin(equalToConstant: width).isActive = true
         heightAnchor.pin(equalToConstant: height).isActive = true
     }
-    
+
     override open func updateContent() {
         super.updateContent()
-        components.imageLoader.loadImage(
+
+        if let previewImage {
+            imageView.image = previewImage
+            return
+        }
+
+        let size = CGSize(width: width, height: height)
+        components.mediaLoader.loadImage(
             into: imageView,
-            url: content,
-            imageCDN: components.imageCDN
+            from: content,
+            with: ImageLoaderOptions(resize: ImageResize(size))
         )
     }
 }

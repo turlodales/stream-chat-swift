@@ -1,11 +1,11 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
 /// A worker used for sending custom events to the backend.
-class EventSender: Worker {
+class EventSender: Worker, @unchecked Sendable {
     /// Sends a custom event with the given payload to the channel with `cid`.
     ///
     /// - Parameters:
@@ -15,10 +15,31 @@ class EventSender: Worker {
     func sendEvent<Payload: CustomEventPayload>(
         _ payload: Payload,
         to cid: ChannelId,
-        completion: ((Error?) -> Void)? = nil
+        completion: (@Sendable (Error?) -> Void)? = nil
     ) {
-        apiClient.request(endpoint: .sendEvent(payload, cid: cid)) {
-            completion?($0.error)
+        do {
+            let data = try JSONEncoder.default.encode(payload)
+            let custom = try JSONDecoder.default.decode([String: RawJSON].self, from: data)
+            let endpoint: Endpoint<EmptyResponse> = .sendEvent(
+                type: cid.type.rawValue,
+                id: cid.id,
+                sendEventRequest: SendEventRequest(event: EventRequest(custom: custom, type: Payload.eventType.rawValue))
+            )
+            apiClient.request(endpoint: endpoint) {
+                completion?($0.error)
+            }
+        } catch {
+            completion?(error)
+        }
+    }
+}
+
+extension EventSender {
+    func sendEvent<Payload: CustomEventPayload>(_ payload: Payload, to cid: ChannelId) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            sendEvent(payload, to: cid) { error in
+                continuation.resume(with: error)
+            }
         }
     }
 }

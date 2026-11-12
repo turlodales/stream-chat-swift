@@ -1,0 +1,90 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+
+/// An object which represents a list of `ChatUser`.
+public final class UserList: Sendable {
+    private let query: UserListQuery
+    @MainActor private var stateBuilder: StateBuilder<UserListState>
+    private let userListUpdater: UserListUpdater
+    
+    init(query: UserListQuery, client: ChatClient, environment: Environment = .init()) {
+        self.query = query
+        userListUpdater = environment.userListUpdater(
+            client.databaseContainer,
+            client.apiClient
+        )
+        stateBuilder = StateBuilder {
+            environment.stateBuilder(
+                query,
+                client.databaseContainer
+            )
+        }
+    }
+    
+    // MARK: - Accessing the State
+    
+    /// An observable object representing the current state of the users list.
+    @MainActor public var state: UserListState { stateBuilder.state }
+    
+    /// Fetches the most recent state from the server and updates the local store.
+    ///
+    /// - Important: Loaded users in ``UserListState/users`` are reset.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    public func get() async throws {
+        let pagination = Pagination(pageSize: query.pagination?.pageSize ?? .usersPageSize)
+        try await loadUsers(with: pagination)
+    }
+    
+    // MARK: - Users Pagination
+    
+    /// Loads users for the specified pagination parameters and updates ``UserListState/users``.
+    ///
+    /// - Important: If pagination offset is 0, then loaded users are reset.
+    ///
+    /// - Parameter pagination: The pagination configuration which includes a limit and an offset.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    /// - Returns: An array of users for the pagination.
+    @discardableResult public func loadUsers(with pagination: Pagination) async throws -> [ChatUser] {
+        try await userListUpdater.loadUsers(state.query, pagination: pagination)
+    }
+    
+    /// Loads more users and updates ``UserListState/users``.
+    ///
+    /// - Parameters
+    ///   - limit: The limit for the page size. The default limit is 30.
+    ///
+    /// - Throws: An error while communicating with the Stream API.
+    /// - Returns: An array of loaded channels.
+    @discardableResult public func loadMoreUsers(limit: Int? = nil) async throws -> [ChatUser] {
+        let query = await state.query
+        let limit = (limit ?? query.pagination?.pageSize) ?? Int.usersPageSize
+        return try await userListUpdater.loadNextUsers(
+            query,
+            limit: limit,
+            offset: state.users.count
+        )
+    }
+}
+
+extension UserList {
+    struct Environment: Sendable {
+        var userListUpdater: @Sendable (
+            _ database: DatabaseContainer,
+            _ apiClient: APIClient
+        ) -> UserListUpdater = {
+            UserListUpdater(database: $0, apiClient: $1)
+        }
+        
+        var stateBuilder: @Sendable @MainActor (
+            _ query: UserListQuery,
+            _ database: DatabaseContainer
+        ) -> UserListState = { @MainActor in
+            UserListState(query: $0, database: $1)
+        }
+    }
+}

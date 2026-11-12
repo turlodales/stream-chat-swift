@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -10,24 +10,11 @@ extension MutedUserPayload {
     static func dummy(
         userId: UserId,
         extraData: [String: RawJSON] = [:]
-    ) -> Self {
+    ) -> MutedUserPayload {
         .init(
-            mutedUser: .init(
-                id: userId,
-                name: .unique,
-                imageURL: .unique(),
-                role: .user,
-                createdAt: .unique,
-                updatedAt: .unique,
-                lastActiveAt: .unique,
-                isOnline: true,
-                isInvisible: true,
-                isBanned: true,
-                teams: [],
-                extraData: extraData
-            ),
-            created: .unique,
-            updated: .unique
+            createdAt: .unique,
+            target: .dummy(userId: userId, role: .user, extraData: extraData, teams: [], isBanned: true),
+            updatedAt: .unique
         )
     }
 }

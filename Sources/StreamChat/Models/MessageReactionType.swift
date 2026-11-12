@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
@@ -10,32 +10,38 @@ import Foundation
 /// will be displayed in the application.
 ///
 /// Common examples are: "like", "love", "smile", etc.
-public struct MessageReactionType: RawRepresentable, Codable, Hashable, ExpressibleByStringLiteral {
+public struct MessageReactionType: RawRepresentable, Codable, Hashable, ExpressibleByStringLiteral, Sendable {
     // MARK: - RawRepresentable
-    
+
     public let rawValue: String
-    
+
     public init(rawValue: String) {
         self.rawValue = rawValue
     }
-    
+
     // MARK: - ExpressibleByStringLiteral
-    
+
     public init(stringLiteral: String) {
         self.init(rawValue: stringLiteral)
     }
-    
+
     // MARK: - Codable
-    
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         self.init(
             rawValue: try container.decode(String.self)
         )
     }
-    
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)
+    }
+}
+
+extension MessageReactionType: Identifiable {
+    public var id: String {
+        rawValue
     }
 }

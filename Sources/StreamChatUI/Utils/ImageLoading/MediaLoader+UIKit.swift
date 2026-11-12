@@ -1,0 +1,133 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import StreamChat
+import StreamChatCommonUI
+import UIKit
+
+extension MediaLoader {
+    /// Loads an image into a UIImageView with the given options.
+    @discardableResult
+    @MainActor public func loadImage(
+        into imageView: UIImageView,
+        from url: URL?,
+        with options: ImageLoaderOptions = .init(),
+        completion: (@MainActor (Result<UIImage, Error>) -> Void)? = nil
+    ) -> ImageLoadingTask {
+        let task = ImageLoadingTask()
+        imageView.currentImageLoadingTask?.cancel()
+        imageView.currentImageLoadingTask = nil
+        imageView.image = options.placeholder
+
+        guard let url else { return task }
+
+        imageView.currentImageLoadingTask = task
+
+        let loadOptions = ImageLoadOptions(resize: options.resize)
+        let loadTask = loadImageTask(url: url, options: loadOptions) { result in
+            guard !task.isCancelled else { return }
+            switch result {
+            case let .success(loaded):
+                imageView.image = loaded.image
+                completion?(.success(loaded.image))
+            case let .failure(error):
+                completion?(.failure(error))
+            }
+        }
+        task.addCancellationHandler { loadTask.cancel() }
+
+        return task
+    }
+
+    /// Downloads an image with the given request options.
+    public func downloadImage(
+        with request: ImageDownloadRequest,
+        completion: @escaping @MainActor (Result<UIImage, Error>) -> Void
+    ) {
+        let loadOptions = ImageLoadOptions(resize: request.options.resize)
+        loadImage(url: request.url, options: loadOptions) { result in
+            completion(result.map(\.image))
+        }
+    }
+
+    /// Downloads multiple images and returns all results.
+    public func downloadMultipleImages(
+        with requests: [ImageDownloadRequest],
+        completion: @escaping @MainActor ([Result<UIImage, Error>]) -> Void
+    ) {
+        let group = DispatchGroup()
+        let batchResult = ImageBatchResult(count: requests.count)
+
+        for (index, request) in requests.enumerated() {
+            group.enter()
+            downloadImage(with: request) { result in
+                batchResult.results[index] = result
+                group.leave()
+            }
+        }
+
+        if group.wait(timeout: .now()) == .success {
+            StreamConcurrency.onMain {
+                completion(batchResult.results)
+            }
+        } else {
+            group.notify(queue: .main) {
+                StreamConcurrency.onMain {
+                    completion(batchResult.results)
+                }
+            }
+        }
+    }
+
+    /// Loads an image from an `ImageAttachmentPayload`, using resolution metadata for optimal sizing.
+    @discardableResult
+    @MainActor public func loadImage(
+        into imageView: UIImageView,
+        from attachmentPayload: ImageAttachmentPayload?,
+        maxResolutionInPixels: Double,
+        completion: (@MainActor (Result<UIImage, Error>) -> Void)? = nil
+    ) -> ImageLoadingTask {
+        guard let originalWidth = attachmentPayload?.originalWidth,
+              let originalHeight = attachmentPayload?.originalHeight else {
+            return loadImage(
+                into: imageView,
+                from: attachmentPayload?.imageURL,
+                with: ImageLoaderOptions(),
+                completion: completion
+            )
+        }
+
+        let imageSizeCalculator = ImageSizeCalculator()
+        let newSize = imageSizeCalculator.calculateSize(
+            originalWidthInPixels: originalWidth,
+            originalHeightInPixels: originalHeight,
+            maxResolutionTotalPixels: maxResolutionInPixels
+        )
+
+        return loadImage(
+            into: imageView,
+            from: attachmentPayload?.imageURL,
+            with: ImageLoaderOptions(resize: ImageResize(newSize)),
+            completion: completion
+        )
+    }
+}
+
+final class ImageBatchResult: @unchecked Sendable {
+    var results: [Result<UIImage, Error>]
+    init(count: Int) {
+        results = Array(repeating: .failure(NSError(domain: NSURLErrorDomain, code: URLError.Code.unknown.rawValue)), count: count)
+    }
+}
+
+extension ImageLoadingTask: Cancellable {}
+
+private extension UIImageView {
+    static var imageLoadingTaskKey: UInt8 = 0
+
+    var currentImageLoadingTask: ImageLoadingTask? {
+        get { objc_getAssociatedObject(self, &Self.imageLoadingTaskKey) as? ImageLoadingTask }
+        set { objc_setAssociatedObject(self, &Self.imageLoadingTaskKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
+    }
+}

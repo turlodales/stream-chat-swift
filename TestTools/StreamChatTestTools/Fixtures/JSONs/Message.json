@@ -1,15 +1,32 @@
 {
     "message" : {
+        "custom" : {
+            "secret_note": "Anakin is Vader!"
+        },
+        "cid" : "messaging:channel-ex7-63",
+        "deleted_reply_count" : 0,
+        "mentioned_channel" : false,
+        "mentioned_here" : false,
+        "restricted_visibility" : [],
         "id" : "7baa1533-3294-4c0c-9a62-c9d0928bf733",
         "reaction_counts" : {
             "love" : 1
         },
         "silent" : true,
         "shadowed": true,
+        "deleted_for_me": true,
         "created_at" : "2020-07-16T15:39:03.010717Z",
         "deleted_at" : "2020-07-16T15:55:03.010717Z",
         "reaction_scores" : {
             "love" : 1
+        },
+        "reaction_groups": {
+            "love" : {
+                "sum_scores": 1,
+                "count": 1,
+                "first_reaction_at": "2024-04-17T13:14:53.643826Z",
+                "last_reaction_at": "2024-04-17T13:15:53.643826Z"
+            }
         },
         "type" : "regular",
         "i18n" : {
@@ -50,12 +67,17 @@
         "text" : "No, I am your father!",
         "show_in_channel": true,
         "parent_id": "3294-4c0c-9a62-c9d0928bf733",
+        "member": {
+            "channel_role": "moderator",
+            "notifications_muted": false
+        },
         "channel" : {
             "id" : "channel-ex7-63",
             "created_at" : "2019-12-17T17:11:26.131888Z",
             "created_by" : null,
             "type" : "messaging",
             "cid" : "messaging:channel-ex7-63",
+            "disabled": false,
             "frozen" : false,
             "member_count" : 5,
             "updated_at" : "2019-12-17T17:11:26.131888Z",
@@ -114,7 +136,6 @@
             "name" : "Giant Disk",
             "last_message_at" : "2020-12-23T08:26:45.307447Z"
         },
-        "secret_note": "Anakin is Vader!",
         "attachments" : [
             {
                 "type" : "image",
@@ -153,6 +174,7 @@
             }
         ],
         "updated_at" : "2020-08-17T13:15:39.895109Z",
+        "message_text_updated_at": "2023-08-17T13:15:39.895109Z",
         "reply_count" : 0,
         "user" : {
             "id" : "broken-waterfall-5",
@@ -178,7 +200,14 @@
             
         ],
         "quoted_message" : {
-            "secret_note": "",
+            "custom": {
+                "secret_note": ""
+            },
+            "cid": "messaging:channel-ex7-63",
+            "deleted_reply_count": 0,
+            "mentioned_channel": false,
+            "mentioned_here": false,
+            "restricted_visibility": [],
             "updated_at" : "2021-01-02T07:23:41.411638Z",
             "reply_count" : 0,
             "html" : "<p>@thierry @1ae405d6-c279-3a8e-a27f-b91ec604de07 Hey!<\/p>\n",
@@ -189,13 +218,15 @@
             "pinned_at" : null,
             "id" : "4C0CC2DA-8AB5-421F-808E-50DC7E40653D",
             "user" : {
+                "custom" : {
+                    "value" : "cilvia"
+                },
                 "banned" : false,
                 "online" : true,
                 "id" : "cilvia",
                 "role" : "user",
                 "created_at" : "2019-10-24T08:34:11.155375Z",
                 "image" : "https:\/\/ca.slack-edge.com\/T02RM6X6B-U01173D1D5J-0dead6eea6ea-512",
-                "value" : "cilvia",
                 "updated_at" : "2021-01-12T16:43:25.726221Z",
                 "last_active" : "2021-01-12T16:38:26.444716Z",
                 "name" : "Neil Hannah"
@@ -226,6 +257,9 @@
         "quoted_message_id" : "4C0CC2DA-8AB5-421F-808E-50DC7E40653D",
         "thread_participants" : [
             {
+                "custom" : {
+                    "value" : "josh"
+                },
                 "id" : "josh",
                 "role" : "user",
                 "created_at" : "2020-04-15T06:43:08.776911Z",
@@ -234,10 +268,12 @@
                 "banned" : false,
                 "online" : false,
                 "name" : "Joshua",
-                "value" : "josh",
                 "image" : "https:\/\/ca.slack-edge.com\/T02RM6X6B-U0JNN4BFE-52b2c5f7e1f6-512"
             },
             {
+                "custom" : {
+                    "value" : "vader"
+                },
                 "id" : "vader",
                 "role" : "user",
                 "created_at" : "2020-04-15T06:43:08.776911Z",
@@ -246,7 +282,6 @@
                 "banned" : false,
                 "online" : false,
                 "name" : "Vader",
-                "value" : "vader",
                 "image" : "https:\/\/ca.slack-edge.com\/T02RM6X6B-U0JNN4BFE-52b2c5f7e1f6-512"
             }
         ],
@@ -273,6 +308,39 @@
             "total_unread_count" : 0,
             "online" : true,
             "name" : "John Doe"
+        },
+        "moderation": {
+            "action": "bounce",
+            "original_text": "The message original text",
+            "text_harms": ["sexual_harrassment", "self_harm"],
+            "image_harms": ["nudity"],
+            "blocklist_matched": "profanity_2021_01",
+            "blocklists_matched": ["profanity_2021_01"],
+            "semantic_filter_matched": "bad_phrases",
+            "platform_circumvented": false
+        },
+        "moderation_details": {
+            "original_text": "click here to win a new iphone!!",
+            "action": "MESSAGE_RESPONSE_ACTION_BOUNCE",
+            "harms": [
+                {
+                    "name": "spam_commercial",
+                    "phrase_list_ids": [],
+                    "details": [
+                        {
+                            "spam_commercial": {
+                                "threshold": 0.7,
+                                "language": "en",
+                                "lang_score": 0.8456407,
+                                "clean_msg": "click here to win a new iphone!!",
+                                "pred_score": {
+                                    "spam_commercial": 0.969
+                                }
+                            }
+                        }
+                    ]
+                }
+            ]
         }
     }
 }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -13,92 +13,92 @@ final class Filter_Tests: XCTestCase {
         XCTAssertEqual(filter.value as? String, "equal value")
         XCTAssertEqual(filter.operator, FilterOperator.equal.rawValue)
         
-        filter = .notEqual(.testKey, to: "not equal value")
+        filter = .equal(.testKey, values: ["eq value 1", "eq value 2"])
         XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
-        XCTAssertEqual(filter.value as? String, "not equal value")
-        XCTAssertEqual(filter.operator, FilterOperator.notEqual.rawValue)
-        
+        XCTAssertEqual(filter.value as? [String], ["eq value 1", "eq value 2"])
+        XCTAssertEqual(filter.operator, FilterOperator.equal.rawValue)
+
         filter = .greater(.testKey, than: "greater value")
         XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
         XCTAssertEqual(filter.value as? String, "greater value")
         XCTAssertEqual(filter.operator, FilterOperator.greater.rawValue)
-        
+
         filter = .greaterOrEqual(.testKey, than: "greater or equal value")
         XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
         XCTAssertEqual(filter.value as? String, "greater or equal value")
         XCTAssertEqual(filter.operator, FilterOperator.greaterOrEqual.rawValue)
-        
+
         filter = .less(.testKey, than: "less value")
         XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
         XCTAssertEqual(filter.value as? String, "less value")
         XCTAssertEqual(filter.operator, FilterOperator.less.rawValue)
-        
+
         filter = .lessOrEqual(.testKey, than: "less or equal value")
         XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
         XCTAssertEqual(filter.value as? String, "less or equal value")
         XCTAssertEqual(filter.operator, FilterOperator.lessOrEqual.rawValue)
-        
+
         filter = .in(.testKey, values: ["in value 1", "in value 2"])
         XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
         XCTAssertEqual(filter.value as? [String], ["in value 1", "in value 2"])
         XCTAssertEqual(filter.operator, FilterOperator.in.rawValue)
-        
-        filter = .notIn(.testKey, values: ["nin value 1", "nin value 2"])
-        XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
-        XCTAssertEqual(filter.value as? [String], ["nin value 1", "nin value 2"])
-        XCTAssertEqual(filter.operator, FilterOperator.notIn.rawValue)
-        
+
         filter = .query(.testKey, text: "searched text")
         XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
         XCTAssertEqual(filter.value as? String, "searched text")
         XCTAssertEqual(filter.operator, FilterOperator.query.rawValue)
-        
+
         filter = .autocomplete(.testKey, text: "atocomplete text")
         XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
         XCTAssertEqual(filter.value as? String, "atocomplete text")
         XCTAssertEqual(filter.operator, FilterOperator.autocomplete.rawValue)
-        
+
         filter = .exists(.testKey, exists: false)
         XCTAssertEqual(filter.key, FilterKey<FilterTestScope, String>.testKey.rawValue)
         XCTAssertEqual(filter.value as? Bool, false)
         XCTAssertEqual(filter.operator, FilterOperator.exists.rawValue)
-        
-        let filter1: Filter<FilterTestScope> = .init(operator: "$" + .unique, key: .unique, value: String.unique)
-        let filter2: Filter<FilterTestScope> = .init(operator: "$" + .unique, key: .unique, value: String.unique)
-        
+
+        let filter1: Filter<FilterTestScope> = .init(operator: "$" + .unique, key: .unique, value: String.unique, isCollectionFilter: false)
+        let filter2: Filter<FilterTestScope> = .init(operator: "$" + .unique, key: .unique, value: String.unique, isCollectionFilter: false)
+
         filter = .and([filter1, filter2])
         XCTAssertEqual(filter.key, nil)
         XCTAssertEqual(filter.value as? [Filter<FilterTestScope>], [filter1, filter2])
         XCTAssertEqual(filter.operator, FilterOperator.and.rawValue)
-        
+
         filter = .or([filter1, filter2])
         XCTAssertEqual(filter.key, nil)
         XCTAssertEqual(filter.value as? [Filter<FilterTestScope>], [filter1, filter2])
         XCTAssertEqual(filter.operator, FilterOperator.or.rawValue)
-        
+
         filter = .nor([filter1, filter2])
         XCTAssertEqual(filter.key, nil)
         XCTAssertEqual(filter.value as? [Filter<FilterTestScope>], [filter1, filter2])
         XCTAssertEqual(filter.operator, FilterOperator.nor.rawValue)
     }
-    
+
     func test_operatorEncodingAndDecoding() {
         // Test non-group filter
-        var filter: Filter<FilterTestScope> = .init(operator: FilterOperator.equal.rawValue, key: "test_key", value: "test_value")
+        var filter: Filter<FilterTestScope> = .init(operator: FilterOperator.equal.rawValue, key: "test_key", value: "test_value", isCollectionFilter: false)
         var jsonString: String { filter.serialized }
         XCTAssertEqual(jsonString, #"{"test_key":{"$eq":"test_value"}}"#)
         XCTAssertEqual(jsonString.deserializeFilter(), filter)
-        
+
         // Test in filter
-        filter = .init(operator: FilterOperator.in.rawValue, key: "test_key", value: [1, 2, 3])
+        filter = .init(operator: FilterOperator.in.rawValue, key: "test_key", value: [1, 2, 3], isCollectionFilter: false)
         XCTAssertEqual(filter.serialized, #"{"test_key":{"$in":[1,2,3]}}"#)
         XCTAssertEqual(jsonString.deserializeFilter(), filter)
         
+        // Test eq values filter
+        filter = .init(operator: FilterOperator.equal.rawValue, key: "test_key", value: [1, 2, 3], isCollectionFilter: false)
+        XCTAssertEqual(filter.serialized, #"{"test_key":{"$eq":[1,2,3]}}"#)
+        XCTAssertEqual(jsonString.deserializeFilter(), filter)
+
         // Test group filter
         let filter1: Filter<FilterTestScope> = .equal(.testKey, to: "test_value_1")
-        let filter2: Filter<FilterTestScope> = .notEqual(.testKey, to: "test_value_2")
+        let filter2: Filter<FilterTestScope> = .equal(.testKey, to: "test_value_2")
         filter = .or([filter1, filter2])
-        XCTAssertEqual(filter.serialized, #"{"$or":[{"test_key":{"$eq":"test_value_1"}},{"test_key":{"$ne":"test_value_2"}}]}"#)
+        XCTAssertEqual(filter.serialized, #"{"$or":[{"test_key":{"$eq":"test_value_1"}},{"test_key":{"$eq":"test_value_2"}}]}"#)
         XCTAssertEqual(jsonString.deserializeFilter(), filter)
     }
 
@@ -114,5 +114,130 @@ final class Filter_Tests: XCTestCase {
             // Then
             XCTAssertEqual(filter, decoded)
         }
+    }
+
+    // MARK: - Implicit `$eq` decoding
+
+    func test_filterDecoding_implicitEqual_string() throws {
+        let filter: Filter<FilterTestScope> = try #"{"name":"general"}"#.deserializeFilterThrows()
+        XCTAssertEqual(filter.operator, FilterOperator.equal.rawValue)
+        XCTAssertEqual(filter.key, "name")
+        XCTAssertEqual(filter.value as? String, "general")
+    }
+
+    func test_filterDecoding_implicitEqual_bool() throws {
+        let filter: Filter<FilterTestScope> = try #"{"frozen":true}"#.deserializeFilterThrows()
+        XCTAssertEqual(filter.operator, FilterOperator.equal.rawValue)
+        XCTAssertEqual(filter.key, "frozen")
+        XCTAssertEqual(filter.value as? Bool, true)
+    }
+
+    func test_filterDecoding_implicitEqual_int() throws {
+        let filter: Filter<FilterTestScope> = try #"{"member_count":5}"#.deserializeFilterThrows()
+        XCTAssertEqual(filter.operator, FilterOperator.equal.rawValue)
+        XCTAssertEqual(filter.key, "member_count")
+        XCTAssertEqual(filter.value as? Int, 5)
+    }
+
+    func test_filterDecoding_implicitEqual_array() throws {
+        let filter: Filter<FilterTestScope> = try #"{"members":["r2-d2","c-3po"]}"#.deserializeFilterThrows()
+        XCTAssertEqual(filter.operator, FilterOperator.equal.rawValue)
+        XCTAssertEqual(filter.key, "members")
+        XCTAssertEqual(filter.value as? [String], ["r2-d2", "c-3po"])
+    }
+
+    func test_filterDecoding_longFormStillWorks() throws {
+        let filter: Filter<FilterTestScope> = try #"{"name":{"$eq":"general"}}"#.deserializeFilterThrows()
+        XCTAssertEqual(filter.operator, FilterOperator.equal.rawValue)
+        XCTAssertEqual(filter.key, "name")
+        XCTAssertEqual(filter.value as? String, "general")
+    }
+
+    func test_filterDecoding_implicitEqual_double() throws {
+        let filter: Filter<FilterTestScope> = try #"{"test_key_Double":13.5}"#.deserializeFilterThrows()
+        XCTAssertEqual(filter.operator, FilterOperator.equal.rawValue)
+        XCTAssertEqual(filter.key, "test_key_Double")
+        XCTAssertEqual(filter.value as? Double, 13.5)
+    }
+
+    func test_filterDecoding_implicitEqual_intArray() throws {
+        let filter: Filter<FilterTestScope> = try #"{"test_key_ArrayInt":[1,2,3]}"#.deserializeFilterThrows()
+        XCTAssertEqual(filter.operator, FilterOperator.equal.rawValue)
+        XCTAssertEqual(filter.key, "test_key_ArrayInt")
+        XCTAssertEqual(filter.value as? [Int], [1, 2, 3])
+    }
+
+    // MARK: - Implicit `$and` decoding
+
+    func test_filterDecoding_mixedFieldAndGroupOperator_decodesAsImplicitAnd() throws {
+        // A field key and a group-operator key at the same level are ANDed; neither is dropped.
+        let filter: Filter<FilterTestScope> = try #"{"name":"general","$or":[{"a":"1"},{"b":"2"}]}"#.deserializeFilterThrows()
+
+        XCTAssertEqual(filter.operator, FilterOperator.and.rawValue)
+        let children = try XCTUnwrap(filter.value as? [Filter<FilterTestScope>])
+        XCTAssertEqual(children.count, 2)
+        XCTAssertNotNil(children.first { $0.key == "name" })
+        XCTAssertNotNil(children.first { $0.operator == FilterOperator.or.rawValue })
+    }
+
+    func test_filterDecoding_multipleGroupOperators_decodeAsImplicitAnd() throws {
+        // Two group operators at the same level are ANDed.
+        let filter: Filter<FilterTestScope> = try #"{"$and":[{"a":"1"}],"$or":[{"b":"2"}]}"#.deserializeFilterThrows()
+
+        XCTAssertEqual(filter.operator, FilterOperator.and.rawValue)
+        let children = try XCTUnwrap(filter.value as? [Filter<FilterTestScope>])
+        XCTAssertEqual(children.count, 2)
+        XCTAssertNotNil(children.first { $0.operator == FilterOperator.and.rawValue })
+        XCTAssertNotNil(children.first { $0.operator == FilterOperator.or.rawValue })
+    }
+
+    func test_filterDecoding_implicitAnd_threeBareKeys_decodesAllLeaves() throws {
+        let filter: Filter<FilterTestScope> = try #"{"a":1,"b":"x","c":true}"#.deserializeFilterThrows()
+
+        XCTAssertEqual(filter.operator, FilterOperator.and.rawValue)
+        let children = try XCTUnwrap(filter.value as? [Filter<FilterTestScope>])
+        XCTAssertEqual(children.count, 3)
+        XCTAssertEqual(children.first { $0.key == "a" }?.value as? Int, 1)
+        XCTAssertEqual(children.first { $0.key == "b" }?.value as? String, "x")
+        XCTAssertEqual(children.first { $0.key == "c" }?.value as? Bool, true)
+    }
+
+    func test_filterDecoding_implicitMultiKeyNestedInsideGroup_decodesAsImplicitAnd() throws {
+        // The multi-key → implicit-`$and` rule must apply at every level, not just the top.
+        let filter: Filter<FilterTestScope> = try #"{"$or":[{"a":1,"b":2},{"c":3}]}"#.deserializeFilterThrows()
+
+        XCTAssertEqual(filter.operator, FilterOperator.or.rawValue)
+        let orChildren = try XCTUnwrap(filter.value as? [Filter<FilterTestScope>])
+        XCTAssertEqual(orChildren.count, 2)
+
+        // The multi-key object decodes to a nested implicit `$and`.
+        let nestedAnd = try XCTUnwrap(orChildren.first { $0.operator == FilterOperator.and.rawValue })
+        let nestedAndChildren = try XCTUnwrap(nestedAnd.value as? [Filter<FilterTestScope>])
+        XCTAssertEqual(nestedAndChildren.count, 2)
+        XCTAssertNotNil(nestedAndChildren.first { $0.key == "a" })
+        XCTAssertNotNil(nestedAndChildren.first { $0.key == "b" })
+
+        // The single-key object stays a plain leaf.
+        XCTAssertNotNil(orChildren.first { $0.key == "c" })
+    }
+
+    func test_filterDecoding_nestedGroups_decodeRecursively() throws {
+        let filter: Filter<FilterTestScope> = try #"{"$and":[{"$or":[{"a":1}]},{"x":1}]}"#.deserializeFilterThrows()
+
+        XCTAssertEqual(filter.operator, FilterOperator.and.rawValue)
+        let children = try XCTUnwrap(filter.value as? [Filter<FilterTestScope>])
+        XCTAssertEqual(children.count, 2)
+        XCTAssertNotNil(children.first { $0.operator == FilterOperator.or.rawValue })
+        XCTAssertNotNil(children.first { $0.key == "x" })
+    }
+
+    func test_filterDecoding_norGroup_decodes() throws {
+        let filter: Filter<FilterTestScope> = try #"{"$nor":[{"a":1},{"b":2}]}"#.deserializeFilterThrows()
+
+        XCTAssertEqual(filter.operator, FilterOperator.nor.rawValue)
+        let children = try XCTUnwrap(filter.value as? [Filter<FilterTestScope>])
+        XCTAssertEqual(children.count, 2)
+        XCTAssertNotNil(children.first { $0.key == "a" })
+        XCTAssertNotNil(children.first { $0.key == "b" })
     }
 }

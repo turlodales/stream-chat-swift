@@ -1,6 +1,9 @@
 # OS X
 .DS_Store
 
+# Environment Variables
+.env
+
 # Xcode
 #
 # gitignore contributors: remember to update Global/Xcode.gitignore, Objective-C.gitignore & Swift.gitignore
@@ -10,6 +13,12 @@ StreamChat.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 ## Build generated
 build/
 DerivedData/
+
+# Interface Analyser
+stream-module-interface-analyser/
+interface-analyser-report.md
+public_interface_current.*
+public_interface_previous.*
 
 ## Various settings
 *.pbxuser
@@ -44,19 +53,6 @@ playground.xcworkspace
 # Package.pins
 .build/
 
-# CocoaPods
-#
-# We recommend against adding the Pods directory to your .gitignore. However
-# you should judge for yourself, the pros and cons are mentioned at:
-# https://guides.cocoapods.org/using/using-cocoapods.html#should-i-check-the-pods-directory-into-source-control
-Pods/
-
-# Carthage
-#
-# Add this line if you want to avoid checking in source code from Carthage dependencies.
-Carthage/
-!Sample/Carthage/
-
 # fastlane
 #
 # It is recommended to not store the screenshots in the git repo. Instead, use fastlane to re-generate the
@@ -64,22 +60,44 @@ Carthage/
 # For more information about the recommended setup visit:
 # https://docs.fastlane.tools/best-practices/source-control/#source-control
 
+!fastlane/.env
+fastlane/fastlane.log
 fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots
 fastlane/test_output
 fastlane/allurectl
 fastlane/xcresults
+fastlane/recordings
+fastlane/performance
+fastlane/sonar
+fastlane/mint
+**/metrics/
 StreamChatCore.framework.coverage.txt
 StreamChatCoreTests.xctest.coverage.txt
 vendor/bundle/
+.bundle/
 .swiftpm
-Example/Carthage/.env
-Example/Carthage/fastlane/report.xml
-Sample/Cocoapods/Podfile.lock
 docusaurus/.env
 reports/
 .scannerwork/
+push_payload.json
+sinatra_log.txt
+derived_data/
+spm_cache
+.buildcache
+buildcache
+App Thinning Size Report.txt
+app-thinning.plist
+*.dmg
+*.pkg*
+*LinkMap.txt
+stream-chat-test-mock-server
+
+# gcloud
+google-cloud-sdk
+gcloud.tar.gz
+gcloud-service-account-key.json
 
 # Ignore Products folder
 Products/
@@ -87,8 +105,12 @@ Products/
 # Ignore Dependencies folder
 Dependencies/
 
-# Environment Variables
-.env
+# VSCode
+.vscode
+buildServer.json
 
-# Ignore internal scheme
-StreamChat.xcodeproj/xcshareddata/xcschemes/DemoApp-StreamDevelopers.xcscheme
+# Claude
+.claude/
+
+# OpenUI fixture generator dependencies
+Scripts/openui-fixtures/node_modules/

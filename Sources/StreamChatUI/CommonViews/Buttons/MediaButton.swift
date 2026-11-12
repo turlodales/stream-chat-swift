@@ -1,0 +1,56 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import StreamChat
+import UIKit
+
+/// A button that is being used in the VoiceRecording flow and represents a functionality on the playback.
+open class MediaButton: _Button, AppearanceProvider {
+    override open var isHighlighted: Bool {
+        didSet {
+            backgroundColor = isHighlighted
+                ? appearance.colorPalette.backgroundCoreSurfaceStrong
+                : appearance.colorPalette.backgroundCoreElevation2
+        }
+    }
+
+    // MARK: - Lifecycle
+
+    override open func setUpAppearance() {
+        super.setUpAppearance()
+
+        tintColor = appearance.colorPalette.textPrimary
+        setTitleColor(appearance.colorPalette.textPrimary, for: .normal)
+        backgroundColor = isHighlighted
+            ? appearance.colorPalette.backgroundCoreSurfaceStrong
+            : appearance.colorPalette.backgroundCoreElevation2
+        layer.shadowColor = UIColor.black.cgColor
+    }
+
+    // MARK: - Interaction
+
+    override open func touchesBegan(
+        _ touches: Set<UITouch>,
+        with event: UIEvent?
+    ) {
+        super.touchesBegan(touches, with: event)
+        isHighlighted = true
+    }
+
+    override open func touchesEnded(
+        _ touches: Set<UITouch>,
+        with event: UIEvent?
+    ) {
+        super.touchesEnded(touches, with: event)
+        isHighlighted = false
+    }
+
+    override open func touchesCancelled(
+        _ touches: Set<UITouch>,
+        with event: UIEvent?
+    ) {
+        super.touchesCancelled(touches, with: event)
+        isHighlighted = false
+    }
+}

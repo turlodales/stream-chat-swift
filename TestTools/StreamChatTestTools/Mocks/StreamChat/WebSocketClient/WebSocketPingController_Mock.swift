@@ -1,12 +1,13 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
+@testable import StreamCore
 import XCTest
 
-final class WebSocketPingController_Mock: WebSocketPingController {
+final class WebSocketPingController_Mock: WebSocketPingController, @unchecked Sendable {
     var connectionStateDidChange_connectionStates: [WebSocketConnectionState] = []
     var pongReceivedCount = 0
 

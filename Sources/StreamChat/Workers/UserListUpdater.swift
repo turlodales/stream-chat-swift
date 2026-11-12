@@ -1,11 +1,11 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
 
 /// Makes a users query call to the backend and updates the local storage with the results.
-class UserListUpdater: Worker {
+class UserListUpdater: Worker, @unchecked Sendable {
     /// Makes a users query call to the backend and updates the local storage with the results.
     ///
     /// - Parameters:
@@ -13,32 +13,35 @@ class UserListUpdater: Worker {
     ///   - policy: The update policy for the resulting user set. See `UpdatePolicy`
     ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
     ///
-    func update(userListQuery: UserListQuery, policy: UpdatePolicy = .merge, completion: ((Error?) -> Void)? = nil) {
-        fetch(userListQuery: userListQuery) { [weak self] (result: Result<UserListPayload, Error>) in
+    func update(userListQuery: UserListQuery, policy: UpdatePolicy = .merge, completion: (@Sendable (Result<[ChatUser], Error>) -> Void)? = nil) {
+        fetch(userListQuery: userListQuery) { [weak self] (result: Result<QueryUsersResponse, Error>) in
             switch result {
             case let .success(userListPayload):
+                nonisolated(unsafe) var users = [ChatUser]()
                 self?.database.write { session in
                     if case .replace = policy {
                         let dto = try session.saveQuery(query: userListQuery)
                         dto?.users.removeAll()
                     }
 
-                    session.saveUsers(payload: userListPayload, query: userListQuery)
+                    let dtos = session.saveUsers(payload: userListPayload, query: userListQuery)
+                    if completion != nil {
+                        users = try dtos.map { try $0.asModel() }
+                    }
                 } completion: { error in
                     if let error = error {
-                        log.error("Failed to save `UserListPayload` to the database. Error: \(error)")
-                        completion?(error)
+                        log.error("Failed to save `QueryUsersResponse` to the database. Error: \(error)")
+                        completion?(.failure(error))
                     } else {
-                        completion?(nil)
+                        completion?(.success(users))
                     }
                 }
-                
             case let .failure(error):
-                completion?(error)
+                completion?(.failure(error))
             }
         }
     }
-    
+
     /// Makes a users query call to the backend and returns the results via completion.
     ///
     /// - Parameters:
@@ -47,10 +50,13 @@ class UserListUpdater: Worker {
     ///
     func fetch(
         userListQuery: UserListQuery,
-        completion: @escaping (Result<UserListPayload, Error>) -> Void
+        completion: @escaping @Sendable (Result<QueryUsersResponse, Error>) -> Void
     ) {
         apiClient.request(
-            endpoint: .users(query: userListQuery),
+            endpoint: .queryUsers(
+                payload: userListQuery.asQueryUsersPayload(),
+                requiresConnectionId: userListQuery.options.contains(.presence)
+            ),
             completion: completion
         )
     }
@@ -62,4 +68,59 @@ enum UpdatePolicy {
     case merge
     /// The resulting user set of the query will replace the existing user set.
     case replace
+}
+
+extension UserListUpdater {
+    @discardableResult func update(
+        userListQuery: UserListQuery,
+        policy: UpdatePolicy = .merge
+    ) async throws -> [ChatUser] {
+        try await withCheckedThrowingContinuation { continuation in
+            update(
+                userListQuery: userListQuery,
+                policy: policy
+            ) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+    
+    func fetch(userListQuery: UserListQuery, pagination: Pagination) async throws -> [ChatUser] {
+        let payload = try await withCheckedThrowingContinuation { continuation in
+            fetch(userListQuery: userListQuery.withPagination(pagination)) { result in
+                continuation.resume(with: result)
+            }
+        }
+        return payload.users.map { $0.asModel() }
+    }
+    
+    func loadUsers(
+        _ userListQuery: UserListQuery,
+        pagination: Pagination
+    ) async throws -> [ChatUser] {
+        let policy: UpdatePolicy = pagination.offset == 0 && pagination.cursor == nil ? .replace : .merge
+        return try await update(
+            userListQuery: userListQuery.withPagination(pagination),
+            policy: policy
+        )
+    }
+    
+    func loadNextUsers(
+        _ userListQuery: UserListQuery,
+        limit: Int,
+        offset: Int
+    ) async throws -> [ChatUser] {
+        try await loadUsers(
+            userListQuery,
+            pagination: Pagination(pageSize: limit, offset: offset)
+        )
+    }
+}
+
+extension UserListQuery {
+    func withPagination(_ pagination: Pagination) -> Self {
+        var query = self
+        query.pagination = pagination
+        return query
+    }
 }

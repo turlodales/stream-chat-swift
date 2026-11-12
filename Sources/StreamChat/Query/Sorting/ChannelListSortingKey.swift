@@ -1,81 +1,97 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
-/// `ChannelListSortingKey` is keys by which you can get sorted channels after query.
-public enum ChannelListSortingKey: String, SortingKey {
-    /// The default sorting is by the last massage date or a channel created date. The same as by `updatedDate`.
-    case `default` = "defaultSortingAt"
+/// `ChannelListSortingKey` is keys by which you can get sorted and filtered channels.
+public typealias ChannelListSortingKey = LocalConvertibleSortingKey<ChatChannel>
+
+extension ChannelListSortingKey {
+    /// The default sorting is by the last message date or a channel created date if no messages.
+    public static let `default` = Self(
+        keyPath: \.defaultSortingAt,
+        localKey: #keyPath(ChannelDTO.defaultSortingAt),
+        remoteKey: "last_updated"
+    )
+
+    static let queryTimestamp = Self(
+        keyPath: nil,
+        localKey: #keyPath(ChannelDTO.queryTimestamp),
+        remoteKey: GroupedChannelsSortingKey.queryTimestamp.rawValue
+    )
+
     /// Sort channels by date they were created.
-    case createdAt
+    public static let createdAt = Self(
+        keyPath: \.createdAt,
+        localKey: #keyPath(ChannelDTO.createdAt),
+        remoteKey: ChannelCodingKeys.createdAt.rawValue
+    )
+
     /// Sort channels by date they were updated.
-    case updatedAt
-    /// Sort channels by the last message date..
-    case lastMessageAt
+    public static let updatedAt = Self(
+        keyPath: \.updatedAt,
+        localKey: #keyPath(ChannelDTO.updatedAt),
+        remoteKey: ChannelCodingKeys.updatedAt.rawValue
+    )
+
+    /// Sort channels by the last message date.
+    public static let lastMessageAt = Self(
+        keyPath: \.lastMessageAt,
+        localKey: #keyPath(ChannelDTO.lastMessageAt),
+        remoteKey: ChannelCodingKeys.lastMessageAt.rawValue
+    )
+    
+    /// Sort channels by the pinned date.
+    public static let pinnedAt = Self(
+        keyPath: \.membership?.pinnedAt,
+        localKey: #keyPath(ChannelDTO.membership.pinnedAt),
+        remoteKey: "pinned_at"
+    )
+
     /// Sort channels by number of members.
-    case memberCount
+    public static let memberCount = Self(
+        keyPath: \.memberCount,
+        localKey: #keyPath(ChannelDTO.memberCount),
+        remoteKey: ChannelCodingKeys.memberCount.rawValue
+    )
+
     /// Sort channels by `cid`.
     /// **Note**: This sorting option can extend your response waiting time if used as primary one.
-    case cid
-    /// Sort channels by unread state. When using this sorting key, every unread channel weighs the same,
-    /// so they're sorted by `updatedAt`
-    case hasUnread
+    public static let cid = Self(
+        keyPath: \.cid,
+        localKey: #keyPath(ChannelDTO.cid),
+        remoteKey: ChannelCodingKeys.cid.rawValue
+    )
+
+    /// Sort channels by unread state.
+    ///
+    /// When using this sorting key, every unread channel weighs the same, so they're sorted by `updatedAt`.
+    ///
+    /// **Note:** If you want to sort by number of unreads, you should use the `unreadCount` sorting key.
+    public static let hasUnread = Self(
+        keyPath: \.hasUnread,
+        localKey: #keyPath(ChannelDTO.hasUnreadSorting),
+        remoteKey: "has_unread"
+    )
+
     /// Sort channels by their unread count.
-    case unreadCount
-    
-    private var canUseAsSortDescriptor: Bool {
-        switch self {
-        case .createdAt: return true
-        case .updatedAt: return true
-        case .lastMessageAt: return true
-        case .memberCount: return true
-        case .cid: return true
-        case .hasUnread: return false
-        case .unreadCount: return false
-        case .default: return true
-        }
-    }
-    
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        let value: String
-        
-        switch self {
-        case .default: value = "updated_at"
-        case .createdAt: value = "created_at"
-        case .updatedAt: value = "updated_at"
-        case .lastMessageAt: value = "last_message_at"
-        case .memberCount: value = "member_count"
-        case .cid: value = "cid"
-        case .hasUnread: value = "has_unread"
-        case .unreadCount: value = "unread_count"
-        }
-        
-        try container.encode(value)
-    }
+    public static let unreadCount = Self(
+        keyPath: \.unreadCount.messages,
+        localKey: #keyPath(ChannelDTO.currentUserUnreadMessagesCount),
+        remoteKey: "unread_count"
+    )
 }
 
 extension ChannelListSortingKey {
-    static let defaultSortDescriptor: NSSortDescriptor = {
+    static var defaultSortDescriptor: NSSortDescriptor {
         let dateKeyPath: KeyPath<ChannelDTO, DBDate> = \ChannelDTO.defaultSortingAt
         return .init(keyPath: dateKeyPath, ascending: false)
-    }()
-    
-    func sortDescriptor(isAscending: Bool) -> NSSortDescriptor? {
-        canUseAsSortDescriptor ? .init(key: rawValue, ascending: isAscending) : nil
     }
 }
 
-/// In case elements have same or `nil` target sorting values it's not possible to guarantee that order of elements will be the same
-/// all the time. So we need to additionally provide safe sorting option.
-extension Array where Element == Sorting<ChannelListSortingKey> {
-    func appendingCidSortingKey() -> [Sorting<ChannelListSortingKey>] {
-        guard !contains(where: { $0.key == .cid }), !isEmpty else {
-            return self
-        }
-        
-        return self + [.init(key: .cid)]
+extension ChatChannel {
+    var defaultSortingAt: Date {
+        lastMessageAt ?? createdAt
     }
 }

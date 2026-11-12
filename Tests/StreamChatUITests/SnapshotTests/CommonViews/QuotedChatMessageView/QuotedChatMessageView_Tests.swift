@@ -1,15 +1,18 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
 @testable import StreamChatTestTools
 @testable import StreamChatUI
+import StreamSwiftTestHelpers
 import SwiftUI
 import XCTest
 
-final class QuotedChatMessageView_Tests: XCTestCase {
-    var view: QuotedChatMessageView!
+@MainActor final class QuotedChatMessageView_Tests: XCTestCase {
+    private var view: QuotedChatMessageView!
+
+    // MARK: - Lifecycle
 
     override func setUp() {
         super.setUp()
@@ -24,6 +27,8 @@ final class QuotedChatMessageView_Tests: XCTestCase {
         view = nil
     }
 
+    // MARK: - appearance
+
     func test_emptyAppearance() {
         view.content = makeContent(text: "")
 
@@ -33,6 +38,19 @@ final class QuotedChatMessageView_Tests: XCTestCase {
     func test_defaultAppearance() {
         view.content = makeContent(text: "Hello Vader!")
 
+        AssertSnapshot(view)
+    }
+    
+    func test_withDeletedMessage() {
+        let message = ChatMessage.mock(
+            id: .unique,
+            cid: .unique,
+            text: "Hello Vader!",
+            author: .mock(id: .unique),
+            deletedAt: .unique,
+            isSentByCurrentUser: true
+        )
+        view.content = QuotedChatMessageView.Content(message: message, avatarAlignment: .leading)
         AssertSnapshot(view)
     }
 
@@ -50,6 +68,31 @@ final class QuotedChatMessageView_Tests: XCTestCase {
 
         AssertSnapshot(view, suffix: "-emptyText")
     }
+    
+    func test_withImageAttachmentAppearance_currentUser() {
+        let attachment = ChatMessageImageAttachment.mock(
+            id: .unique,
+            imageURL: TestImages.yoda.url,
+            title: ""
+        )
+        view.content = makeContent(
+            text: "Hello Vader!",
+            isSentByCurrentUser: true,
+            avatarAlignment: .trailing,
+            attachments: [attachment.asAnyAttachment]
+        )
+
+        AssertSnapshot(view)
+
+        view.content = makeContent(
+            text: "",
+            isSentByCurrentUser: true,
+            avatarAlignment: .trailing,
+            attachments: [attachment.asAnyAttachment]
+        )
+
+        AssertSnapshot(view, suffix: "-emptyText")
+    }
 
     func test_withFileAttachmentAppearance() {
         let attachment = ChatMessageFileAttachment.mock(
@@ -59,6 +102,46 @@ final class QuotedChatMessageView_Tests: XCTestCase {
             file: AttachmentFile(type: .csv, size: 0, mimeType: "text/csv"),
             localState: nil
         )
+
+        view.content = makeContent(text: "Hello Vader!", attachments: [attachment.asAnyAttachment])
+
+        AssertSnapshot(view)
+
+        view.content = makeContent(text: "", attachments: [attachment.asAnyAttachment])
+
+        AssertSnapshot(view, suffix: "-emptyText")
+    }
+    
+    func test_withFileAttachmentAppearance_currentUser() {
+        let attachment = ChatMessageFileAttachment.mock(
+            id: .unique,
+            title: "Data.csv",
+            assetURL: .unique(),
+            file: AttachmentFile(type: .csv, size: 0, mimeType: "text/csv"),
+            localState: nil
+        )
+
+        view.content = makeContent(
+            text: "Hello Vader!",
+            isSentByCurrentUser: true,
+            avatarAlignment: .trailing,
+            attachments: [attachment.asAnyAttachment]
+        )
+
+        AssertSnapshot(view)
+
+        view.content = makeContent(
+            text: "",
+            isSentByCurrentUser: true,
+            avatarAlignment: .trailing,
+            attachments: [attachment.asAnyAttachment]
+        )
+
+        AssertSnapshot(view, suffix: "-emptyText")
+    }
+
+    func test_withAudioAttachmentAppearance() {
+        let attachment = ChatMessageAudioAttachment.mock(id: .unique)
 
         view.content = makeContent(text: "Hello Vader!", attachments: [attachment.asAnyAttachment])
 
@@ -81,12 +164,31 @@ final class QuotedChatMessageView_Tests: XCTestCase {
 
         AssertSnapshot(view)
     }
+    
+    func test_withLinkAttachmentAppearance_currentUser() {
+        let attachment = ChatMessageLinkAttachment.mock(
+            id: .unique,
+            originalURL: URL(string: "https://www.yoda.com")!,
+            assetURL: .unique(),
+            previewURL: TestImages.yoda.url
+        )
+
+        view.content = makeContent(
+            text: "Hello Vader!",
+            isSentByCurrentUser: true,
+            avatarAlignment: .trailing,
+            attachments: [attachment.asAnyAttachment]
+        )
+
+        AssertSnapshot(view)
+    }
 
     func test_withGiphyAttachmentAppearance() {
         let attachment = ChatMessageGiphyAttachment(
             id: .unique,
             type: .giphy,
             payload: .init(title: "", previewURL: TestImages.yoda.url, actions: []),
+            downloadingState: nil,
             uploadingState: nil
         )
 
@@ -97,6 +199,41 @@ final class QuotedChatMessageView_Tests: XCTestCase {
         view.content = makeContent(text: "", attachments: [attachment.asAnyAttachment])
 
         AssertSnapshot(view, suffix: "-emptyText")
+    }
+
+    func test_withVoiceRecordingAttachmentAppearance() {
+        let attachment = ChatMessageVoiceRecordingAttachment.mock(
+            id: .unique,
+            duration: 59
+        )
+
+        view.content = makeContent(text: "Hello Vader!", attachments: [attachment.asAnyAttachment])
+
+        AssertSnapshot(view)
+    }
+
+    func test_withVoiceRecordingAndImageAttachmentAppearance() {
+        let voiceRecording = ChatMessageVoiceRecordingAttachment.mock(
+            id: .unique,
+            duration: 59
+        )
+        let image = ChatMessageImageAttachment.mock(
+            id: .unique,
+            imageURL: TestImages.yoda.url,
+            title: ""
+        )
+        let attachments = [image.asAnyAttachment, voiceRecording.asAnyAttachment]
+
+        view.content = makeContent(text: "", attachments: attachments)
+
+        AssertSnapshot(view)
+
+        view.content = makeContent(
+            text: "Hello Darth Vader! Where is my light saber?",
+            attachments: attachments
+        )
+
+        AssertSnapshot(view, suffix: "-longText")
     }
 
     func test_withLongTextAppearance() {
@@ -110,6 +247,33 @@ final class QuotedChatMessageView_Tests: XCTestCase {
         AssertSnapshot(view)
     }
 
+    func test_withTranslatedText() {
+        view.content = makeContent(
+            text: "Hello!",
+            translations: [.portuguese: "Olá"],
+            channel: .mock(cid: .unique, membership: .mock(id: .unique, language: .portuguese))
+        )
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_withTranslatedText_whenHasAttachments() {
+        let attachment = ChatMessageImageAttachment.mock(
+            id: .unique,
+            imageURL: TestImages.yoda.url,
+            title: ""
+        )
+
+        view.content = makeContent(
+            text: "Hello!",
+            translations: [.portuguese: "Olá"],
+            channel: .mock(cid: .unique, membership: .mock(id: .unique, language: .portuguese)),
+            attachments: [attachment.asAnyAttachment]
+        )
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
     func test_withAvatarAlignmentRightAppearance() {
         view.content = makeContent(text: "Hello Vader!", avatarAlignment: .trailing)
 
@@ -120,6 +284,24 @@ final class QuotedChatMessageView_Tests: XCTestCase {
         view.content = makeContent(text: "Hello Vader!", avatarAlignment: .leading)
 
         AssertSnapshot(view)
+    }
+
+    func test_withUnsupportedAttachment() {
+        view.content = makeContent(text: "Hello!", attachments: [.dummy(type: "location")])
+
+        AssertSnapshot(view)
+    }
+
+    func test_withUnsupportedAttachment_whenEmptyText() {
+        view.content = makeContent(text: "", attachments: [.dummy(type: "location")])
+
+        AssertSnapshot(view, variants: [.defaultLight])
+    }
+
+    func test_withPoll() {
+        view.content = makeContent(text: "", poll: .mock(name: "Best player"))
+
+        AssertSnapshot(view, variants: [.defaultLight])
     }
 
     func test_appearanceCustomization_usingComponents() {
@@ -179,35 +361,6 @@ final class QuotedChatMessageView_Tests: XCTestCase {
 
         AssertSnapshot(view, variants: [.defaultLight])
     }
-
-    @available(iOS 13.0, *)
-    func test_wrappedInSwiftUI() {
-        struct CustomView: View {
-            @EnvironmentObject var components: Components.ObservableObject
-            let content: QuotedChatMessageView.Content
-
-            var body: some View {
-                components.quotedMessageView.asView(content)
-            }
-        }
-        
-        // TODO: We have to replace default as the components are not injected in SwiftUI views.
-        Components.default = .mock
-        let view = CustomView(
-            content: .init(
-                message: .mock(
-                    id: .unique,
-                    cid: .unique,
-                    text: "Hello world!",
-                    author: .mock(id: .unique, imageURL: TestImages.yoda.url)
-                ),
-                avatarAlignment: .leading
-            )
-        )
-        .environmentObject(Components.mock.asObservableObject)
-
-        AssertSnapshot(view, variants: [.defaultLight])
-    }
 }
 
 private extension QuotedChatMessageView {
@@ -223,18 +376,23 @@ private extension QuotedChatMessageView {
 extension QuotedChatMessageView_Tests {
     func makeContent(
         text: String,
+        translations: [TranslationLanguage: String]? = nil,
+        channel: ChatChannel? = nil,
         isSentByCurrentUser: Bool = false,
         avatarAlignment: QuotedAvatarAlignment = .leading,
-        attachments: [AnyChatMessageAttachment] = []
+        attachments: [AnyChatMessageAttachment] = [],
+        poll: Poll? = nil
     ) -> QuotedChatMessageView.Content {
         let message = ChatMessage.mock(
             id: .unique,
             cid: .unique,
             text: text,
             author: .mock(id: .unique),
+            translations: translations,
             attachments: attachments,
-            isSentByCurrentUser: isSentByCurrentUser
+            isSentByCurrentUser: isSentByCurrentUser,
+            poll: poll
         )
-        return .init(message: message, avatarAlignment: avatarAlignment)
+        return .init(message: message, avatarAlignment: avatarAlignment, channel: channel)
     }
 }

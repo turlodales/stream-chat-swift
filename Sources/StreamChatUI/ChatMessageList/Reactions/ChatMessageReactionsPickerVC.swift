@@ -1,12 +1,9 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
 import UIKit
-
-@available(*, deprecated, renamed: "ChatMessageReactionsPickerVC")
-public typealias ChatMessageReactionsVC = ChatMessageReactionsPickerVC
 
 /// Controller for the message reactions picker as a list of toggles.
 open class ChatMessageReactionsPickerVC: _ViewController, ThemeProvider, ChatMessageControllerDelegate {
@@ -36,7 +33,7 @@ open class ChatMessageReactionsPickerVC: _ViewController, ThemeProvider, ChatMes
 
             return .init(
                 style: message.isSentByCurrentUser ? .bigOutgoing : .bigIncoming,
-                reactions: appearance.images.availableReactions
+                reactions: appearance.images.defaultReactions
                     .keys
                     .sorted { $0.rawValue < $1.rawValue }
                     .map {
@@ -58,19 +55,28 @@ open class ChatMessageReactionsPickerVC: _ViewController, ThemeProvider, ChatMes
     // toggleReaction toggles on/off the reaction for the message
     open func toggleReaction(_ reaction: MessageReactionType) {
         guard let message = messageController.message else { return }
-        
-        let completion: (Error?) -> Void = { [weak self] _ in
+
+        let completion: @MainActor (Error?) -> Void = { [weak self] _ in
             self?.dismiss(animated: true)
         }
 
         let shouldRemove = message.currentUserReactions.contains { $0.type == reaction }
-        shouldRemove
-            ? messageController.deleteReaction(reaction, completion: completion)
-            : messageController.addReaction(reaction, completion: completion)
+        if shouldRemove {
+            messageController.deleteReaction(reaction, completion: completion)
+        } else {
+            let availableEmojis = appearance.images.availableReactionPushEmojis
+            messageController.addReaction(
+                reaction,
+                enforceUnique: components.isUniqueReactionsEnabled,
+                skipPush: false,
+                pushEmojiCode: components.isReactionPushEmojisEnabled ? availableEmojis[reaction] : nil,
+                completion: completion
+            )
+        }
     }
-    
+
     // MARK: - MessageControllerDelegate
-    
+
     open func messageController(
         _ controller: ChatMessageController,
         didChangeMessage change: EntityChange<ChatMessage>
@@ -78,6 +84,7 @@ open class ChatMessageReactionsPickerVC: _ViewController, ThemeProvider, ChatMes
         switch change {
         case .create, .remove: break
         case .update: updateContentIfNeeded()
+        @unknown default: break
         }
     }
 }

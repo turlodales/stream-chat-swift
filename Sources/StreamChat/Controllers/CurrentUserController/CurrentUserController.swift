@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -17,17 +17,18 @@ public extension ChatClient {
 
 /// `CurrentChatUserController` is a controller class which allows observing and mutating the currently logged-in
 /// user of `ChatClient`.
-public class CurrentChatUserController: DataController, DelegateCallable, DataStoreProvider {
+///
+/// - Note: For an async-await alternative of the `CurrentChatUserController`, please check ``ConnectedUser`` in the async-await supported [state layer](https://getstream.io/chat/docs/sdk/ios/client/state-layer/state-layer-overview/).
+public class CurrentChatUserController: DataController, DelegateCallable, DataStoreProvider, @unchecked Sendable {
     /// The `ChatClient` instance this controller belongs to.
     public let client: ChatClient
-    
+
     private let environment: Environment
-    
+
     var _basePublishers: Any?
     /// An internal backing object for all publicly available Combine publishers. We use it to simplify the way we expose
     /// publishers. Instead of creating custom `Publisher` types, we use `CurrentValueSubject` and `PassthroughSubject` internally,
     /// and expose the published values by mapping them to a read-only `AnyPublisher` type.
-    @available(iOS 13, *)
     var basePublishers: BasePublishers {
         if let value = _basePublishers as? BasePublishers {
             return value
@@ -35,6 +36,9 @@ public class CurrentChatUserController: DataController, DelegateCallable, DataSt
         _basePublishers = BasePublishers(controller: self)
         return _basePublishers as? BasePublishers ?? .init(controller: self)
     }
+
+    /// The observer for the active live location messages.
+    private var activeLiveLocationMessagesObserver: BackgroundListDatabaseObserver<ChatMessage, MessageDTO>?
 
     /// Used for observing the current user changes in a database.
     private lazy var currentUserObserver = createUserObserver()
@@ -45,6 +49,22 @@ public class CurrentChatUserController: DataController, DelegateCallable, DataSt
                     return
                 }
                 $0.currentUserController(self, didChangeCurrentUser: change)
+            }
+
+            /// Only when we have access to the currentUserId is when we should
+            /// create the observer for the active live location messages.
+            if self?.activeLiveLocationMessagesObserver == nil {
+                let observer = self?.createActiveLiveLocationMessagesObserver()
+                self?.activeLiveLocationMessagesObserver = observer
+                try? observer?.startObserving()
+                observer?.onDidChange = { [weak self, weak observer] _ in
+                    self?.delegateCallback { [weak self, weak observer] in
+                        guard let self = self else { return }
+                        let messages = Array(observer?.items ?? [])
+                        self.isSharingLiveLocation = !messages.isEmpty
+                        $0.currentUserController(self, didChangeActiveLiveLocationMessages: messages)
+                    }
+                }
             }
         }
         .onFieldChange(\.unreadCount) { [weak self] change in
@@ -57,11 +77,31 @@ public class CurrentChatUserController: DataController, DelegateCallable, DataSt
             }
         }
 
+    /// A flag to indicate whether the current user is sharing his live location.
+    private var isSharingLiveLocation = false {
+        didSet {
+            if isSharingLiveLocation == oldValue {
+                return
+            }
+            delegateCallback {
+                if self.isSharingLiveLocation {
+                    $0.currentUserControllerDidStartSharingLiveLocation(self)
+                } else {
+                    $0.currentUserControllerDidStopSharingLiveLocation(self)
+                }
+            }
+        }
+    }
+
+    /// The throttler for limiting the frequency of live location updates.
+    private var locationUpdatesThrottler = Throttler(interval: 3, broadcastLatestEvent: true)
+
     /// A type-erased delegate.
     var multicastDelegate: MulticastDelegate<CurrentChatUserControllerDelegate> = .init()
-    
+
     /// The currently logged-in user. `nil` if the connection hasn't been fully established yet, or the connection
     /// wasn't successful.
+    /// Having a non-nil currentUser does not mean the user is authenticated. Make sure to call `connect()` before performing any API call.
     public var currentUser: CurrentChatUser? {
         startObservingIfNeeded()
         return currentUserObserver.item
@@ -70,18 +110,58 @@ public class CurrentChatUserController: DataController, DelegateCallable, DataSt
     /// The unread messages and channels count for the current user.
     ///
     /// Returns `noUnread` if `currentUser` doesn't exist yet.
-    ///
     public var unreadCount: UnreadCount {
         currentUser?.unreadCount ?? .noUnread
     }
 
-    private lazy var chatClientUpdater = environment.chatClientUpdaterBuilder(client)
-    
+    /// The active live location messages for the current user.
+    ///
+    /// To observe changes of the active live locations, set your class as
+    /// a delegate of this controller.
+    public var activeLiveLocationMessages: [ChatMessage] {
+        Array(activeLiveLocationMessagesObserver?.items ?? [])
+    }
+
     /// The worker used to update the current user.
     private lazy var currentUserUpdater = environment.currentUserUpdaterBuilder(
         client.databaseContainer,
         client.apiClient
     )
+
+    /// The worker used to update the current user member for a given channel.
+    private lazy var currentMemberUpdater = createMemberUpdater()
+
+    /// The worker used to update messages. Used for updating live locations of messages.
+    private lazy var messageUpdater = createMessageUpdater()
+
+    // MARK: - Drafts Properties
+
+    /// The query used for fetching the draft messages.
+    private var draftListQuery = DraftListQuery()
+
+    /// Use for observing the current user's draft messages changes.
+    private var draftMessagesObserver: BackgroundListDatabaseObserver<DraftMessage, MessageDTO>?
+
+    /// The repository for draft messages.
+    private var draftMessagesRepository: DraftMessagesRepository
+
+    /// The token for the next page of draft messages.
+    private var draftMessagesNextCursor: String?
+
+    /// A flag to indicate whether all draft messages have been loaded.
+    public private(set) var hasLoadedAllDrafts: Bool = false
+
+    /// The current user's draft messages.
+    public var draftMessages: [DraftMessage] {
+        if let observer = draftMessagesObserver {
+            return Array(observer.items)
+        }
+
+        let observer = createDraftMessagesObserver(query: draftListQuery)
+        return Array(observer.items)
+    }
+
+    // MARK: - Init
 
     /// Creates a new `CurrentUserControllerGeneric`.
     ///
@@ -92,16 +172,18 @@ public class CurrentChatUserController: DataController, DelegateCallable, DataSt
     init(client: ChatClient, environment: Environment = .init()) {
         self.client = client
         self.environment = environment
+        draftMessagesRepository = client.draftMessagesRepository
+        super.init()
     }
 
-    /// Synchronize local data with remote. Waits for the client to connect but doesn’t initiate the connection itself.
+    /// Synchronize local data with remote. Waits for the client to connect but doesn't initiate the connection itself.
     /// This is to make sure the fetched local data is up-to-date, since the current user data is updated through WebSocket events.
     ///
     /// - Parameter completion: Called when the controller has finished fetching the local data
     ///   and the client connection is established.
-    override public func synchronize(_ completion: ((_ error: Error?) -> Void)? = nil) {
+    override public func synchronize(_ completion: (@MainActor (_ error: Error?) -> Void)? = nil) {
         startObservingIfNeeded()
-        
+
         if case let .localDataFetchFailed(error) = state {
             callback { completion?(error) }
             return
@@ -110,19 +192,20 @@ public class CurrentChatUserController: DataController, DelegateCallable, DataSt
         // Unlike the other DataControllers, this one does not make a remote call when synchronising.
         // But we can assume that if we wait for the connection of the WebSocket, it means the local data
         // is in sync with the remote server, so we can set the state to remoteDataFetched.
-        client.provideConnectionId { connectionId in
+        client.provideConnectionId { [weak self] result in
             var error: ClientError?
-            if connectionId == nil {
+            if case .failure = result {
                 error = ClientError.ConnectionNotSuccessful()
             }
-            self.state = error == nil ? .remoteDataFetched : .remoteDataFetchFailed(error!)
-            self.callback { completion?(error) }
+
+            self?.state = error == nil ? .remoteDataFetched : .remoteDataFetchFailed(error!)
+            self?.callback { completion?(error) }
         }
     }
-    
+
     private func startObservingIfNeeded() {
         guard state == .initialized else { return }
-        
+
         do {
             try currentUserObserver.startObserving()
             state = .localDataFetched
@@ -144,10 +227,8 @@ public extension CurrentChatUserController {
     /// database will be flushed.
     ///
     /// - Parameter completion: The completion to be called when the operation is completed.
-    func reloadUserIfNeeded(completion: ((Error?) -> Void)? = nil) {
-        chatClientUpdater.reloadUserIfNeeded(
-            userConnectionProvider: client.userConnectionProvider
-        ) { error in
+    func reloadUserIfNeeded(completion: (@MainActor (Error?) -> Void)? = nil) {
+        client.authenticationRepository.refreshToken { error in
             self.callback {
                 completion?(error)
             }
@@ -158,27 +239,43 @@ public extension CurrentChatUserController {
     ///
     /// By default all data is `nil`, and it won't be updated unless a value is provided.
     ///
+    /// - Note: This operation does a partial user update which keeps existing data if not modified. Use ``unsetProperties`` for clearing the existing state.
+    ///
     /// - Parameters:
     ///   - name: Optionally provide a new name to be updated.
     ///   - imageURL: Optionally provide a new image to be updated.
+    ///   - privacySettings: The privacy settings of the user. Example: If the user does not want to expose typing events or read events.
+    ///   - role: The role for the user.
+    ///   - teamsRole: The role for the user in a specific team. Example: `["teamId": "role"]`.
     ///   - userExtraData: Optionally provide new user extra data to be updated.
+    ///   - unsetProperties: Remove existing properties from the user. For example, `image` or `name`.
     ///   - completion: Called when user is successfuly updated, or with error.
     func updateUserData(
         name: String? = nil,
         imageURL: URL? = nil,
+        privacySettings: UserPrivacySettings? = nil,
+        role: UserRole? = nil,
+        teamsRole: [TeamId: UserRole]? = nil,
         userExtraData: [String: RawJSON] = [:],
-        completion: ((Error?) -> Void)? = nil
+        unsetProperties: Set<String> = [],
+        completion: (@MainActor (Error?) -> Void)? = nil
     ) {
         guard let currentUserId = client.currentUserId else {
-            completion?(ClientError.CurrentUserDoesNotExist())
+            callback {
+                completion?(ClientError.CurrentUserDoesNotExist())
+            }
             return
         }
-        
+
         currentUserUpdater.updateUserData(
             currentUserId: currentUserId,
             name: name,
             imageURL: imageURL,
-            userExtraData: userExtraData
+            privacySettings: privacySettings,
+            role: role,
+            teamsRole: teamsRole,
+            userExtraData: userExtraData,
+            unset: unsetProperties
         ) { error in
             self.callback {
                 completion?(error)
@@ -186,26 +283,114 @@ public extension CurrentChatUserController {
         }
     }
 
-    /// Fetches the most updated devices and syncs with the local database.
-    /// - Parameter completion: Called when the devices are synced successfully, or with error.
-    func synchronizeDevices(completion: ((Error?) -> Void)? = nil) {
+    /// Updates the current user member data in a specific channel.
+    ///
+    /// **Note**: If you want to observe member changes in real-time, use the `ChatClient.memberController()`.
+    ///
+    /// - Parameters:
+    ///   - extraData: The additional data to be added to the member object.
+    ///   - unsetProperties: The properties to be removed from the member object.
+    ///   - channelId: The channel where the member data is updated.
+    ///   - completion: Returns the updated member object or an error if the update fails.
+    func updateMemberData(
+        _ extraData: [String: RawJSON],
+        unsetProperties: [String]? = nil,
+        in channelId: ChannelId,
+        completion: (@MainActor (Result<ChatChannelMember, Error>) -> Void)? = nil
+    ) {
         guard let currentUserId = client.currentUserId else {
-            completion?(ClientError.CurrentUserDoesNotExist())
+            callback {
+                completion?(.failure(ClientError.CurrentUserDoesNotExist()))
+            }
             return
         }
 
-        currentUserUpdater.fetchDevices(currentUserId: currentUserId) { error in
-            self.callback { completion?(error) }
+        currentMemberUpdater.partialUpdate(
+            userId: currentUserId,
+            in: channelId,
+            request: UpdateMemberPartialRequest(set: extraData, unset: unsetProperties)
+        ) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Loads all active live location messages for the current user.
+    /// This method is only needed to be called once to make sure all live location messages are tracked.
+    func loadActiveLiveLocationMessages(completion: (@MainActor (Result<[SharedLocation], Error>) -> Void)? = nil) {
+        currentUserUpdater.loadActiveLiveLocations { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Updates the location of all the active live location messages
+    /// for the current user that were generated by the this device.
+    ///
+    /// The updates are throttled to avoid sending too many requests.
+    ///
+    /// - Parameter location: The new location to be updated.
+    func updateLiveLocation(_ location: LocationInfo) {
+        guard let messages = activeLiveLocationMessagesObserver?.items, !messages.isEmpty else {
+            return
+        }
+
+        locationUpdatesThrottler.execute { [weak self] in
+            for message in messages {
+                self?.messageUpdater.updateLiveLocation(
+                    messageId: message.id,
+                    locationInfo: location
+                ) { [weak self] result in
+                    guard let self = self else { return }
+                    guard let error = result.error else { return }
+                    guard let location = message.sharedLocation else { return }
+                    self.delegateCallback { delegate in
+                        delegate.currentUserController(
+                            self,
+                            didFailToUpdateLiveLocation: location,
+                            with: error
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fetches the most updated devices and syncs with the local database.
+    /// - Parameter completion: Called when the devices are synced successfully, or with error.
+    func synchronizeDevices(completion: (@MainActor (Error?) -> Void)? = nil) {
+        guard let currentUserId = client.currentUserId else {
+            callback {
+                completion?(ClientError.CurrentUserDoesNotExist())
+            }
+            return
+        }
+
+        currentUserUpdater.fetchDevices(currentUserId: currentUserId) { result in
+            self.callback { completion?(result.error) }
         }
     }
 
     /// Registers the current user's device for push notifications.
+    ///
+    /// It is safe to call this on every app launch: no request is sent when the device is already registered
+    /// for the current user with the same push provider and provider name.
+    ///
     /// - Parameters:
     ///   - pushDevice: The device information required for the desired push provider.
+    ///   - forceRegistration: Sends the registration request even when the device is already registered. Defaults to `false`.
     ///   - completion: Callback when device is successfully registered, or failed with error.
-    func addDevice(_ pushDevice: PushDevice, completion: ((Error?) -> Void)? = nil) {
+    func addDevice(
+        _ pushDevice: PushDevice,
+        forceRegistration: Bool = false,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
         guard let currentUserId = client.currentUserId else {
-            completion?(ClientError.CurrentUserDoesNotExist())
+            callback {
+                completion?(ClientError.CurrentUserDoesNotExist())
+            }
             return
         }
 
@@ -213,39 +398,287 @@ public extension CurrentChatUserController {
             deviceId: pushDevice.deviceId,
             pushProvider: pushDevice.pushProvider,
             providerName: pushDevice.providerName,
-            currentUserId: currentUserId
+            currentUserId: currentUserId,
+            forceRegistration: forceRegistration
         ) { error in
             self.callback {
                 completion?(error)
             }
         }
     }
-    
+
     /// Removes a registered device from the current user.
     /// `connectUser` must be called before calling this.
     /// - Parameters:
     ///   - id: Device id to be removed. You can obtain registered devices via `currentUser.devices`.
     ///   If `currentUser.devices` is not up-to-date, please make an `synchronize` call.
     ///   - completion: Called when device is successfully deregistered, or with error.
-    func removeDevice(id: DeviceId, completion: ((Error?) -> Void)? = nil) {
+    func removeDevice(id: DeviceId, completion: (@MainActor (Error?) -> Void)? = nil) {
         guard let currentUserId = client.currentUserId else {
-            completion?(ClientError.CurrentUserDoesNotExist())
+            callback {
+                completion?(ClientError.CurrentUserDoesNotExist())
+            }
             return
         }
-        
+
         currentUserUpdater.removeDevice(id: id, currentUserId: currentUserId) { error in
             self.callback {
                 completion?(error)
             }
         }
     }
-    
+
     /// Marks all channels for a user as read.
     ///
     /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
     ///
-    func markAllRead(completion: ((Error?) -> Void)? = nil) {
+    func markAllRead(completion: (@MainActor (Error?) -> Void)? = nil) {
         currentUserUpdater.markAllRead { error in
+            self.callback {
+                completion?(error)
+            }
+        }
+    }
+    
+    /// Deletes all the local downloads of file attachments.
+    ///
+    /// - Parameter completion: Called when files have been deleted or when an error occurred.
+    func deleteAllLocalAttachmentDownloads(completion: (@MainActor (Error?) -> Void)? = nil) {
+        currentUserUpdater.deleteAllLocalAttachmentDownloads { error in
+            guard let completion else { return }
+            self.callback {
+                completion(error)
+            }
+        }
+    }
+
+    /// Fetches all the unread information from the current user.
+    ///
+    ///  - Parameter completion: Called when the API call is finished.
+    ///  Returns the current user unreads or an error if the API call fails.
+    ///
+    /// Note: This is a one-time request, it is not observable.
+    func loadAllUnreads(completion: @escaping (@MainActor (Result<CurrentUserUnreads, Error>) -> Void)) {
+        currentUserUpdater.loadAllUnreads { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+
+    /// Get all blocked users.
+    ///
+    /// - Parameter completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    ///
+    func loadBlockedUsers(completion: @escaping @MainActor (Result<[BlockedUserDetails], Error>) -> Void) {
+        currentUserUpdater.loadBlockedUsers { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+
+    /// Mutes the users with the given identifiers.
+    ///
+    /// - Note: Messages from muted users are not delivered via push notifications.
+    ///
+    /// - Parameters:
+    ///   - userIds: The identifiers of the users to mute.
+    ///   - expirationInMinutes: The duration of the mute in minutes. When `nil`, the mute does not expire.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    ///
+    func muteUsers(
+        _ userIds: Set<UserId>,
+        expiration expirationInMinutes: Int? = nil,
+        completion: @escaping @MainActor (Result<MuteUsersResponse, Error>) -> Void
+    ) {
+        currentUserUpdater.muteUsers(userIds, expiration: expirationInMinutes) { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+
+    /// Unmutes the users with the given identifiers.
+    ///
+    /// - Parameters:
+    ///   - userIds: The identifiers of the users to unmute.
+    ///   - completion: Called when the API call is finished. Called with `Error` if the remote update fails.
+    ///
+    func unmuteUsers(
+        _ userIds: Set<UserId>,
+        completion: @escaping @MainActor (Result<UnmuteUsersResponse, Error>) -> Void
+    ) {
+        currentUserUpdater.unmuteUsers(userIds) { result in
+            self.callback {
+                completion(result)
+            }
+        }
+    }
+
+    /// Set global push preferences that apply to all channels for the current user.
+    /// - Parameters:
+    ///   - level: The scope level of the push notifications.
+    ///   - completion: The completion call once the request is finished.
+    func setPushPreference(
+        level: PushPreferenceLevel,
+        completion: (@MainActor (Result<PushPreference, Error>) -> Void)? = nil
+    ) {
+        let userPreference = PushPreferenceInput(
+            chatLevel: level,
+            removeDisable: true
+        )
+
+        currentUserUpdater.setPushPreference(userPreference) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Temporarily disables the push notifications globally for the current user.
+    /// - Parameters:
+    ///   - date: The date until when the push notifications will be enabled back.
+    ///   - completion: The completion call once the request is finished.
+    func snoozePushNotifications(
+        until date: Date,
+        completion: (@MainActor (Result<PushPreference, Error>) -> Void)? = nil
+    ) {
+        let userPreference = PushPreferenceInput(
+            chatLevel: .all,
+            disabledUntil: date
+        )
+
+        currentUserUpdater.setPushPreference(userPreference) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Sets a recurring quiet hours schedule for the current user's push notifications.
+    ///
+    /// While a quiet window is active, the server drops (it does not delay) the user's chat push notifications,
+    /// in every channel. Reminder pushes still go through.
+    /// The schedule replaces any schedule that was set before.
+    ///
+    /// - Parameters:
+    ///   - schedule: The quiet hours schedule, with 1 to 7 rules.
+    ///   - completion: The completion call once the request is finished. It fails with
+    ///   ``ClientError/QuietHoursEmpty`` when the schedule has no rules, and with
+    ///   ``ClientError/QuietHoursNotStored`` when the server does not support quiet hours.
+    func setQuietHours(
+        _ schedule: PushSchedule,
+        completion: (@MainActor (Result<PushPreference, Error>) -> Void)? = nil
+    ) {
+        // The server treats empty rules as omitted and would keep the stored ones.
+        guard !schedule.quietHours.isEmpty else {
+            callback {
+                completion?(.failure(ClientError.QuietHoursEmpty()))
+            }
+            return
+        }
+
+        let userPreference = PushPreferenceInput(
+            schedule: PushScheduleInput(schedule)
+        )
+
+        currentUserUpdater.setPushPreference(userPreference) { result in
+            // Older backends ignore the field, so a schedule missing from the response was not stored.
+            let result = result.flatMap { preference -> Result<PushPreference, Error> in
+                preference.schedule == nil ? .failure(ClientError.QuietHoursNotStored()) : .success(preference)
+            }
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Removes the quiet hours schedule of the current user's push notifications.
+    /// - Parameter completion: The completion call once the request is finished.
+    func removeQuietHours(
+        completion: (@MainActor (Result<PushPreference, Error>) -> Void)? = nil
+    ) {
+        let userPreference = PushPreferenceInput(removeSchedule: true)
+
+        currentUserUpdater.setPushPreference(userPreference) { result in
+            self.callback {
+                completion?(result)
+            }
+        }
+    }
+
+    /// Loads the draft messages for the current user.
+    ///
+    /// It will load the first page of drafts of the current user.
+    /// `loadMoreDraftMessages` can be used to load the next pages.
+    ///
+    /// - Parameters:
+    ///  - query: The query for filtering the drafts.
+    ///  - completion: Called when the API call is finished.
+    ///  It is optional since it can be observed from the delegate events.
+    func loadDraftMessages(
+        query: DraftListQuery = DraftListQuery(),
+        completion: (@MainActor (Result<[DraftMessage], Error>) -> Void)? = nil
+    ) {
+        draftListQuery = query
+        createDraftMessagesObserver(query: query)
+        draftMessagesRepository.loadDrafts(query: query) { result in
+            self.callback {
+                switch result {
+                case let .success(response):
+                    self.draftMessagesNextCursor = response.next
+                    self.hasLoadedAllDrafts = response.next == nil
+                    completion?(.success(response.drafts))
+                case let .failure(error):
+                    completion?(.failure(error))
+                }
+            }
+        }
+    }
+
+    /// Loads more draft messages for the current user.
+    ///
+    /// - Parameters:
+    ///  - limit: The number of draft messages to load. If `nil`, the default limit will be used.
+    ///  - completion: Called when the API call is finished.
+    ///  It is optional since it can be observed from the delegate events.
+    func loadMoreDraftMessages(
+        limit: Int? = nil,
+        completion: (@MainActor (Result<[DraftMessage], Error>) -> Void)? = nil
+    ) {
+        guard let nextCursor = draftMessagesNextCursor else {
+            callback {
+                completion?(.success([]))
+            }
+            return
+        }
+
+        let limit = limit ?? draftListQuery.pagination.pageSize
+        var updatedQuery = draftListQuery
+        updatedQuery.pagination = Pagination(pageSize: limit, cursor: nextCursor)
+
+        draftMessagesRepository.loadDrafts(query: updatedQuery) { result in
+            self.callback {
+                switch result {
+                case let .success(response):
+                    self.draftMessagesNextCursor = response.next
+                    self.hasLoadedAllDrafts = response.next == nil
+                    completion?(.success(response.drafts))
+                case let .failure(error):
+                    completion?(.failure(error))
+                }
+            }
+        }
+    }
+
+    /// Deletes the draft message of the given channel or thread.
+    func deleteDraftMessage(
+        for cid: ChannelId,
+        threadId: MessageId? = nil,
+        completion: (@MainActor (Error?) -> Void)? = nil
+    ) {
+        draftMessagesRepository.deleteDraft(for: cid, threadId: threadId) { error in
             self.callback {
                 completion?(error)
             }
@@ -258,15 +691,44 @@ public extension CurrentChatUserController {
 extension CurrentChatUserController {
     struct Environment {
         var currentUserObserverBuilder: (
-            _ context: NSManagedObjectContext,
+            _ database: DatabaseContainer,
             _ fetchRequest: NSFetchRequest<CurrentUserDTO>,
             _ itemCreator: @escaping (CurrentUserDTO) throws -> CurrentChatUser,
             _ fetchedResultsControllerType: NSFetchedResultsController<CurrentUserDTO>.Type
-        ) -> EntityDatabaseObserver<CurrentChatUser, CurrentUserDTO> = EntityDatabaseObserver.init
-        
-        var currentUserUpdaterBuilder = CurrentUserUpdater.init
+        ) -> BackgroundEntityDatabaseObserver<CurrentChatUser, CurrentUserDTO> = {
+            BackgroundEntityDatabaseObserver(
+                database: $0,
+                fetchRequest: $1,
+                itemCreator: $2,
+                itemReuseKeyPaths: (\CurrentChatUser.id, \CurrentUserDTO.user.id),
+                fetchedResultsControllerType: $3
+            )
+        }
 
-        var chatClientUpdaterBuilder = ChatClientUpdater.init
+        var currentUserActiveLiveLocationMessagesObserverBuilder: (
+            _ database: DatabaseContainer,
+            _ fetchRequest: NSFetchRequest<MessageDTO>,
+            _ itemCreator: @escaping (MessageDTO) throws -> ChatMessage,
+            _ fetchedResultsControllerType: NSFetchedResultsController<MessageDTO>.Type
+        ) -> BackgroundListDatabaseObserver<ChatMessage, MessageDTO> = {
+            .init(
+                database: $0,
+                fetchRequest: $1,
+                itemCreator: $2,
+                itemReuseKeyPaths: (\ChatMessage.id, \MessageDTO.id),
+                fetchedResultsControllerType: $3
+            )
+        }
+        
+        var draftMessagesObserverBuilder: (
+            _ database: DatabaseContainer,
+            _ fetchRequest: NSFetchRequest<MessageDTO>,
+            _ itemCreator: @escaping (MessageDTO) throws -> DraftMessage
+        ) -> BackgroundListDatabaseObserver<DraftMessage, MessageDTO> = {
+            .init(database: $0, fetchRequest: $1, itemCreator: $2, itemReuseKeyPaths: (\DraftMessage.id, \MessageDTO.id))
+        }
+
+        var currentUserUpdaterBuilder = CurrentUserUpdater.init
     }
 }
 
@@ -286,31 +748,150 @@ private extension EntityChange where Item == UnreadCount {
 }
 
 private extension CurrentChatUserController {
-    func createUserObserver() -> EntityDatabaseObserver<CurrentChatUser, CurrentUserDTO> {
+    func createUserObserver() -> BackgroundEntityDatabaseObserver<CurrentChatUser, CurrentUserDTO> {
         environment.currentUserObserverBuilder(
-            client.databaseContainer.viewContext,
+            client.databaseContainer,
             CurrentUserDTO.defaultFetchRequest,
             { try $0.asModel() },
             NSFetchedResultsController<CurrentUserDTO>.self
         )
+    }
+
+    func createActiveLiveLocationMessagesObserver() -> BackgroundListDatabaseObserver<ChatMessage, MessageDTO>? {
+        guard let currentUserId = client.currentUserId else {
+            return nil
+        }
+        return environment.currentUserActiveLiveLocationMessagesObserverBuilder(
+            client.databaseContainer,
+            MessageDTO.currentUserActiveLiveLocationMessagesFetchRequest(
+                currentUserId: currentUserId,
+                channelId: nil
+            ),
+            { try $0.asModel() },
+            NSFetchedResultsController<MessageDTO>.self
+        )
+    }
+    
+    private func createMemberUpdater() -> ChannelMemberUpdater {
+        .init(database: client.databaseContainer, apiClient: client.apiClient)
+    }
+
+    private func createMessageUpdater() -> MessageUpdater {
+        .init(
+            isLocalStorageEnabled: client.config.isLocalStorageEnabled,
+            messageRepository: client.messageRepository,
+            database: client.databaseContainer,
+            apiClient: client.apiClient
+        )
+    }
+
+    @discardableResult
+    private func createDraftMessagesObserver(query: DraftListQuery) -> BackgroundListDatabaseObserver<DraftMessage, MessageDTO> {
+        let observer = environment.draftMessagesObserverBuilder(
+            client.databaseContainer,
+            MessageDTO.draftMessagesFetchRequest(query: query),
+            { DraftMessage(try $0.asModel()) }
+        )
+        observer.onDidChange = { [weak self] _ in
+            guard let self = self else { return }
+            self.delegateCallback {
+                $0.currentUserController(self, didChangeDraftMessages: self.draftMessages)
+            }
+        }
+        try? observer.startObserving()
+        draftMessagesObserver = observer
+        return observer
     }
 }
 
 // MARK: - Delegates
 
 /// `CurrentChatUserController` uses this protocol to communicate changes to its delegate.
-public protocol CurrentChatUserControllerDelegate: AnyObject {
+@MainActor public protocol CurrentChatUserControllerDelegate: AnyObject {
     /// The controller observed a change in the `UnreadCount`.
-    func currentUserController(_ controller: CurrentChatUserController, didChangeCurrentUserUnreadCount: UnreadCount)
-    
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didChangeCurrentUserUnreadCount: UnreadCount
+    )
+
     /// The controller observed a change in the `CurrentChatUser` entity.
-    func currentUserController(_ controller: CurrentChatUserController, didChangeCurrentUser: EntityChange<CurrentChatUser>)
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didChangeCurrentUser: EntityChange<CurrentChatUser>
+    )
+
+    /// The current user has currently active live location attachments.
+    func currentUserControllerDidStartSharingLiveLocation(
+        _ controller: CurrentChatUserController
+    )
+
+    /// The current user has no active live location attachments.
+    func currentUserControllerDidStopSharingLiveLocation(
+        _ controller: CurrentChatUserController
+    )
+
+    /// The current user active location messages have changed.
+    ///
+    /// Whenever there are changes of the current user's live location messages, this method is called.
+    ///
+    /// - If a new live location message is added, the array will contain the new message.
+    /// - If a live location message is removed, the array will not contain it anymore.
+    /// - If all live location messages are removed, the array will be empty.
+    ///
+    /// - Parameter messages: The currently active live location messages for the current user.
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didChangeActiveLiveLocationMessages messages: [ChatMessage]
+    )
+
+    /// There was an error when updating one of the live location messages.
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didFailToUpdateLiveLocation location: SharedLocation,
+        with error: Error
+    )
+
+    /// The controller observed a change in the draft messages.
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didChangeDraftMessages draftMessages: [DraftMessage]
+    )
 }
 
 public extension CurrentChatUserControllerDelegate {
-    func currentUserController(_ controller: CurrentChatUserController, didChangeCurrentUserUnreadCount: UnreadCount) {}
-    
-    func currentUserController(_ controller: CurrentChatUserController, didChangeCurrentUser: EntityChange<CurrentChatUser>) {}
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didChangeCurrentUserUnreadCount: UnreadCount
+    ) {}
+
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didChangeCurrentUser: EntityChange<CurrentChatUser>
+    ) {}
+
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didChangeActiveLiveLocationMessages messages: [ChatMessage]
+    ) {}
+
+    func currentUserControllerDidStartSharingLiveLocation(
+        _ controller: CurrentChatUserController
+    ) {}
+
+    func currentUserControllerDidStopSharingLiveLocation(
+        _ controller: CurrentChatUserController
+    ) {}
+
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didFailToUpdateLiveLocation location: SharedLocation,
+        with error: Error
+    ) {}
+
+    func currentUserController(
+        _ controller: CurrentChatUserController,
+        didChangeDraftMessages draftMessages: [DraftMessage]
+    ) {}
 }
 
 public extension CurrentChatUserController {
@@ -318,18 +899,5 @@ public extension CurrentChatUserController {
     var delegate: CurrentChatUserControllerDelegate? {
         get { multicastDelegate.mainDelegate }
         set { multicastDelegate.set(mainDelegate: newValue) }
-    }
-}
-
-// MARK: - Deprecations
-
-public extension CurrentChatUserController {
-    @available(
-        *,
-        deprecated,
-        message: "use addDevice(_pushDevice:) instead. This deprecated function doesn't correctly support multiple push providers."
-    )
-    func addDevice(token: Data, pushProvider: PushProvider = .apn, completion: ((Error?) -> Void)? = nil) {
-        addDevice(.apn(token: token), completion: completion)
     }
 }

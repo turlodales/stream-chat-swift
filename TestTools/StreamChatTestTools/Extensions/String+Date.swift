@@ -1,13 +1,14 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 @testable import StreamChat
+@testable import StreamCore
 
 public extension String {
-    /// Converst a string to `Date`. Only for testing!
+    /// Converts a string to `Date`. Only for testing!
     func toDate() -> Date {
-        DateFormatter.Stream.rfc3339Date(from: self)!
+        RFC3339DateFormatter.date(from: self)!
     }
 }

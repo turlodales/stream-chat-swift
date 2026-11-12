@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -46,7 +46,7 @@ open class ChatMessageActionControl: _Control, AppearanceProvider {
         containerStackView.insetsLayoutMarginsFromSafeArea = false
         addTarget(self, action: #selector(touchUpInsideHandler(_:)), for: .touchUpInside)
     }
-    
+
     override open func setUpLayout() {
         super.setUpLayout()
         embed(containerStackView)
@@ -58,20 +58,21 @@ open class ChatMessageActionControl: _Control, AppearanceProvider {
 
     override open func tintColorDidChange() {
         super.tintColorDidChange()
-        
+
+        guard UIApplication.shared.applicationState == .active else { return }
         updateContentIfNeeded()
     }
-    
+
     override open func updateContent() {
         let imageTintСolor: UIColor
         let titleTextColor: UIColor
 
         if content?.isDestructive == true {
-            imageTintСolor = appearance.colorPalette.alert
+            imageTintСolor = appearance.colorPalette.accentError
             titleTextColor = imageTintСolor
         } else {
-            imageTintСolor = content?.isPrimary == true ? tintColor : appearance.colorPalette.inactiveTint
-            titleTextColor = appearance.colorPalette.text
+            imageTintСolor = content?.isPrimary == true ? tintColor : appearance.colorPalette.accentNeutral
+            titleTextColor = appearance.colorPalette.textPrimary
         }
 
         titleLabel.text = content?.title
@@ -79,15 +80,15 @@ open class ChatMessageActionControl: _Control, AppearanceProvider {
             titleLabel.textColor = appearance.colorPalette.highlightedColorForColor(titleTextColor)
             imageView.image = content?.icon
                 .tinted(with: appearance.colorPalette.highlightedColorForColor(imageTintСolor))
-            backgroundColor = appearance.colorPalette.highlightedColorForColor(appearance.colorPalette.background)
+            backgroundColor = appearance.colorPalette.highlightedColorForColor(appearance.colorPalette.backgroundCoreApp)
         } else {
             titleLabel.textColor = titleTextColor
             imageView.image = content?.icon
                 .tinted(with: imageTintСolor)
-            backgroundColor = appearance.colorPalette.background
+            backgroundColor = appearance.colorPalette.backgroundCoreApp
         }
     }
-    
+
     /// Triggered when `ChatMessageActionControl` is tapped.
     @objc open func touchUpInsideHandler(_ sender: Any) {
         guard let content = content else { return log.assertionFailure("Content is unexpectedly nil") }

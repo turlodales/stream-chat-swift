@@ -1,0 +1,62 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import StreamChat
+import UIKit
+
+/// The delegate used `FileAttachmentViewInjector` to communicate user interactions.
+@MainActor public protocol FileActionContentViewDelegate: ChatMessageContentViewDelegate {
+    /// Called when the user taps on the attachment.
+    func didTapOnAttachment(_ attachment: ChatMessageFileAttachment, at indexPath: IndexPath?)
+    
+    /// Called when the user taps on the action of the attachment. (Ex: Retry)
+    func didTapActionOnAttachment(_ attachment: ChatMessageFileAttachment, at indexPath: IndexPath?)
+}
+
+public class FilesAttachmentViewInjector: AttachmentViewInjector {
+    open lazy var fileAttachmentView: ChatMessageFileAttachmentListView = {
+        let attachmentListView = contentView
+            .components
+            .fileAttachmentListView
+            .init()
+
+        attachmentListView.didTapOnAttachment = { [weak self] attachment in
+            guard
+                let delegate = self?.contentView.delegate as? FileActionContentViewDelegate
+            else { return }
+            delegate.didTapOnAttachment(attachment, at: self?.contentView.indexPath?())
+        }
+
+        attachmentListView.didTapActionOnAttachment = { [weak self] attachment in
+            guard
+                let delegate = self?.contentView.delegate as? FileActionContentViewDelegate
+            else { return }
+            delegate.didTapActionOnAttachment(attachment, at: self?.contentView.indexPath?())
+        }
+
+        return attachmentListView.withoutAutoresizingMaskConstraints
+    }()
+
+    override open func contentViewDidLayout(options: ChatMessageLayoutOptions) {
+        contentView.bubbleContentContainer.insertArrangedSubview(fileAttachmentView, at: 0, respectsLayoutMargins: false)
+    }
+
+    override open func contentViewDidUpdateContent() {
+        fileAttachmentView.content = fileAttachments
+    }
+}
+
+public extension FilesAttachmentViewInjector {
+    var fileAttachments: [ChatMessageFileAttachment] {
+        let fileAttachments = contentView.content?.fileAttachments ?? []
+        let audioAttachments = (contentView.content?.audioAttachments ?? [])
+            .compactMap { $0.asAttachment(payloadType: FileAttachmentPayload.self) }
+        if fileAttachmentView.components.isVoiceRecordingEnabled {
+            return fileAttachments + audioAttachments
+        }
+        let voiceRecordingAttachments = (contentView.content?.voiceRecordingAttachments ?? [])
+            .compactMap { $0.asAttachment(payloadType: FileAttachmentPayload.self) }
+        return fileAttachments + audioAttachments + voiceRecordingAttachments
+    }
+}

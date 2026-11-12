@@ -1,0 +1,39 @@
+name: Copyright
+
+on:
+  schedule:
+    # Runs "At 08:00 on day-of-month 1 in January"
+    - cron: '0 8 1 1 *'
+
+  workflow_dispatch:
+
+env:
+  HOMEBREW_NO_INSTALL_CLEANUP: 1 # Disable cleanup for homebrew, we don't need it on CI
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  copyright:
+    name: Copyright
+    runs-on: macos-15
+    steps:
+    - uses: actions/checkout@v7
+    - uses: ./.github/actions/ruby-cache
+    - run: bundle exec fastlane copyright
+      timeout-minutes: 5
+      env:
+        GITHUB_TOKEN: ${{ secrets.DANGER_GITHUB_API_TOKEN }}
+    - uses: slackapi/slack-github-action@v4
+      if: failure()
+      with:
+        webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+        webhook-type: incoming-webhook
+        payload: |
+          text: ${{ toJSON('You shall not pass!') }}
+          attachments:
+            - color: danger
+              title: ${{ toJSON(format('{0}: {1} ({2})', github.workflow, github.job, job.status)) }}
+              text: ${{ toJSON(format('Repository: {0} | Commit: {1} | Actor: {2}', github.repository, github.sha, github.actor)) }}
+              footer: ${{ toJSON(format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id)) }}

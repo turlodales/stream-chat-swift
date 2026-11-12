@@ -1,17 +1,29 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
-public enum StreamRuntimeCheck {
-    /// Enables assertions thrown by the Stream SDK.
+public extension StreamRuntimeCheck {
+    /// For *internal use* only
     ///
-    /// When set to false, a message will be logged on console, but the assertion will not be thrown.
-    public static var assertionsEnabled = false
+    ///  Established the maximum depth of relationships to fetch when performing a mapping
+    ///
+    ///  Eg.
+    ///  Relationship:    Message --->  QuotedMessage --->    QuotedMessage   ---X---     NIL
+    ///  Relationship:    Channel  --->      Message         --->     QuotedMessage  ---X---     NIL
+    ///  Depth:                     0                         1                                     2                               3
+    nonisolated(unsafe) static var _backgroundMappingRelationshipsMaxDepth = 2
 
     /// For *internal use* only
     ///
-    ///  Enables lazy mapping of DB models
-    public static var _isLazyMappingEnabled = true
+    ///  Returns true if the maximum depth of relationships to fetch when performing a mapping is not yet met
+    static func _canFetchRelationship(currentDepth: Int) -> Bool {
+        currentDepth <= _backgroundMappingRelationshipsMaxDepth
+    }
+    
+    /// For *internal use* only
+    ///
+    /// Core Data prefetches data used for creating immutable model objects (faulting is disabled).
+    nonisolated(unsafe) static var _isDatabasePrefetchingEnabled = false
 }

@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -47,7 +47,7 @@ final class MessageRepositoryTests: XCTestCase {
 
     func test_sendMessage_noChannel() throws {
         let id = MessageId.unique
-        let message = try createMessage(id: id, localState: .pendingSend)
+        nonisolated(unsafe) let message = try createMessage(id: id, localState: .pendingSend)
         try database.writeSynchronously { _ in
             message.channel = nil
         }
@@ -61,9 +61,9 @@ final class MessageRepositoryTests: XCTestCase {
         try createMessage(id: id, localState: .pendingSend)
         repository.sendMessage(with: id) { _ in }
 
-        wait(for: [apiClient.request_expectation], timeout: 0.5)
+        wait(for: [apiClient.request_expectation], timeout: defaultTimeout)
 
-        var currentMessageState: LocalMessageState?
+        nonisolated(unsafe) var currentMessageState: LocalMessageState?
         try database.writeSynchronously { session in
             currentMessageState = session.message(id: id)?.localMessageState
         }
@@ -75,46 +75,82 @@ final class MessageRepositoryTests: XCTestCase {
         let id = MessageId.unique
         try createMessage(id: id, localState: .pendingSend)
         let expectation = self.expectation(description: "Send Message completes")
-        var result: Result<ChatMessage, MessageRepositoryError>?
+        nonisolated(unsafe) var result: Result<ChatMessage, MessageRepositoryError>?
         repository.sendMessage(with: id) {
             result = $0
             expectation.fulfill()
         }
 
-        wait(for: [apiClient.request_expectation], timeout: 0.5)
+        wait(for: [apiClient.request_expectation], timeout: defaultTimeout)
 
         let error = NSError(domain: "", code: 1, userInfo: nil)
-        (apiClient.request_completion as? (Result<MessagePayload.Boxed, Error>) -> Void)?(.failure(error))
+        (apiClient.request_completion as? (Result<SendMessageResponsePayload, Error>) -> Void)?(.failure(error))
 
-        wait(for: [expectation], timeout: 0.5)
+        wait(for: [expectation], timeout: defaultTimeout)
 
-        var currentMessageState: LocalMessageState?
+        nonisolated(unsafe) var currentMessageState: LocalMessageState?
         try database.writeSynchronously { session in
             currentMessageState = session.message(id: id)?.localMessageState
         }
 
         XCTAssertEqual(currentMessageState, .sendingFailed)
-        XCTAssertEqual(result?.error, MessageRepositoryError.failedToSendMessage)
+        switch result?.error {
+        case .failedToSendMessage:
+            break
+        default:
+            XCTFail()
+        }
+    }
+
+    func test_sendMessage_APIFailure_whenDuplicatedMessage_shouldNotMarkMessageAsFailed() throws {
+        let id = MessageId.unique
+        try createMessage(id: id, localState: .pendingSend)
+        let expectation = self.expectation(description: "Send Message completes")
+        nonisolated(unsafe) var result: Result<ChatMessage, MessageRepositoryError>?
+        repository.sendMessage(with: id) {
+            result = $0
+            expectation.fulfill()
+        }
+
+        wait(for: [apiClient.request_expectation], timeout: defaultTimeout)
+
+        let error = ClientError(with: APIError(code: 4, message: "Message X already exists.", statusCode: 400))
+        (apiClient.request_completion as? (Result<SendMessageResponsePayload, Error>) -> Void)?(.failure(error))
+
+        wait(for: [expectation], timeout: defaultTimeout)
+
+        nonisolated(unsafe) var currentMessageState: LocalMessageState?
+        try database.writeSynchronously { session in
+            currentMessageState = session.message(id: id)?.localMessageState
+        }
+
+        XCTAssertNil(currentMessageState)
+        switch result?.error {
+        case .failedToSendMessage:
+            break
+        default:
+            XCTFail()
+        }
     }
 
     func test_sendMessage_APISuccess() throws {
         let id = MessageId.unique
         try createMessage(id: id, localState: .pendingSend)
         let expectation = self.expectation(description: "Send Message completes")
-        var result: Result<ChatMessage, MessageRepositoryError>?
+        nonisolated(unsafe) var result: Result<ChatMessage, MessageRepositoryError>?
         repository.sendMessage(with: id) {
             result = $0
             expectation.fulfill()
         }
 
-        wait(for: [apiClient.request_expectation], timeout: 0.5)
+        wait(for: [apiClient.request_expectation], timeout: defaultTimeout)
 
-        let payload = MessagePayload.Boxed(message: .dummy(messageId: id, authorUserId: .anonymous))
-        (apiClient.request_completion as? (Result<MessagePayload.Boxed, Error>) -> Void)?(.success(payload))
+        let payload = SendMessageResponsePayload.dummy(message: .dummy(messageId: id, authorUserId: .anonymous, cid: cid))
+        (apiClient.request_completion as? (Result<SendMessageResponsePayload, Error>) -> Void)?(.success(payload))
 
-        wait(for: [expectation], timeout: 0.5)
+        wait(for: [expectation], timeout: defaultTimeout)
 
-        var currentMessageState: LocalMessageState?
+        nonisolated(unsafe) var currentMessageState: LocalMessageState?
         try database.writeSynchronously { session in
             currentMessageState = session.message(id: id)?.localMessageState
         }
@@ -123,13 +159,55 @@ final class MessageRepositoryTests: XCTestCase {
         XCTAssertNotNil(result?.value)
     }
 
+    func test_sendMessage_skipPush() throws {
+        let id = MessageId.unique
+        try createMessage(id: id, localState: .pendingSend, skipPush: true)
+        let expectation = self.expectation(description: "Send Message completes")
+        repository.sendMessage(with: id) { _ in
+            expectation.fulfill()
+        }
+
+        wait(for: [apiClient.request_expectation], timeout: defaultTimeout)
+
+        let payload = SendMessageResponsePayload.dummy(message: .dummy(messageId: id, authorUserId: .anonymous, cid: cid))
+        (apiClient.request_completion as? (Result<SendMessageResponsePayload, Error>) -> Void)?(.success(payload))
+
+        wait(for: [expectation], timeout: defaultTimeout)
+
+        let expectedEndpoint = try XCTUnwrap(apiClient.request_endpoint)
+        let requestBody = try expectedEndpoint.bodyAsDictionary()
+        let skipPush = try XCTUnwrap(requestBody["skip_push"] as? Bool)
+        XCTAssertTrue(skipPush)
+    }
+
+    func test_sendMessage_skipEnrichUrl() throws {
+        let id = MessageId.unique
+        try createMessage(id: id, localState: .pendingSend, skipEnrichUrl: true)
+        let expectation = self.expectation(description: "Send Message completes")
+        repository.sendMessage(with: id) { _ in
+            expectation.fulfill()
+        }
+
+        wait(for: [apiClient.request_expectation], timeout: defaultTimeout)
+
+        let payload = SendMessageResponsePayload.dummy(message: .dummy(messageId: id, authorUserId: .anonymous, cid: cid))
+        (apiClient.request_completion as? (Result<SendMessageResponsePayload, Error>) -> Void)?(.success(payload))
+
+        wait(for: [expectation], timeout: defaultTimeout)
+
+        let expectedEndpoint = try XCTUnwrap(apiClient.request_endpoint)
+        let requestBody = try expectedEndpoint.bodyAsDictionary()
+        let skipPush = try XCTUnwrap(requestBody["skip_enrich_url"] as? Bool)
+        XCTAssertTrue(skipPush)
+    }
+
     // MARK: saveSuccessfullySentMessage
 
     func test_saveSuccessfullySentMessage_noChannel() {
         let Logger_Spy = Logger_Spy()
         Logger_Spy.injectMock()
         let id = MessageId.unique
-        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, channel: nil)
+        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous)
         let message = runSaveSuccessfullySentMessageAndWait(payload: payload)
         XCTAssertNil(message)
         XCTAssertEqual(Logger_Spy.assertionFailureCalls, 1)
@@ -139,17 +217,39 @@ final class MessageRepositoryTests: XCTestCase {
     func test_saveSuccessfullySentMessage_channelPayload_sending() throws {
         let id = MessageId.unique
         try createMessage(id: id, localState: .sending)
-        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, channel: nil)
+        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, cid: cid)
 
         let message = runSaveSuccessfullySentMessageAndWait(payload: payload)
         XCTAssertNotNil(message)
         XCTAssertNil(message?.localState)
     }
 
+    func test_saveSuccessfullySentMessage_appliesMentionedChannelMembersFromPayload() throws {
+        let id = MessageId.unique
+        let mentionedUser = UserPayload.dummy(userId: "u2", name: "Martin")
+        try createMessage(id: id, localState: .sending)
+        let payload = MessagePayload.dummy(
+            messageId: id,
+            authorUserId: .anonymous,
+            cid: cid,
+            mentionedUsers: [mentionedUser],
+            mentionedChannelMembers: [
+                "u2": MemberInfoPayload(
+                    channelRole: .member,
+                    extraData: ["is_premium": .bool(true)]
+                )
+            ]
+        )
+
+        let message = runSaveSuccessfullySentMessageAndWait(payload: payload)
+
+        XCTAssertEqual(message?.mentionedChannelMembers["u2"]?.extraData["is_premium"], .bool(true))
+    }
+
     func test_saveSuccessfullySentMessage_channelPayload_sendingFailed() throws {
         let id = MessageId.unique
         try createMessage(id: id, localState: .sendingFailed)
-        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, channel: nil)
+        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, cid: cid)
 
         let message = runSaveSuccessfullySentMessageAndWait(payload: payload)
         XCTAssertNotNil(message)
@@ -159,7 +259,7 @@ final class MessageRepositoryTests: XCTestCase {
     func test_saveSuccessfullySentMessage_channelPayload_deleting() throws {
         let id = MessageId.unique
         try createMessage(id: id, localState: .deleting)
-        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, channel: nil)
+        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, cid: cid)
 
         let message = runSaveSuccessfullySentMessageAndWait(payload: payload)
         XCTAssertNotNil(message)
@@ -171,7 +271,7 @@ final class MessageRepositoryTests: XCTestCase {
         let Logger_Spy = Logger_Spy()
         Logger_Spy.injectMock()
         let id = MessageId.unique
-        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, channel: nil)
+        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous)
 
         let message = runSaveSuccessfullySentMessageAndWait(payload: payload)
 
@@ -185,10 +285,11 @@ final class MessageRepositoryTests: XCTestCase {
 
     func test_saveSuccessfullySentMessage_channelPayload_newMessageWithChannel() throws {
         let id = MessageId.unique
-        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, channel: .dummy(cid: cid))
+        try database.createChannel(cid: cid)
+        let payload = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, cid: cid)
         let message = runSaveSuccessfullySentMessageAndWait(payload: payload)
         let dbMessage = self.message(for: id)
-        var dbChannel: ChatChannel?
+        nonisolated(unsafe) var dbChannel: ChatChannel?
         try database.writeSynchronously { session in
             dbChannel = try session.channel(cid: self.cid)?.asModel()
         }
@@ -200,12 +301,12 @@ final class MessageRepositoryTests: XCTestCase {
 
     private func runSaveSuccessfullySentMessageAndWait(payload: MessagePayload) -> ChatMessage? {
         let expectation = self.expectation(description: "Save Message completes")
-        var result: ChatMessage?
-        repository.saveSuccessfullySentMessage(cid: cid, message: payload) {
-            result = $0
+        nonisolated(unsafe) var result: ChatMessage?
+        repository.saveSuccessfullySentMessage(message: payload) {
+            result = $0.value
             expectation.fulfill()
         }
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
         return result
     }
 
@@ -219,7 +320,7 @@ final class MessageRepositoryTests: XCTestCase {
         repository.saveSuccessfullyEditedMessage(for: id) {
             expectation.fulfill()
         }
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
 
         let dbMessage = message(for: id)
         XCTAssertNotNil(dbMessage)
@@ -233,30 +334,30 @@ final class MessageRepositoryTests: XCTestCase {
         let messageId: MessageId = .unique
 
         // Simulate `getMessage(cid:, messageId:)` call
-        repository.getMessage(cid: cid, messageId: messageId)
+        repository.getMessage(cid: cid, messageId: messageId, store: true)
 
         // Assert correct endpoint is called
-        let expectedEndpoint: Endpoint<MessagePayload.Boxed> = .getMessage(messageId: messageId)
+        let expectedEndpoint: Endpoint<GetMessageResponse> = .getMessage(id: messageId)
         XCTAssertEqual(apiClient.request_endpoint, AnyEndpoint(expectedEndpoint))
     }
 
     func test_getMessage_propogatesRequestError() {
         // Simulate `getMessage(cid:, messageId:)` call
-        var completionCalledError: Error?
-        repository.getMessage(cid: .unique, messageId: .unique) {
+        nonisolated(unsafe) var completionCalledError: Error?
+        repository.getMessage(cid: .unique, messageId: .unique, store: true) {
             completionCalledError = $0.error
         }
 
         // Simulate API response with failure
         let error = TestError()
-        apiClient.test_simulateResponse(Result<MessagePayload.Boxed, Error>.failure(error))
+        apiClient.test_simulateResponse(Result<GetMessageResponse, Error>.failure(error))
 
         // Assert the completion is called with the error
         AssertAsync.willBeEqual(completionCalledError as? TestError, error)
     }
 
-    func test_getMessage_propogatesDatabaseError() throws {
-        let messagePayload: MessagePayload.Boxed = .init(
+    func test_getMessage_propagatesDatabaseError() throws {
+        let messagePayload: GetMessageResponse = .dummy(
             message: .dummy(messageId: .unique, authorUserId: .unique)
         )
         let channelId = ChannelId.unique
@@ -269,19 +370,19 @@ final class MessageRepositoryTests: XCTestCase {
         database.write_errorResponse = testError
 
         // Simulate `getMessage(cid:, messageId:)` call
-        var completionCalledError: Error?
-        repository.getMessage(cid: channelId, messageId: messagePayload.message.id) {
+        nonisolated(unsafe) var completionCalledError: Error?
+        repository.getMessage(cid: channelId, messageId: messagePayload.message.id, store: true) {
             completionCalledError = $0.error
         }
 
         // Simulate API response with success
-        apiClient.test_simulateResponse(Result<MessagePayload.Boxed, Error>.success(messagePayload))
+        apiClient.test_simulateResponse(Result<GetMessageResponse, Error>.success(messagePayload))
 
-        // Assert database error is propogated
+        // Assert database error is propagated
         AssertAsync.willBeEqual(completionCalledError as? TestError, testError)
     }
 
-    func test_getMessage_savesMessageToDatabase() throws {
+    func test_getMessage_savesMessageToDatabase_whenStoreIsTrue() throws {
         let currentUserId: UserId = .unique
         let messageId: MessageId = .unique
         let cid: ChannelId = .unique
@@ -293,22 +394,112 @@ final class MessageRepositoryTests: XCTestCase {
         try database.createChannel(cid: cid)
 
         // Simulate `getMessage(cid:, messageId:)` call
-        var completionCalled = false
-        repository.getMessage(cid: cid, messageId: messageId) { _ in
+        nonisolated(unsafe) var completionCalled = false
+        repository.getMessage(cid: cid, messageId: messageId, store: true) { _ in
             completionCalled = true
         }
 
         // Simulate API response with success
-        let messagePayload: MessagePayload.Boxed = .init(
-            message: .dummy(messageId: messageId, authorUserId: currentUserId)
+        let messagePayload: GetMessageResponse = .dummy(
+            message: .dummy(messageId: messageId, authorUserId: currentUserId, cid: cid)
         )
-        apiClient.test_simulateResponse(Result<MessagePayload.Boxed, Error>.success(messagePayload))
+        apiClient.test_simulateResponse(Result<GetMessageResponse, Error>.success(messagePayload))
 
         // Assert completion is called
         AssertAsync.willBeTrue(completionCalled)
 
         // Assert fetched message is saved to the database
         XCTAssertNotNil(database.viewContext.message(id: messageId))
+    }
+
+    func test_getMessage_doesNotSaveMessageToDatabase_whenStoreIsFalse() throws {
+        let currentUserId: UserId = .unique
+        let messageId: MessageId = .unique
+        let cid: ChannelId = .unique
+
+        // Create current user in the database
+        try database.createCurrentUser(id: currentUserId)
+
+        // Create channel in the database
+        try database.createChannel(cid: cid)
+
+        // Simulate `getMessage(cid:, messageId:)` call
+        nonisolated(unsafe) var completionCalled = false
+        repository.getMessage(cid: cid, messageId: messageId, store: false) { _ in
+            completionCalled = true
+        }
+
+        // Simulate API response with success
+        let messagePayload: GetMessageResponse = .dummy(
+            message: .dummy(messageId: messageId, authorUserId: currentUserId, cid: cid)
+        )
+        apiClient.test_simulateResponse(Result<GetMessageResponse, Error>.success(messagePayload))
+
+        // Assert completion is called
+        AssertAsync.willBeTrue(completionCalled)
+
+        // Assert fetched message is NOT saved to the database
+        XCTAssertNil(database.viewContext.message(id: messageId))
+    }
+    
+    func test_getMessageBefore_returnsCorrectResult() throws {
+        let cid = ChannelId.unique
+        try database.createCurrentUser()
+        try database.writeSynchronously { session in
+            let messages = (0..<5).map { index in
+                MessagePayload.dummy(
+                    messageId: "\(index)",
+                    createdAt: Date(timeIntervalSinceReferenceDate: TimeInterval(index)),
+                    cid: cid
+                )
+            }
+            try session.saveChannel(
+                payload: ChannelPayload.dummy(
+                    channel: .dummy(cid: cid),
+                    messages: messages
+                )
+            )
+        }
+        let result = try waitFor { done in
+            repository.getMessage(before: .init(messageId: "3"), in: cid, completion: done)
+        }
+        switch result {
+        case .success(let messageId):
+            XCTAssertEqual("2", messageId)
+        case .failure(let error):
+            XCTFail(error.localizedDescription)
+        }
+    }
+
+    func test_getMessageBefore_returnsCorrectResult_messageTimestamp() throws {
+        let cid = ChannelId.unique
+        try database.createCurrentUser()
+        try database.writeSynchronously { session in
+            let messages = (0..<5).map { index in
+                MessagePayload.dummy(
+                    messageId: "\(index)",
+                    createdAt: Date(timeIntervalSinceReferenceDate: TimeInterval(index)),
+                    cid: cid
+                )
+            }
+            try session.saveChannel(
+                payload: ChannelPayload.dummy(
+                    channel: .dummy(cid: cid),
+                    messages: messages
+                )
+            )
+        }
+        // Use a timestamp between message "2" and "3" to get message "2"
+        let timestamp = Date(timeIntervalSinceReferenceDate: 2.5)
+        let result = try waitFor { done in
+            repository.getMessage(before: .init(messageTimestamp: timestamp), in: cid, completion: done)
+        }
+        switch result {
+        case .success(let messageId):
+            XCTAssertEqual("2", messageId)
+        case .failure(let error):
+            XCTFail(error.localizedDescription)
+        }
     }
 
     // MARK: markMessage
@@ -337,10 +528,10 @@ final class MessageRepositoryTests: XCTestCase {
 
     private func runUpdateMessageLocalStateAndWait(id: MessageId, to state: LocalMessageState?) {
         let expectation = self.expectation(description: "Mark Message completes")
-        repository.updateMessage(withID: id, localState: state) {
+        repository.updateMessage(withID: id, localState: state) { _ in
             expectation.fulfill()
         }
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
     }
 
     // MARK: saveSuccessfullyDeletedMessage
@@ -357,25 +548,22 @@ final class MessageRepositoryTests: XCTestCase {
     func test_saveSuccessfullyDeletedMessage_nonExistingChannel() throws {
         let id = MessageId.unique
         try createMessage(id: id, localState: .deleting)
-        try database.writeSynchronously { session in
-            let message = session.message(id: id)
-            message?.channel = nil
-        }
 
-        let message = MessagePayload.dummy(messageId: id, authorUserId: .anonymous)
+        // The channel the payload points at is not in the database
+        let message = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, cid: .unique)
         let error = runSaveSuccessfullyDeletedMessageAndWait(message: message)
 
         let dbMessage = self.message(for: id)
         XCTAssertNotNil(dbMessage)
         XCTAssertEqual(dbMessage?.localState, .deleting)
-        XCTAssertNil(error)
+        XCTAssertNotNil(error)
     }
 
     func test_saveSuccessfullyDeletedMessage_noHardDelete() throws {
         let id = MessageId.unique
         try createMessage(id: id, localState: .deleting)
 
-        let message = MessagePayload.dummy(messageId: id, authorUserId: .anonymous)
+        let message = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, cid: cid)
         let error = runSaveSuccessfullyDeletedMessageAndWait(message: message)
 
         let dbMessage = self.message(for: id)
@@ -392,30 +580,261 @@ final class MessageRepositoryTests: XCTestCase {
             message?.isHardDeleted = true
         }
 
-        let message = MessagePayload.dummy(messageId: id, authorUserId: .anonymous)
+        let message = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, cid: cid)
         let error = runSaveSuccessfullyDeletedMessageAndWait(message: message)
 
         XCTAssertNil(self.message(for: id))
         XCTAssertNil(error)
     }
 
+    func test_saveSuccessfullyDeletedMessage_hardDelete_shouldDeleteReplies() throws {
+        let id = MessageId.unique
+        let replyId = MessageId.unique
+        try createMessage(id: id, localState: .deleting)
+        try database.writeSynchronously { session in
+            let message = try XCTUnwrap(session.message(id: id))
+            let cid = try XCTUnwrap(message.cid)
+            _ = try session.saveMessage(
+                payload: .dummy(messageId: replyId, parentId: message.id, cid: ChannelId(cid: cid)),
+                syncOwnReactions: false,
+                cache: nil
+            )
+            message.isHardDeleted = true
+        }
+
+        let message = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, cid: cid)
+        let error = runSaveSuccessfullyDeletedMessageAndWait(message: message)
+
+        XCTAssertNil(self.message(for: id))
+        XCTAssertNil(self.message(for: replyId))
+        XCTAssertNil(error)
+    }
+
+    func test_saveSuccessfullyDeletedMessage_noHardDelete_shouldNotDeleteReplies() throws {
+        let id = MessageId.unique
+        let replyId = MessageId.unique
+        try createMessage(id: id, localState: .deleting)
+        try database.writeSynchronously { session in
+            let message = try XCTUnwrap(session.message(id: id))
+            let cid = try XCTUnwrap(message.cid)
+            _ = try session.saveMessage(
+                payload: .dummy(messageId: replyId, parentId: message.id, cid: ChannelId(cid: cid)),
+                syncOwnReactions: false,
+                cache: nil
+            )
+        }
+
+        let message = MessagePayload.dummy(messageId: id, authorUserId: .anonymous, cid: cid)
+        let error = runSaveSuccessfullyDeletedMessageAndWait(message: message)
+
+        XCTAssertNotNil(self.message(for: id))
+        XCTAssertNotNil(self.message(for: replyId))
+        XCTAssertNil(error)
+    }
+
     private func runSaveSuccessfullyDeletedMessageAndWait(message: MessagePayload) -> Error? {
         let expectation = self.expectation(description: "Mark Message completes")
-        var error: Error?
+        nonisolated(unsafe) var error: Error?
         repository.saveSuccessfullyDeletedMessage(message: message) {
             error = $0
             expectation.fulfill()
         }
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
         return error
     }
 
     private func message(for id: MessageId) -> ChatMessage? {
-        var dbMessage: ChatMessage?
+        nonisolated(unsafe) var dbMessage: ChatMessage?
         try? database.writeSynchronously { session in
             dbMessage = try? session.message(id: id)?.asModel()
         }
         return dbMessage
+    }
+
+    // MARK: saveSentReaction
+
+    func test_saveSentReaction_savesReactionAndReconcilesMessage() throws {
+        let cid = ChannelId(type: .messaging, id: "c")
+        let messageId = "message_id"
+        let userId = "user_id"
+        let reactionType: MessageReactionType = "reaction"
+        let version = "version"
+
+        try setUpReactionMessage(cid: cid, messageId: messageId, userId: userId)
+        try database.writeSynchronously { session in
+            let reaction = try session.addReaction(
+                to: messageId,
+                type: reactionType,
+                score: 1,
+                enforceUnique: false,
+                extraData: [:],
+                localState: .sending
+            )
+            reaction.version = version
+        }
+
+        try waitFor { done in
+            repository.saveSentReaction(
+                message: .dummy(messageId: messageId, authorUserId: userId, cid: cid, reactionScores: [reactionType: 3]),
+                reaction: .dummy(type: reactionType, score: 3, messageId: messageId, user: .dummy(userId: userId)),
+                version: version
+            ) { done(()) }
+        }
+
+        let reaction = try reactionState(messageId: messageId, userId: userId, type: reactionType)
+        XCTAssertEqual(reaction?.localState, .unknown)
+        XCTAssertEqual(reaction?.version, nil)
+        XCTAssertEqual(reaction?.score, 3)
+        XCTAssertEqual(message(for: messageId)?.reactionScores, [reactionType: 3])
+    }
+
+    func test_saveSentReaction_whenNewerLocalVersionExists_keepsLocalReactionState() throws {
+        let cid = ChannelId(type: .messaging, id: "c")
+        let messageId = "message_id"
+        let userId = "user_id"
+        let reactionType: MessageReactionType = "reaction"
+
+        try setUpReactionMessage(cid: cid, messageId: messageId, userId: userId)
+        try database.writeSynchronously { session in
+            let reaction = try session.addReaction(
+                to: messageId,
+                type: reactionType,
+                score: 1,
+                enforceUnique: false,
+                extraData: [:],
+                localState: .sending
+            )
+            reaction.version = "newer_version"
+        }
+
+        try waitFor { done in
+            repository.saveSentReaction(
+                message: .dummy(messageId: messageId, authorUserId: userId, cid: cid),
+                reaction: .dummy(type: reactionType, score: 3, messageId: messageId, user: .dummy(userId: userId)),
+                version: "older_version"
+            ) { done(()) }
+        }
+
+        let reaction = try reactionState(messageId: messageId, userId: userId, type: reactionType)
+        XCTAssertEqual(reaction?.localState, .sending)
+        XCTAssertEqual(reaction?.version, "newer_version")
+        XCTAssertEqual(reaction?.score, 1)
+    }
+
+    func test_saveSentReaction_whenReactionIsPendingDelete_keepsPendingDelete() throws {
+        let cid = ChannelId(type: .messaging, id: "c")
+        let messageId = "message_id"
+        let userId = "user_id"
+        let reactionType: MessageReactionType = "reaction"
+        let version = "version"
+
+        try setUpReactionMessage(cid: cid, messageId: messageId, userId: userId)
+        try database.writeSynchronously { session in
+            let reaction = try session.addReaction(
+                to: messageId,
+                type: reactionType,
+                score: 1,
+                enforceUnique: false,
+                extraData: [:],
+                localState: .pendingDelete
+            )
+            reaction.version = version
+        }
+
+        try waitFor { done in
+            repository.saveSentReaction(
+                message: .dummy(messageId: messageId, authorUserId: userId, cid: cid),
+                reaction: .dummy(type: reactionType, score: 3, messageId: messageId, user: .dummy(userId: userId)),
+                version: version
+            ) { done(()) }
+        }
+
+        let reaction = try reactionState(messageId: messageId, userId: userId, type: reactionType)
+        XCTAssertEqual(reaction?.localState, .pendingDelete)
+    }
+
+    // MARK: saveDeletedReaction
+
+    func test_saveDeletedReaction_deletesPendingDeleteReaction() throws {
+        let cid = ChannelId(type: .messaging, id: "c")
+        let messageId = "message_id"
+        let userId = "user_id"
+        let reactionType: MessageReactionType = "reaction"
+
+        try setUpReactionMessage(cid: cid, messageId: messageId, userId: userId)
+        try database.writeSynchronously { session in
+            let reaction = try session.addReaction(
+                to: messageId,
+                type: reactionType,
+                score: 1,
+                enforceUnique: false,
+                extraData: [:],
+                localState: nil
+            )
+            reaction.localState = .pendingDelete
+        }
+
+        try waitFor { done in
+            repository.saveDeletedReaction(
+                message: .dummy(messageId: messageId, authorUserId: userId, cid: cid, reactionScores: [:]),
+                reaction: .dummy(type: reactionType, messageId: messageId, user: .dummy(userId: userId))
+            ) { done(()) }
+        }
+
+        XCTAssertNil(try reactionState(messageId: messageId, userId: userId, type: reactionType))
+        XCTAssertEqual(message(for: messageId)?.reactionScores, [:])
+    }
+
+    func test_saveDeletedReaction_whenReactionIsReAdded_keepsNewReaction() throws {
+        let cid = ChannelId(type: .messaging, id: "c")
+        let messageId = "message_id"
+        let userId = "user_id"
+        let reactionType: MessageReactionType = "reaction"
+
+        try setUpReactionMessage(cid: cid, messageId: messageId, userId: userId)
+        try database.writeSynchronously { session in
+            _ = try session.addReaction(
+                to: messageId,
+                type: reactionType,
+                score: 1,
+                enforceUnique: false,
+                extraData: [:],
+                localState: .sending
+            )
+        }
+
+        try waitFor { done in
+            repository.saveDeletedReaction(
+                message: .dummy(messageId: messageId, authorUserId: userId, cid: cid),
+                reaction: .dummy(type: reactionType, messageId: messageId, user: .dummy(userId: userId))
+            ) { done(()) }
+        }
+
+        let reaction = try reactionState(messageId: messageId, userId: userId, type: reactionType)
+        XCTAssertEqual(reaction?.localState, .sending)
+    }
+
+    private func setUpReactionMessage(cid: ChannelId, messageId: MessageId, userId: UserId) throws {
+        try database.createCurrentUser(id: userId)
+        try database.writeSynchronously { session in
+            try session.saveChannel(payload: .dummy(cid: cid), query: nil, cache: nil)
+            try session.saveMessage(
+                payload: .dummy(messageId: messageId, authorUserId: userId, cid: cid),
+                syncOwnReactions: false,
+                cache: nil
+            )
+        }
+    }
+
+    private func reactionState(
+        messageId: MessageId,
+        userId: UserId,
+        type: MessageReactionType
+    ) throws -> (localState: LocalReactionState?, version: String?, score: Int64)? {
+        try database.readSynchronously { session in
+            session.reaction(messageId: messageId, userId: userId, type: type)
+                .map { ($0.localState, $0.version, $0.score) }
+        }
     }
 
     // MARK: undoReactionAddition
@@ -425,7 +844,7 @@ final class MessageRepositoryTests: XCTestCase {
         repository.undoReactionAddition(on: "message_id", type: "type") {
             expectation.fulfill()
         }
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
 
         // We are making sure the completion is executed even if the reaction is not there
         XCTAssertTrue(true)
@@ -442,12 +861,11 @@ final class MessageRepositoryTests: XCTestCase {
         try database.writeSynchronously { session in
             try session.saveChannel(payload: .dummy(cid: cid), query: nil, cache: nil)
             try session.saveMessage(
-                payload: .dummy(messageId: messageId, authorUserId: .unique),
-                for: cid,
+                payload: .dummy(messageId: messageId, authorUserId: .unique, cid: cid),
                 syncOwnReactions: false,
                 cache: nil
             )
-            _ = try session.addReaction(to: messageId, type: reactionType, score: 1, extraData: [:], localState: nil)
+            _ = try session.addReaction(to: messageId, type: reactionType, score: 1, enforceUnique: false, extraData: [:], localState: nil)
         }
 
         // We undo reaction
@@ -455,9 +873,9 @@ final class MessageRepositoryTests: XCTestCase {
         repository.undoReactionAddition(on: messageId, type: reactionType) {
             expectation.fulfill()
         }
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
 
-        var reactionState: LocalReactionState?
+        nonisolated(unsafe) var reactionState: LocalReactionState?
         try database.writeSynchronously { session in
             let reaction = session.reaction(messageId: messageId, userId: userId, type: reactionType)
             reactionState = reaction?.localState
@@ -474,7 +892,7 @@ final class MessageRepositoryTests: XCTestCase {
         repository.undoReactionDeletion(on: "message_id", type: "type", score: 10) {
             expectation.fulfill()
         }
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
 
         // We are making sure the completion is executed even if the reaction is not there
         XCTAssertTrue(true)
@@ -491,8 +909,7 @@ final class MessageRepositoryTests: XCTestCase {
         try database.writeSynchronously { session in
             try session.saveChannel(payload: .dummy(cid: cid), query: nil, cache: nil)
             try session.saveMessage(
-                payload: .dummy(messageId: messageId, authorUserId: .unique),
-                for: cid,
+                payload: .dummy(messageId: messageId, authorUserId: .unique, cid: cid),
                 syncOwnReactions: false,
                 cache: nil
             )
@@ -503,10 +920,10 @@ final class MessageRepositoryTests: XCTestCase {
         repository.undoReactionDeletion(on: messageId, type: reactionType, score: 10) {
             expectation.fulfill()
         }
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
 
-        var reactionState: LocalReactionState?
-        var reactionScore: Int64?
+        nonisolated(unsafe) var reactionState: LocalReactionState?
+        nonisolated(unsafe) var reactionScore: Int64?
         try database.writeSynchronously { session in
             let reaction = session.reaction(messageId: messageId, userId: userId, type: reactionType)
             reactionState = reaction?.localState
@@ -517,21 +934,255 @@ final class MessageRepositoryTests: XCTestCase {
         XCTAssertEqual(reactionState, .deletingFailed)
         XCTAssertEqual(reactionScore, 10)
     }
+
+    // MARK: - getActiveLiveLocationMessages
+
+    func test_getActiveLiveLocationMessages_whenCurrentUserDoesNotExist_failsWithError() throws {
+        // Create channel but no current user
+        try database.createChannel(cid: cid)
+        
+        let expectation = self.expectation(description: "getActiveLiveLocationMessages completes")
+        nonisolated(unsafe) var receivedError: Error?
+        
+        repository.getCurrentUserActiveLiveLocationMessages(for: cid) { result in
+            if case .failure(let error) = result {
+                receivedError = error
+            }
+            expectation.fulfill()
+        }
+        
+        waitForExpectations(timeout: defaultTimeout)
+        
+        XCTAssertTrue(receivedError is ClientError)
+        XCTAssertTrue(receivedError is ClientError.CurrentUserDoesNotExist)
+    }
+    
+    func test_getActiveLiveLocationMessages_returnsMessagesForChannel() throws {
+        let currentUserId: UserId = .unique
+        let messageId1: MessageId = .unique
+        let messageId2: MessageId = .unique
+        
+        // Create current user and channel
+        try database.createCurrentUser(id: currentUserId)
+        try database.createChannel(cid: cid)
+        
+        // Create messages with live location attachments
+        try database.createMessage(
+            id: messageId1,
+            authorId: currentUserId,
+            cid: cid,
+            location: .dummy(
+                channelId: cid,
+                endAt: .distantFuture,
+                latitude: 1,
+                longitude: 1,
+                messageId: messageId1
+            )
+        )
+        try database.createMessage(
+            id: messageId2,
+            authorId: currentUserId,
+            cid: cid,
+            location: .dummy(
+                channelId: cid,
+                endAt: .distantFuture,
+                latitude: 1,
+                longitude: 1,
+                messageId: messageId2
+            )
+        )
+        
+        let expectation = self.expectation(description: "getActiveLiveLocationMessages completes")
+        nonisolated(unsafe) var receivedMessages: [ChatMessage]?
+        
+        repository.getCurrentUserActiveLiveLocationMessages(for: cid) { result in
+            if case .success(let messages) = result {
+                receivedMessages = messages
+            }
+            expectation.fulfill()
+        }
+        
+        waitForExpectations(timeout: defaultTimeout)
+        
+        XCTAssertEqual(receivedMessages?.count, 2)
+        XCTAssertEqual(Set(receivedMessages?.map(\.id) ?? []), Set([messageId1, messageId2]))
+    }
+
+    // MARK: - Interceptor Tests
+    
+    final class MockSendMessageInterceptor: SendMessageInterceptor {
+        var sendMessageCalled = false
+        var receivedMessage: ChatMessage?
+        var receivedOptions: SendMessageOptions?
+        var completionResult: Result<SendMessageResponse, Error> = .success(.init(message: .mock()))
+
+        func sendMessage(
+            _ message: ChatMessage,
+            options: SendMessageOptions,
+            completion: @escaping ((Result<SendMessageResponse, Error>) -> Void)
+        ) {
+            sendMessageCalled = true
+            receivedMessage = message
+            receivedOptions = options
+            completion(completionResult)
+        }
+        
+        func simulateSuccess(message: ChatMessage) {
+            completionResult = .success(.init(message: message))
+        }
+        
+        func simulateFailure(error: Error) {
+            completionResult = .failure(error)
+        }
+    }
+
+    func test_setInterceptor_storesInterceptor() {
+        // Given
+        let interceptor = MockSendMessageInterceptor()
+        
+        // When
+        repository.setInterceptor(interceptor)
+        
+        // Then
+        XCTAssertNotNil(repository.interceptor)
+    }
+    
+    func test_sendMessage_withInterceptor_usesInterceptor() throws {
+        // Given
+        let id = MessageId.unique
+        let interceptor = MockSendMessageInterceptor()
+        repository.setInterceptor(interceptor)
+        try createMessage(id: id, localState: .pendingSend)
+
+        // When
+        interceptor.simulateSuccess(message: .mock(id: id))
+        let exp = expectation(description: "Send Message completes")
+        repository.sendMessage(with: id) { _ in
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Then
+        XCTAssertTrue(interceptor.sendMessageCalled)
+        XCTAssertEqual(interceptor.receivedMessage?.id, id)
+        XCTAssertFalse(interceptor.receivedOptions?.skipPush ?? true)
+        XCTAssertFalse(interceptor.receivedOptions?.skipEnrichUrl ?? true)
+        XCTAssertNil(apiClient.request_endpoint) // API client should not be called
+    }
+    
+    func test_sendMessage_withInterceptor_passesSkipOptions() throws {
+        // Given
+        let id = MessageId.unique
+        let interceptor = MockSendMessageInterceptor()
+        repository.setInterceptor(interceptor)
+        try createMessage(id: id, localState: .pendingSend, skipPush: true, skipEnrichUrl: true)
+        
+        // When
+        interceptor.simulateSuccess(message: .mock(id: id))
+        let exp = expectation(description: "Send Message completes")
+        repository.sendMessage(with: id) { _ in
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Then
+        XCTAssertTrue(interceptor.sendMessageCalled)
+        XCTAssertTrue(interceptor.receivedOptions?.skipPush ?? false)
+        XCTAssertTrue(interceptor.receivedOptions?.skipEnrichUrl ?? false)
+    }
+    
+    func test_sendMessage_withInterceptor_whenLocalStatePendingSend_shouldMarkStateSending() throws {
+        // Given
+        let id = MessageId.unique
+        let interceptor = MockSendMessageInterceptor()
+        repository.setInterceptor(interceptor)
+        try createMessage(id: id, localState: .pendingSend)
+        
+        // When
+        interceptor.simulateSuccess(message: .mock(id: id, localState: .pendingSend))
+        let exp = expectation(description: "Send Message completes")
+        repository.sendMessage(with: id) { _ in
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Then
+        nonisolated(unsafe) var messageState: LocalMessageState?
+        try database.writeSynchronously { session in
+            messageState = session.message(id: id)?.localMessageState
+        }
+        XCTAssertEqual(messageState, .sending)
+    }
+    
+    func test_sendMessage_withInterceptor_whenLocalStateNil_shouldMarkStatePublished() throws {
+        // Given
+        let id = MessageId.unique
+        let interceptor = MockSendMessageInterceptor()
+        repository.setInterceptor(interceptor)
+        try createMessage(id: id, localState: .pendingSend)
+
+        // When
+        interceptor.simulateSuccess(message: .mock(id: id, localState: nil))
+        let exp = expectation(description: "Send Message completes")
+        repository.sendMessage(with: id) { _ in
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Then
+        nonisolated(unsafe) var messageState: LocalMessageState?
+        try database.writeSynchronously { session in
+            messageState = session.message(id: id)?.localMessageState
+        }
+        XCTAssertNil(messageState)
+    }
+
+    func test_sendMessage_withInterceptor_whenFailure_shouldMarkStateSendingFailed() throws {
+        // Given
+        let id = MessageId.unique
+        let interceptor = MockSendMessageInterceptor()
+        repository.setInterceptor(interceptor)
+        try createMessage(id: id, localState: .pendingSend)
+
+        // When
+        interceptor.simulateFailure(error: TestError())
+        let exp = expectation(description: "Send Message completes")
+        repository.sendMessage(with: id) { _ in
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: defaultTimeout)
+
+        // Then
+        nonisolated(unsafe) var messageState: LocalMessageState?
+        try database.writeSynchronously { session in
+            messageState = session.message(id: id)?.localMessageState
+        }
+        XCTAssertEqual(messageState, .sendingFailed)
+    }
 }
 
 extension MessageRepositoryTests {
     @discardableResult
-    private func createMessage(id: MessageId, localState: LocalMessageState) throws -> MessageDTO {
+    private func createMessage(
+        id: MessageId,
+        localState: LocalMessageState,
+        skipPush: Bool = false,
+        skipEnrichUrl: Bool = false
+    ) throws -> MessageDTO {
         try database.createCurrentUser()
         try database.createChannel(cid: cid)
-        var message: MessageDTO!
+        nonisolated(unsafe) var message: MessageDTO!
         try database.writeSynchronously { session in
             message = try session.createNewMessage(
                 in: self.cid,
+                messageId: .unique,
                 text: "Message pending send",
                 pinning: nil,
                 quotedMessageId: nil,
                 isSilent: false,
+                isSystem: false,
+                skipPush: skipPush,
+                skipEnrichUrl: skipEnrichUrl,
                 extraData: [:]
             )
             message.id = id
@@ -542,12 +1193,12 @@ extension MessageRepositoryTests {
 
     private func runSendMessageAndWait(id: MessageId) -> Result<ChatMessage, MessageRepositoryError>? {
         let expectation = self.expectation(description: "Send Message completes")
-        var result: Result<ChatMessage, MessageRepositoryError>?
+        nonisolated(unsafe) var result: Result<ChatMessage, MessageRepositoryError>?
         repository.sendMessage(with: id) {
             result = $0
             expectation.fulfill()
         }
-        waitForExpectations(timeout: 0.5, handler: nil)
+        waitForExpectations(timeout: defaultTimeout, handler: nil)
         return result
     }
 }

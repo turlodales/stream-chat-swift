@@ -1,8 +1,9 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
+import StreamChatCommonUI
 import UIKit
 
 /// A view that shows a user avatar including an indicator of the user presence (online/offline).
@@ -17,20 +18,35 @@ open class ChatUserAvatarView: _View, ThemeProvider {
         didSet { updateContentIfNeeded() }
     }
 
+    /// A boolean value to determine if online indicator should be shown or not.
+    public var shouldShowOnlineIndicator: Bool = true
+
     override open func setUpLayout() {
         super.setUpLayout()
         embed(presenceAvatarView)
+
+        if !shouldShowOnlineIndicator {
+            presenceAvatarView.onlineIndicatorView.isHidden = true
+        }
     }
 
     override open func updateContent() {
-        components.imageLoader.loadImage(
-            into: presenceAvatarView.avatarView.imageView,
-            url: content?.imageURL,
-            imageCDN: components.imageCDN,
-            placeholder: appearance.images.userAvatarPlaceholder1,
-            preferredSize: .avatarThumbnailSize
+        let placeholder = UserAvatarInitialsImage.image(
+            name: content?.name ?? "",
+            size: components.avatarThumbnailSize,
+            appearance: appearance
         )
-        
-        presenceAvatarView.isOnlineIndicatorVisible = content?.isOnline ?? false
+        components.mediaLoader.loadImage(
+            into: presenceAvatarView.avatarView.imageView,
+            from: content?.imageURL,
+            with: ImageLoaderOptions(
+                resize: .init(components.avatarThumbnailSize),
+                placeholder: placeholder
+            )
+        )
+
+        if shouldShowOnlineIndicator {
+            presenceAvatarView.isOnlineIndicatorVisible = content?.isOnline ?? false
+        }
     }
 }

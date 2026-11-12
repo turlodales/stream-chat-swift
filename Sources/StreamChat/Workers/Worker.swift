@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import CoreData
@@ -10,7 +10,7 @@ typealias WorkerBuilder = (
     _ apiClient: APIClient
 ) -> Worker
 
-class Worker {
+class Worker: @unchecked Sendable {
     let database: DatabaseContainer
     let apiClient: APIClient
 

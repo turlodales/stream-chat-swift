@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 @testable import StreamChat
@@ -7,140 +7,91 @@
 import XCTest
 
 final class ModerationEndpoints_Tests: XCTestCase {
-    func test_muteUser_buildsCorrectly() {
+    func test_blockUsers_buildsCorrectly() {
         let userId: UserId = .unique
-        
-        let expectedEndpoint = Endpoint<EmptyResponse>(
-            path: .muteUser(true),
+
+        let expectedEndpoint = Endpoint<BlockUsersResponse>(
+            path: .blockUsers,
             method: .post,
             queryItems: nil,
             requiresConnectionId: false,
-            body: ["target_id": userId]
+            body: BlockUsersRequest(blockedUserId: userId)
         )
-        
+
         // Build endpoint
-        let endpoint: Endpoint<EmptyResponse> = .muteUser(userId)
-        
+        let endpoint = Endpoint<BlockUsersResponse>.blockUsers(blockUsersRequest: BlockUsersRequest(blockedUserId: userId))
+
         // Assert endpoint is built correctly
         XCTAssertEqual(AnyEndpoint(expectedEndpoint), AnyEndpoint(endpoint))
-        XCTAssertEqual("moderation/mute", endpoint.path.value)
+        XCTAssertEqual("/api/v2/users/block", endpoint.path.value)
     }
-    
-    func test_unmuteUser_buildsCorrectly() {
+
+    func test_unblockUsers_buildsCorrectly() {
         let userId: UserId = .unique
-        
-        let expectedEndpoint = Endpoint<EmptyResponse>(
-            path: .muteUser(false),
+
+        let expectedEndpoint = Endpoint<UnblockUsersResponse>(
+            path: .unblockUsers,
             method: .post,
             queryItems: nil,
             requiresConnectionId: false,
-            body: ["target_id": userId]
+            body: UnblockUsersRequest(blockedUserId: userId)
         )
-        
+
         // Build endpoint
-        let endpoint: Endpoint<EmptyResponse> = .unmuteUser(userId)
-        
+        let endpoint = Endpoint<UnblockUsersResponse>.unblockUsers(unblockUsersRequest: UnblockUsersRequest(blockedUserId: userId))
+
         // Assert endpoint is built correctly
         XCTAssertEqual(AnyEndpoint(expectedEndpoint), AnyEndpoint(endpoint))
-        XCTAssertEqual("moderation/unmute", endpoint.path.value)
+        XCTAssertEqual("/api/v2/users/unblock", endpoint.path.value)
     }
-    
-    func test_banMember_buildsCorrectly() {
-        let userId: UserId = .unique
-        let cid: ChannelId = .unique
-        let timeoutInMinutes = 15
-        let reason: String = .unique
-        
-        let expectedEndpoint = Endpoint<EmptyResponse>(
-            path: .banMember,
-            method: .post,
+
+    func test_getBlockedUsers_buildsCorrectly() {
+        let expectedEndpoint = Endpoint<GetBlockedUsersResponse>(
+            path: .getBlockedUsers,
+            method: .get,
             queryItems: nil,
-            requiresConnectionId: false,
-            body: ChannelMemberBanRequestPayload(
-                userId: userId,
-                cid: cid,
-                timeoutInMinutes: timeoutInMinutes,
-                reason: reason
-            )
-        )
-        
-        // Build endpoint.
-        let endpoint: Endpoint<EmptyResponse> = .banMember(userId, cid: cid, timeoutInMinutes: timeoutInMinutes, reason: reason)
-        
-        // Assert endpoint is built correctly.
-        XCTAssertEqual(AnyEndpoint(expectedEndpoint), AnyEndpoint(endpoint))
-        XCTAssertEqual("moderation/ban", endpoint.path.value)
-    }
-    
-    func test_unbanMember_buildsCorrectly() {
-        let userId: UserId = .unique
-        let cid: ChannelId = .unique
-        
-        let expectedEndpoint = Endpoint<EmptyResponse>(
-            path: .banMember,
-            method: .delete,
-            queryItems: ChannelMemberBanRequestPayload(userId: userId, cid: cid),
             requiresConnectionId: false,
             body: nil
         )
-        
-        // Build endpoint.
-        let endpoint: Endpoint<EmptyResponse> = .unbanMember(userId, cid: cid)
-        
-        // Assert endpoint is built correctly.
+
+        // Build endpoint
+        let endpoint = Endpoint<GetBlockedUsersResponse>.getBlockedUsers()
+
+        // Assert endpoint is built correctly
         XCTAssertEqual(AnyEndpoint(expectedEndpoint), AnyEndpoint(endpoint))
-        XCTAssertEqual("moderation/ban", endpoint.path.value)
+        XCTAssertEqual("/api/v2/users/block", endpoint.path.value)
     }
-    
-    func test_flagUser_buildsCorrectly() {
-        let testCases = [
-            (true, EndpointPath.flagUser(true)),
-            (false, EndpointPath.flagUser(false))
+
+    func test_queryBannedUsers_buildsCorrectly() throws {
+        let cid: ChannelId = .unique
+        let query = BannedUserListQuery(
+            filter: .equal(.cid, to: cid),
+            sort: [.init(key: .createdAt, isAscending: true)],
+            pagination: Pagination(pageSize: 10, offset: 20),
+            excludeExpiredBans: true
+        )
+
+        // Build endpoint
+        let endpoint: Endpoint<QueryBannedUsersResponse> = .queryBannedUsers(payload: query.asQueryBannedUsersPayload())
+
+        // Assert endpoint is built correctly
+        XCTAssertEqual("/api/v2/chat/query_banned_users", endpoint.path.value)
+        XCTAssertEqual(.get, endpoint.method)
+        XCTAssertFalse(endpoint.requiresConnectionId)
+        XCTAssertNil(endpoint.body)
+
+        let queryItems = endpoint.queryItems as? [String: String?]
+        let payload = try XCTUnwrap(queryItems?["payload"] ?? nil)
+        let expectedPayload: [String: Any] = [
+            "filter_conditions": ["channel_cid": ["$eq": cid.rawValue]],
+            "sort": [["field": "created_at", "direction": 1]],
+            "limit": 10,
+            "offset": 20,
+            "exclude_expired_bans": true
         ]
-        
-        for (flag, path) in testCases {
-            let userId: UserId = .unique
-            
-            let expectedEndpoint = Endpoint<FlagUserPayload>(
-                path: path,
-                method: .post,
-                queryItems: nil,
-                requiresConnectionId: false,
-                body: ["target_user_id": userId]
-            )
-            
-            // Build endpoint.
-            let endpoint: Endpoint<FlagUserPayload> = .flagUser(flag, with: userId)
-            
-            // Assert endpoint is built correctly.
-            XCTAssertEqual(AnyEndpoint(expectedEndpoint), AnyEndpoint(endpoint))
-            XCTAssertEqual(flag ? "moderation/flag" : "moderation/unflag", endpoint.path.value)
-        }
-    }
-    
-    func test_flagMessage_buildsCorrectly() {
-        let testCases = [
-            (true, EndpointPath.flagMessage(true)),
-            (false, EndpointPath.flagMessage(false))
-        ]
-        
-        for (flag, path) in testCases {
-            let messageId: MessageId = .unique
-            
-            let expectedEndpoint = Endpoint<FlagMessagePayload>(
-                path: path,
-                method: .post,
-                queryItems: nil,
-                requiresConnectionId: false,
-                body: ["target_message_id": messageId]
-            )
-            
-            // Build endpoint.
-            let endpoint: Endpoint<FlagMessagePayload> = .flagMessage(flag, with: messageId)
-            
-            // Assert endpoint is built correctly.
-            XCTAssertEqual(AnyEndpoint(expectedEndpoint), AnyEndpoint(endpoint))
-            XCTAssertEqual(flag ? "moderation/flag" : "moderation/unflag", endpoint.path.value)
-        }
+        AssertJSONEqual(
+            Data(payload.utf8),
+            try JSONSerialization.data(withJSONObject: expectedPayload, options: [])
+        )
     }
 }

@@ -1,185 +1,20 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import Foundation
 
-struct ChannelListPayload: Decodable {
-    /// A list of channels response (see `ChannelQuery`).
-    let channels: [ChannelPayload]
-}
-
-struct ChannelPayload {
-    let channel: ChannelDetailPayload
-    
-    let watcherCount: Int?
-    
-    let watchers: [UserPayload]?
-    
-    let members: [MemberPayload]
-
-    let membership: MemberPayload?
-
-    let messages: [MessagePayload]
-
-    let pinnedMessages: [MessagePayload]
-    
-    let channelReads: [ChannelReadPayload]
-    
-    let isHidden: Bool?
-}
-
-extension ChannelPayload {
-    /// Returns the newest message from `messages` in O(1) assuming messages are sorted by `createdAt`.
-    var newestMessage: MessagePayload? {
-        guard let first = messages.first, let last = messages.last else { return nil }
-        
-        return first.createdAt > last.createdAt ? first : last
-    }
-}
-
-extension ChannelPayload: Decodable {
-    enum CodingKeys: String, CodingKey {
-        case channel
-        case messages
-        case pinnedMessages = "pinned_messages"
-        case channelReads = "read"
-        case members
-        case watchers
-        case membership
-        case watcherCount = "watcher_count"
-        case hidden
-    }
-    
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        
-        self.init(
-            channel: try container.decode(ChannelDetailPayload.self, forKey: .channel),
-            watcherCount: try container.decodeIfPresent(Int.self, forKey: .watcherCount),
-            watchers: try container.decodeIfPresent([UserPayload].self, forKey: .watchers),
-            members: try container.decodeArrayIgnoringFailures([MemberPayload].self, forKey: .members),
-            membership: try container.decodeIfPresent(MemberPayload.self, forKey: .membership),
-            messages: try container.decodeArrayIgnoringFailures([MessagePayload].self, forKey: .messages),
-            pinnedMessages: try container.decodeArrayIgnoringFailures([MessagePayload].self, forKey: .pinnedMessages),
-            channelReads: try container.decodeIfPresent([ChannelReadPayload].self, forKey: .channelReads) ?? [],
-            isHidden: try container.decodeIfPresent(Bool.self, forKey: .hidden)
-        )
-    }
-}
-
-struct ChannelDetailPayload {
-    let cid: ChannelId
-    
-    let name: String?
-    
-    let imageURL: URL?
-    
-    let extraData: [String: RawJSON]
-
-    /// A channel type.
-    let typeRawValue: String
-    
-    /// The last message date.
-    let lastMessageAt: Date?
-    /// A channel created date.
-    let createdAt: Date
-    /// A channel deleted date.
-    let deletedAt: Date?
-    /// A channel updated date.
-    let updatedAt: Date
-    /// A channel truncated date.
-    let truncatedAt: Date?
-    
-    /// A creator of the channel.
-    let createdBy: UserPayload?
-    /// A config.
-    let config: ChannelConfig
-    /// Checks if the channel is frozen.
-    let isFrozen: Bool
-    
-    /// Checks if the channel is hidden.
-    /// Backend only sends this field for `QueryChannel` and `QueryChannels` API calls,
-    /// but not for events.
-    /// Missing `hidden` field doesn't mean `false` for this reason.
-    let isHidden: Bool?
-    
-    let members: [MemberPayload]?
-    
-    let memberCount: Int
-    
-    /// A list of users to invite in the channel.
-    let invitedMembers: [MemberPayload] = [] // TODO?
-    
-    /// The team the channel belongs to. You need to enable multi-tenancy if you want to use this, else it'll be nil.
-    /// Refer to [docs](https://getstream.io/chat/docs/multi_tenant_chat/?language=swift) for more info.
-    let team: TeamId?
-    
-    /// Cooldown duration for the channel, if it's in slow mode.
-    /// This value will be 0 if the channel is not in slow mode.
-    let cooldownDuration: Int
-}
-
-extension ChannelDetailPayload: Decodable {
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: ChannelCodingKeys.self)
-         
-        let extraData: [String: RawJSON]
-        if var payload = try? [String: RawJSON](from: decoder) {
-            payload.removeValues(forKeys: ChannelCodingKeys.allCases.map(\.rawValue))
-            extraData = payload
-        } else {
-            extraData = [:]
-        }
-        
-        self.init(
-            cid: try container.decode(ChannelId.self, forKey: .cid),
-            name: try container.decodeIfPresent(String.self, forKey: .name),
-            // Unfortunately, the built-in URL decoder fails, if the string is empty. We need to
-            // provide custom decoding to handle URL? as expected.
-            imageURL: try container.decodeIfPresent(String.self, forKey: .imageURL).flatMap(URL.init(string:)),
-            extraData: extraData,
-            typeRawValue: try container.decode(String.self, forKey: .typeRawValue),
-            lastMessageAt: try container.decodeIfPresent(Date.self, forKey: .lastMessageAt),
-            createdAt: try container.decode(Date.self, forKey: .createdAt),
-            deletedAt: try container.decodeIfPresent(Date.self, forKey: .deletedAt),
-            updatedAt: try container.decode(Date.self, forKey: .updatedAt),
-            truncatedAt: try container.decodeIfPresent(Date.self, forKey: .truncatedAt),
-            createdBy: try container.decodeIfPresent(UserPayload.self, forKey: .createdBy),
-            config: try container.decode(ChannelConfig.self, forKey: .config),
-            isFrozen: try container.decode(Bool.self, forKey: .frozen),
-            // For `hidden`, we don't fallback to `false`
-            // since this field is not sent for all API calls and for events
-            // We can't assume anything regarding this flag when it's absent
-            isHidden: try container.decodeIfPresent(Bool.self, forKey: .hidden),
-            members: try container.decodeIfPresent([MemberPayload].self, forKey: .members),
-            memberCount: try container.decodeIfPresent(Int.self, forKey: .memberCount) ?? 0,
-            team: try container.decodeIfPresent(String.self, forKey: .team),
-            cooldownDuration: try container.decodeIfPresent(Int.self, forKey: .cooldownDuration) ?? 0
-        )
-    }
-}
-
-struct ChannelReadPayload: Decodable {
-    private enum CodingKeys: String, CodingKey {
-        case user
-        case lastReadAt = "last_read"
-        case unreadMessagesCount = "unread_messages"
-    }
-    
-    /// A user (see `User`).
-    let user: UserPayload
-    /// A last read date by the user.
-    public let lastReadAt: Date
-    /// Unread message count for the user.
-    public let unreadMessagesCount: Int
-}
+typealias ChannelListPayload = QueryChannelsResponse
+typealias ChannelPayload = ChannelStateResponse
+typealias ChannelReadPayload = ReadStateResponse
+typealias PredefinedFilterPayload = ParsedPredefinedFilterResponse
 
 /// A channel config.
-public class ChannelConfig: Codable {
+public final class ChannelConfig: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case reactionsEnabled = "reactions"
         case typingEventsEnabled = "typing_events"
+        case deliveryEventsEnabled = "delivery_events"
         case readEventsEnabled = "read_events"
         case connectEventsEnabled = "connect_events"
         case uploadsEnabled = "uploads"
@@ -187,20 +22,30 @@ public class ChannelConfig: Codable {
         case quotesEnabled = "quotes"
         case searchEnabled = "search"
         case mutesEnabled = "mutes"
+        case pollsEnabled = "polls"
         case urlEnrichmentEnabled = "url_enrichment"
         case messageRetention = "message_retention"
         case maxMessageLength = "max_message_length"
         case commands
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case skipLastMsgAtUpdateForSystemMsg = "skip_last_msg_update_for_system_msgs"
+        case messageRemindersEnabled = "user_message_reminders"
+        case sharedLocationsEnabled = "shared_locations"
+        case scheduledMessagesMaxPerChannel = "scheduled_messages_max_per_channel"
+        case scheduledMessagesMaxPerUser = "scheduled_messages_max_per_user"
+        case scheduledMessagesMaxLeadTime = "scheduled_messages_max_lead_time_seconds"
+        case scheduledMessagesMinLeadTime = "scheduled_messages_min_lead_time_seconds"
     }
-    
+
     /// If users are allowed to add reactions to messages. Enabled by default.
     public let reactionsEnabled: Bool
     /// Controls if typing indicators are shown. Enabled by default.
     public let typingEventsEnabled: Bool
-    /// Controls whether the chat shows how far you’ve read. Enabled by default.
+    /// Controls whether the chat shows how far you've read. Enabled by default.
     public let readEventsEnabled: Bool
+    /// Controls whether messages delivered events are handled. Disabled by default.
+    public let deliveryEventsEnabled: Bool
     /// Determines if events are fired for connecting and disconnecting to a chat. Enabled by default.
     public let connectEventsEnabled: Bool
     /// Enables uploads.
@@ -225,12 +70,38 @@ public class ChannelConfig: Codable {
     public let createdAt: Date
     /// A channel updated date.
     public let updatedAt: Date
-        
+    /// Determines if polls are enabled.
+    public let pollsEnabled: Bool
+    /// Determines if system messages should not update the last message at date.
+    public let skipLastMsgAtUpdateForSystemMsg: Bool
+    /// Determines if user message reminders are enabled.
+    public let messageRemindersEnabled: Bool
+    /// Determines if shared locations are enabled.
+    public let sharedLocationsEnabled: Bool
+    /// How many pending scheduled messages the current user can have in the channel.
+    ///
+    /// `nil` when scheduled messages are disabled for the app.
+    public let scheduledMessagesMaxPerChannel: Int?
+    /// How many pending scheduled messages the current user can have across all channels.
+    ///
+    /// `nil` when scheduled messages are disabled for the app.
+    public let scheduledMessagesMaxPerUser: Int?
+    /// How far ahead, in seconds, a message can be scheduled.
+    ///
+    /// `nil` when scheduled messages are disabled for the app.
+    public let scheduledMessagesMaxLeadTime: TimeInterval?
+    /// The minimum time ahead, in seconds, a message is scheduled for. The server moves an earlier date to the next
+    /// whole minute after it, instead of rejecting it.
+    ///
+    /// `nil` when scheduled messages are disabled for the app.
+    public let scheduledMessagesMinLeadTime: TimeInterval?
+
     public required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         reactionsEnabled = try container.decode(Bool.self, forKey: .reactionsEnabled)
         typingEventsEnabled = try container.decode(Bool.self, forKey: .typingEventsEnabled)
         readEventsEnabled = try container.decode(Bool.self, forKey: .readEventsEnabled)
+        deliveryEventsEnabled = try container.decodeIfPresent(Bool.self, forKey: .deliveryEventsEnabled) ?? false
         connectEventsEnabled = try container.decode(Bool.self, forKey: .connectEventsEnabled)
         uploadsEnabled = try container.decodeIfPresent(Bool.self, forKey: .uploadsEnabled) ?? false
         repliesEnabled = try container.decode(Bool.self, forKey: .repliesEnabled)
@@ -245,22 +116,39 @@ public class ChannelConfig: Codable {
         // and it'll be removed soon.
         // TODO: Remove this line of code when backend stops sending the `flag` command
         self.commands = commands.filter { $0.name != "flag" }
-        
+
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        pollsEnabled = try container.decodeIfPresent(Bool.self, forKey: .pollsEnabled) ?? false
+        skipLastMsgAtUpdateForSystemMsg = try container.decodeIfPresent(Bool.self, forKey: .skipLastMsgAtUpdateForSystemMsg) ?? false
+        messageRemindersEnabled = try container.decodeIfPresent(Bool.self, forKey: .messageRemindersEnabled) ?? false
+        sharedLocationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .sharedLocationsEnabled) ?? false
+        scheduledMessagesMaxPerChannel = try container.decodeIfPresent(Int.self, forKey: .scheduledMessagesMaxPerChannel)
+        scheduledMessagesMaxPerUser = try container.decodeIfPresent(Int.self, forKey: .scheduledMessagesMaxPerUser)
+        scheduledMessagesMaxLeadTime = try container.decodeIfPresent(TimeInterval.self, forKey: .scheduledMessagesMaxLeadTime)
+        scheduledMessagesMinLeadTime = try container.decodeIfPresent(TimeInterval.self, forKey: .scheduledMessagesMinLeadTime)
     }
-    
+
     internal required init(
         reactionsEnabled: Bool = false,
         typingEventsEnabled: Bool = false,
         readEventsEnabled: Bool = false,
+        deliveryEventsEnabled: Bool = false,
         connectEventsEnabled: Bool = false,
         uploadsEnabled: Bool = false,
         repliesEnabled: Bool = false,
         quotesEnabled: Bool = false,
         searchEnabled: Bool = false,
         mutesEnabled: Bool = false,
+        pollsEnabled: Bool = false,
         urlEnrichmentEnabled: Bool = false,
+        skipLastMsgAtUpdateForSystemMsg: Bool = false,
+        messageRemindersEnabled: Bool = false,
+        sharedLocationsEnabled: Bool = false,
+        scheduledMessagesMaxPerChannel: Int? = nil,
+        scheduledMessagesMaxPerUser: Int? = nil,
+        scheduledMessagesMaxLeadTime: TimeInterval? = nil,
+        scheduledMessagesMinLeadTime: TimeInterval? = nil,
         messageRetention: String = "",
         maxMessageLength: Int = 0,
         commands: [Command] = [],
@@ -270,6 +158,7 @@ public class ChannelConfig: Codable {
         self.reactionsEnabled = reactionsEnabled
         self.typingEventsEnabled = typingEventsEnabled
         self.readEventsEnabled = readEventsEnabled
+        self.deliveryEventsEnabled = deliveryEventsEnabled
         self.connectEventsEnabled = connectEventsEnabled
         self.uploadsEnabled = uploadsEnabled
         self.repliesEnabled = repliesEnabled
@@ -282,5 +171,13 @@ public class ChannelConfig: Codable {
         self.commands = commands
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.pollsEnabled = pollsEnabled
+        self.skipLastMsgAtUpdateForSystemMsg = skipLastMsgAtUpdateForSystemMsg
+        self.messageRemindersEnabled = messageRemindersEnabled
+        self.sharedLocationsEnabled = sharedLocationsEnabled
+        self.scheduledMessagesMaxPerChannel = scheduledMessagesMaxPerChannel
+        self.scheduledMessagesMaxPerUser = scheduledMessagesMaxPerUser
+        self.scheduledMessagesMaxLeadTime = scheduledMessagesMaxLeadTime
+        self.scheduledMessagesMinLeadTime = scheduledMessagesMinLeadTime
     }
 }

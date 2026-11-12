@@ -1,0 +1,107 @@
+//
+// Copyright © 2026 Stream.io Inc. All rights reserved.
+//
+
+import Foundation
+@testable import StreamChat
+
+public class Chat_Mock: Chat, Spy, @unchecked Sendable {
+    public let spyState = SpyState()
+    
+    static let cid = try! ChannelId(cid: "mock:channel")
+    
+    init(
+        chatClient: ChatClient,
+        channelQuery: ChannelQuery,
+        channelListQuery: ChannelListQuery?
+    ) {
+        super.init(
+            channelQuery: channelQuery,
+            memberSorting: [.init(key: .createdAt)],
+            client: chatClient
+        )
+    }
+    
+    /// Creates a new mock instance of `ChatChannelController`.
+    public static func mock(
+        chatClient: ChatClient? = nil,
+        chatClientConfig: ChatClientConfig? = nil,
+        bundle: Bundle? = nil
+    ) -> Chat_Mock {
+        let chatClient = chatClient ?? ChatClient.mock(config: chatClientConfig, bundle: bundle)
+        return Chat_Mock(
+            chatClient: chatClient,
+            channelQuery: .init(cid: cid, channelQuery: .init(cid: cid)),
+            channelListQuery: nil
+        )
+    }
+
+    public static func mock(
+        channelQuery: ChannelQuery,
+        channelListQuery: ChannelListQuery?,
+        client: ChatClient
+    ) -> Chat_Mock {
+        Chat_Mock(
+            chatClient: client,
+            channelQuery: channelQuery,
+            channelListQuery: channelListQuery
+        )
+    }
+
+    var createNewMessageCallCount = 0
+    override public func sendMessage(
+        with text: String,
+        attachments: [AnyAttachmentPayload] = [],
+        quote quotedMessageId: MessageId? = nil,
+        mentions: [UserId] = [],
+        mentionedHere: Bool = false,
+        mentionedChannel: Bool = false,
+        mentionedGroupIds: [String] = [],
+        mentionedRoles: [String] = [],
+        pinning: MessagePinning? = nil,
+        extraData: [String: RawJSON] = [:],
+        silent: Bool = false,
+        skipPushNotification: Bool = false,
+        skipEnrichURL: Bool = false,
+        messageId: MessageId? = nil,
+        restrictedVisibility: [UserId] = []
+    ) async throws -> ChatMessage {
+        createNewMessageCallCount += 1
+        return ChatMessage.mock()
+    }
+    
+    public var loadPageAroundMessageIdCallCount = 0
+    override public func loadMessages(around messageId: MessageId, limit: Int? = nil) async throws {
+        loadPageAroundMessageIdCallCount += 1
+    }
+    
+    override public func watch() async throws {
+        record()
+    }
+}
+
+public extension Chat_Mock {
+    /// Simulates the initial conditions. Setting these values doesn't trigger any observer callback.
+    @MainActor func simulateInitial(channel: ChatChannel, messages: [ChatMessage]) {
+        state.channel = channel
+        state.messages = messages
+    }
+
+    /// Simulates a change of the `channel` value. Observers are notified with the provided `change` value.
+    @MainActor func simulate(
+        channel: ChatChannel?,
+        change: EntityChange<ChatChannel>
+    ) {
+        state.channel = channel
+    }
+
+    /// Simulates changes in the `messages` array. Observers are notified with the provided `changes` value.
+    @MainActor func simulate(messages: [ChatMessage], changes: [ListChange<ChatMessage>]) {
+        var newMessages = messages
+        for message in state.messages {
+            newMessages.append(message)
+        }
+        
+        state.messages = newMessages
+    }
+}

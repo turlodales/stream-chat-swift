@@ -1,43 +1,17 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import XCTest
 
 final class ChannelList_Tests: StreamTestCase {
-
     let message = "message"
-
-    override func setUpWithError() throws {
-        try super.setUpWithError()
-        addTags([.coreFeatures])
-    }
-
-    func test_newMessageShownInChannelPreview_whenComingBackFromChannel() {
-        linkToScenario(withId: 79)
-
-        GIVEN("user opens the channel") {
-            userRobot
-                .login()
-                .openChannel()
-        }
-        WHEN("participant sends a new message") {
-            participantRobot.sendMessage(message)
-        }
-        AND("user goes back to channel list") {
-            userRobot.tapOnBackButton()
-        }
-        THEN("user observes a preview of participants message") {
-            userRobot.assertLastMessageInChannelPreview(message)
-        }
-    }
 
     func test_participantMessageShownInChannelPreview_whenReturningFromOffline() {
         linkToScenario(withId: 92)
-        
+
         GIVEN("user opens the channel") {
             userRobot
-                .setConnectivitySwitchVisibility(to: .on)
                 .login()
                 .openChannel()
                 .tapOnBackButton()
@@ -48,7 +22,7 @@ final class ChannelList_Tests: StreamTestCase {
         WHEN("participant sends a new message") {
             participantRobot
                 .sendMessage(message)
-                .wait(2.0)
+                .sleep(2.0)
         }
         AND("user becomes online") {
             userRobot.setConnectivity(to: .on)
@@ -58,36 +32,43 @@ final class ChannelList_Tests: StreamTestCase {
         }
     }
     
-    func test_userLogsInAfterLoggingOut() throws {
-        linkToScenario(withId: 83)
-        
-        try XCTSkipIf(ProcessInfo().operatingSystemVersion.majorVersion == 12,
-                      "[CIS-2053] There is no user avatar on the channel list")
-        
-        let channelsCount = 10
-        
-        GIVEN("user logs in") {
-            backendRobot.generateChannels(count: channelsCount)
-            userRobot.login()
+    func test_channelListIsReordered_whenParticipantSendsMessageInOldestChannelWhileUserIsOffline() {
+        linkToScenario(withId: 91)
+
+        let oldestChannel = "3"
+
+        GIVEN("user opens channel list") {
+            backendRobot.generateChannels(channelsCount: 3)
+            userRobot
+                .login()
+                .assertChannelName("1", at: 0)
+                .assertChannelName(oldestChannel, at: 2)
         }
-        AND("user logs out") {
-            userRobot.logout()
+        AND("user goes offline") {
+            userRobot.setConnectivity(to: .off)
         }
-        WHEN("user logs in") {
-            userRobot.login()
+        WHEN("participant sends a new message in the oldest channel") {
+            participantRobot
+                .sendMessage(message, inChannelNamed: oldestChannel)
+                .sleep(2.0)
         }
-        THEN("user observes the channel list") {
-            userRobot.assertChannelCount(channelsCount)
+        AND("user comes back online") {
+            userRobot.setConnectivity(to: .on)
+        }
+        THEN("channel list reorders accordingly") {
+            userRobot
+                .assertChannelName(oldestChannel, at: 0)
+                .assertLastMessageInChannelPreview(message)
         }
     }
-    
+
     func test_paginationOnChannelList() {
         linkToScenario(withId: 276)
-        
+
         let channelsCount = 30
-        
+
         WHEN("user opens the channel list") {
-            backendRobot.generateChannels(count: channelsCount)
+            backendRobot.generateChannels(channelsCount: channelsCount)
             userRobot.login()
         }
         THEN("user makes sure that all channels are loaded") {
@@ -125,50 +106,8 @@ extension ChannelList_Tests {
             userRobot.assertLastMessageTimestampInChannelPreview(isHidden: false)
         }
     }
-    
-    func test_channelPreviewShowsNoMessages_whenChannelIsEmpty() {
-        linkToScenario(withId: 199)
-        
-        WHEN("user opens channel list") {
-            userRobot.login()
-        }
-        AND("the channel has no messages") {}
-        THEN("the channel preview shows No messages") {
-            userRobot.assertLastMessageInChannelPreview(message)
-        }
-        AND("last message timestamp is hidden") {
-            userRobot.assertLastMessageTimestampInChannelPreview(isHidden: true)
-        }
-    }
-    
-    func test_channelPreviewShowsNoMessages_whenTheOnlyMessageInChannelIsDeleted() {
-        linkToScenario(withId: 202)
-        
-        let message = "Hey"
-        
-        GIVEN("user opens the channel") {
-            userRobot
-                .login()
-                .openChannel()
-        }
-        AND("user sends a message") {
-            userRobot.sendMessage(message)
-        }
-        AND("user deletes the message") {
-            userRobot.deleteMessage()
-        }
-        WHEN("user goes back to the channel list") {
-            userRobot.tapOnBackButton()
-        }
-        THEN("the channel preview shows No messages") {
-            userRobot.assertLastMessageInChannelPreview("No messages")
-        }
-        AND("last message timestamp is hidden") {
-            userRobot.assertLastMessageTimestampInChannelPreview(isHidden: true)
-        }
-    }
-    
-    func test_channelPreviewShowsPreviousMessage_whenLastMessageIsDeleted() {
+
+    func test_channelPreviewShowsDeletedMessage() {
         linkToScenario(withId: 248)
 
         let message1 = "Previous message"
@@ -190,17 +129,14 @@ extension ChannelList_Tests {
         WHEN("user goes back to the channel list") {
             userRobot.tapOnBackButton()
         }
-        THEN("the channel preview shows previous message") {
-            userRobot.assertLastMessageInChannelPreview(message1)
-        }
-        AND("last message timestamp is shown") {
-            userRobot.assertLastMessageTimestampInChannelPreview(isHidden: false)
+        THEN("the channel preview shows deleted message") {
+            userRobot.assertLastMessageInChannelPreview("You: Message deleted")
         }
     }
-    
+
     func test_channelPreviewIsNotUpdated_whenThreadReplyIsSent() {
         linkToScenario(withId: 203)
-        
+
         let channelMessage = "Channel message"
         let threadReply = "Thread reply"
 
@@ -213,7 +149,7 @@ extension ChannelList_Tests {
             userRobot.sendMessage(channelMessage)
         }
         AND("user adds thread reply to this message") {
-            userRobot.replyToMessageInThread(threadReply)
+            userRobot.sendMessageInThread(threadReply)
         }
         WHEN("user goes back to the channel list") {
             userRobot.moveToChannelListFromThreadReplies()
@@ -225,10 +161,10 @@ extension ChannelList_Tests {
             userRobot.assertLastMessageTimestampInChannelPreview(isHidden: false)
         }
     }
-    
+
     func test_channelPreviewIsUpdated_whenPreviewMessageIsEdited() {
         linkToScenario(withId: 245)
-        
+
         let originalMessage = "message"
         let editedMessage = "edited message"
 
@@ -260,21 +196,22 @@ extension ChannelList_Tests {
 extension ChannelList_Tests {
     func test_messageList_and_channelPreview_AreUpdatedWhenChannelTruncatedWithMessage() {
         linkToScenario(withId: 201)
-        
+
         let message = "Channel truncated"
 
         GIVEN("user opens the channel") {
-            backendRobot.generateChannels(count: 1, messagesCount: 42)
+            backendRobot.generateChannels(channelsCount: 1, messagesCount: 42)
             userRobot.login().openChannel()
         }
         WHEN("user truncates the channel with system message") {
             userRobot.truncateChannel(withMessage: true)
         }
         THEN("user observes only the system message") {
-            userRobot.assertMessage(message)
-        }
-        AND("previous messages are no longer visible") {
-            userRobot.assertMessageCount(1)
+            userRobot
+                .assertMessage(message)
+                .assertMessageCount(1)
+                .assertScrollToBottomButton(isVisible: false)
+                .assertScrollToBottomButtonUnreadCount(0)
         }
         WHEN("user goes to channel list") {
             userRobot.tapOnBackButton()
@@ -284,6 +221,33 @@ extension ChannelList_Tests {
         }
         AND("last message timestamp is shown") {
             userRobot.assertLastMessageTimestampInChannelPreview(isHidden: false)
+        }
+    }
+    
+    func test_messageList_and_channelPreview_AreUpdatedWhenChannelTruncatedWithoutMessage() {
+        linkToScenario(withId: 284)
+
+        GIVEN("user opens the channel") {
+            backendRobot.generateChannels(channelsCount: 1, messagesCount: 42)
+            userRobot.login().openChannel()
+        }
+        WHEN("user truncates the channel without system message") {
+            userRobot.truncateChannel(withMessage: false)
+        }
+        THEN("user observes only the system message") {
+            userRobot
+                .assertMessageCount(0)
+                .assertScrollToBottomButton(isVisible: false)
+                .assertScrollToBottomButtonUnreadCount(0)
+        }
+        WHEN("user goes to channel list") {
+            userRobot.tapOnBackButton()
+        }
+        THEN("the channel preview is empty") {
+            userRobot.assertChannelPreviewIsEmpty()
+        }
+        AND("last message timestamp is not shown") {
+            userRobot.assertLastMessageTimestampInChannelPreview(isHidden: true)
         }
     }
 }

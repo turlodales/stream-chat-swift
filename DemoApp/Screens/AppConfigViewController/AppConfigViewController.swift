@@ -1,8 +1,11 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
+import StreamChatLogsUI
+import StreamChatUI
+import SwiftUI
 import UIKit
 
 /// The Demo App Configuration.
@@ -11,21 +14,99 @@ struct DemoAppConfig {
     var isHardDeleteEnabled: Bool
     /// A Boolean value to define if Atlantis will be started to proxy HTTP and WebSocket calls.
     var isAtlantisEnabled: Bool
+    /// A Boolean value to define if an additional message debugger action will be added.
+    var isMessageDebuggerEnabled: Bool
+    /// A boolean value to define if message delivered info should be enabled.
+    /// If enabled it will include a message action to see message reads and delivery info.
+    /// It will also display double grey check-marks for delivered messages in the message list.
+    var isMessageDeliveredInfoEnabled: Bool
+    /// Set this value to define if we should mimic token refresh scenarios.
+    var tokenRefreshDetails: TokenRefreshDetails?
+    /// A Boolean value that determines if a connection banner UI should be shown.
+    var shouldShowConnectionBanner: Bool
+    /// A Boolean value to define if the premium member feature is enabled. This is to test custom member data.
+    var isPremiumMemberFeatureEnabled: Bool
+    /// A Boolean value to define if premium members should show a golden avatar border in the message list.
+    var shouldShowPremiumBadge: Bool
+    /// A Boolean value to define if the reminders feature is enabled.
+    var isRemindersEnabled: Bool
+    /// A Boolean value to define if the scheduled messages feature is enabled.
+    var isScheduledMessagesEnabled: Bool
+    /// A Boolean value to define if channels are loaded with their active member count.
+    var isActiveMemberCountEnabled: Bool
+    /// A Boolean value to define if the poll should be deleted when the message is deleted.
+    var shouldDeletePollOnMessageDeletion: Bool
+
+    /// The details to generate expirable tokens in the demo app.
+    struct TokenRefreshDetails {
+        /// The app secret from the dashboard.
+        let appSecret: String
+        /// The duration in seconds until the token is expired.
+        let expirationDuration: TimeInterval
+        /// In order to test token refresh fails, we can set a value of how
+        /// many token refresh will fail before a successful one.
+        let numberOfFailures: Int
+    }
 }
 
-class AppConfig {
+class AppConfig: @unchecked Sendable {
     /// The Demo App Configuration.
     var demoAppConfig: DemoAppConfig
 
-    static var shared = AppConfig()
+    /// Whether the scheduled messages features are shown.
+    ///
+    /// The backend does not tell clients whether the app has scheduled messages enabled, and still returns the
+    /// `schedule-message` capability when it is disabled, so only the US East staging app, where it is enabled, shows them.
+    var isScheduledMessagesEnabled: Bool {
+        demoAppConfig.isScheduledMessagesEnabled && apiKeyString == DemoApiKeys.usEastStaging.rawValue
+    }
+
+    static let shared = AppConfig()
 
     private init() {
         // Default DemoAppConfig
         demoAppConfig = DemoAppConfig(
             isHardDeleteEnabled: false,
-            isAtlantisEnabled: false
+            isAtlantisEnabled: false,
+            isMessageDebuggerEnabled: false,
+            isMessageDeliveredInfoEnabled: false,
+            tokenRefreshDetails: nil,
+            shouldShowConnectionBanner: false,
+            isPremiumMemberFeatureEnabled: false,
+            shouldShowPremiumBadge: false,
+            isRemindersEnabled: true,
+            isScheduledMessagesEnabled: true,
+            isActiveMemberCountEnabled: true,
+            shouldDeletePollOnMessageDeletion: false
         )
+
+        if StreamRuntimeCheck.isStreamInternalConfiguration {
+            demoAppConfig.isAtlantisEnabled = true
+            demoAppConfig.isMessageDebuggerEnabled = true
+            demoAppConfig.isHardDeleteEnabled = true
+            demoAppConfig.shouldShowConnectionBanner = true
+            demoAppConfig.isPremiumMemberFeatureEnabled = true
+            demoAppConfig.shouldShowPremiumBadge = true
+            demoAppConfig.isRemindersEnabled = true
+            demoAppConfig.isScheduledMessagesEnabled = true
+            demoAppConfig.isActiveMemberCountEnabled = true
+            demoAppConfig.shouldDeletePollOnMessageDeletion = true
+            demoAppConfig.isMessageDeliveredInfoEnabled = true
+            StreamRuntimeCheck.assertionsEnabled = true
+        }
     }
+}
+
+class UserConfig: @unchecked Sendable {
+    var isInvisible = false
+    var language: TranslationLanguage?
+    var typingIndicatorsEnabled: Bool?
+    var readReceiptsEnabled: Bool?
+    var deliveryReceiptsEnabled: Bool?
+
+    static let shared = UserConfig()
+
+    private init() {}
 }
 
 class AppConfigViewController: UITableViewController {
@@ -45,6 +126,15 @@ class AppConfigViewController: UITableViewController {
         }
     }
 
+    var channelListSearchStrategy: ChannelListSearchStrategy? {
+        get {
+            Components.default.channelListSearchStrategy
+        }
+        set {
+            Components.default.channelListSearchStrategy = newValue
+        }
+    }
+
     init() {
         super.init(style: .grouped)
     }
@@ -57,7 +147,9 @@ class AppConfigViewController: UITableViewController {
     enum ConfigOption {
         case info([DemoAppInfoOption])
         case demoApp([DemoAppConfigOption])
+        case components([ComponentsConfigOption])
         case chatClient([ChatClientConfigOption])
+        case user([UserConfigOption])
 
         var numberOfOptions: Int {
             switch self {
@@ -65,7 +157,11 @@ class AppConfigViewController: UITableViewController {
                 return options.count
             case let .demoApp(options):
                 return options.count
+            case let .components(options):
+                return options.count
             case let .chatClient(options):
+                return options.count
+            case let .user(options):
                 return options.count
             }
         }
@@ -74,19 +170,26 @@ class AppConfigViewController: UITableViewController {
             switch self {
             case .demoApp:
                 return "Demo App Configuration"
+            case .components:
+                return "Components Configuration"
             case .chatClient:
                 return "Chat Client Configuration"
             case .info:
                 return "General Info"
+            case .user:
+                return "User Info"
             }
         }
     }
 
     enum DemoAppInfoOption: CustomStringConvertible, CaseIterable {
+        case environment
         case pushConfiguration
 
         var description: String {
             switch self {
+            case .environment:
+                return "App Key"
             case .pushConfiguration:
                 let configuration = Bundle.pushProviderName ?? "Not set"
                 return "Push Configuration: \(configuration)"
@@ -97,19 +200,72 @@ class AppConfigViewController: UITableViewController {
     enum DemoAppConfigOption: String, CaseIterable {
         case isHardDeleteEnabled
         case isAtlantisEnabled
+        case isMessageDebuggerEnabled
+        case isMessageDeliveredInfoEnabled
+        case tokenRefreshDetails
+        case shouldShowConnectionBanner
+        case isPremiumMemberFeatureEnabled
+        case shouldShowPremiumBadge
+        case isRemindersEnabled
+        case isScheduledMessagesEnabled
+        case isActiveMemberCountEnabled
+        case logSettings
+
+        var title: String {
+            switch self {
+            case .shouldShowPremiumBadge:
+                return "Show premium badge"
+            case .logSettings:
+                return "Log Settings"
+            default:
+                return rawValue
+            }
+        }
+    }
+
+    enum ComponentsConfigOption: String, CaseIterable {
+        case isUniqueReactionsEnabled
+        case isReactionPushEmojisEnabled
+        case shouldMessagesStartAtTheTop
+        case shouldAnimateJumpToMessageWhenOpeningChannel
+        case shouldJumpToUnreadWhenOpeningChannel
+        case threadRepliesStartFromOldest
+        case threadRendersParentMessageEnabled
+        case isVoiceRecordingEnabled
+        case isVoiceRecordingConfirmationRequiredEnabled
+        case channelListSearchStrategy
+        case isUnreadMessageSeparatorEnabled
+        case isJumpToUnreadEnabled
+        case mentionAllAppUsers
+        case isBlockingUsersEnabled
+        case isMessageListAnimationsEnabled
+        case isDownloadFileAttachmentsEnabled
     }
 
     enum ChatClientConfigOption: String, CaseIterable {
+        case baseURL
         case isLocalStorageEnabled
         case staysConnectedInBackground
+        case reconnectionTimeout
         case shouldShowShadowedMessages
-        case deletedMessagesVisibility
+        case isChannelAutomaticFilteringEnabled
+        case isLocalUnreadCountEnabled
+        case webSocketEventProtocol
+    }
+
+    enum UserConfigOption: String, CaseIterable {
+        case isInvisible
+        case language
+        case typingIndicatorsEnabled
+        case readReceiptsEnabled
     }
 
     let options: [ConfigOption] = [
         .info(DemoAppInfoOption.allCases),
         .demoApp(DemoAppConfigOption.allCases),
-        .chatClient(ChatClientConfigOption.allCases)
+        .components(ComponentsConfigOption.allCases),
+        .chatClient(ChatClientConfigOption.allCases),
+        .user(UserConfigOption.allCases)
     ]
 
     override func viewDidLoad() {
@@ -142,8 +298,14 @@ class AppConfigViewController: UITableViewController {
         case let .demoApp(options):
             configureDemoAppOptionsCell(cell, at: indexPath, options: options)
 
+        case let .components(options):
+            configureComponentsOptionsCell(cell, at: indexPath, options: options)
+
         case let .chatClient(options):
             configureChatClientOptionsCell(cell, at: indexPath, options: options)
+
+        case let .user(options):
+            configureUserOptionsCell(cell, at: indexPath, options: options)
         }
 
         return cell
@@ -153,14 +315,16 @@ class AppConfigViewController: UITableViewController {
         guard let cell = tableView.cellForRow(at: indexPath) else { return }
 
         switch options[indexPath.section] {
-        case .info:
-            break
-
-        case let .demoApp(options):
-            didSelectDemoAppOptionsCell(cell, at: indexPath, options: options)
-
+        case let .info(options):
+            didSelectInfoOptionsCell(cell, at: indexPath, options: options)
+        case let .components(options):
+            didSelectComponentsOptionsCell(cell, at: indexPath, options: options)
         case let .chatClient(options):
             didSelectChatClientOptionsCell(cell, at: indexPath, options: options)
+        case let .user(options):
+            didSelectUserOptionsCell(cell, at: indexPath, options: options)
+        case let .demoApp(options):
+            didSelectDemoAppOptionsCell(cell, at: indexPath, options: options)
         }
     }
 
@@ -173,6 +337,13 @@ class AppConfigViewController: UITableViewController {
     ) {
         let option = options[indexPath.row]
         cell.textLabel?.text = option.description
+        switch option {
+        case .environment:
+            cell.accessoryType = .disclosureIndicator
+            cell.detailTextLabel?.text = apiKeyString
+        case .pushConfiguration:
+            break
+        }
     }
 
     // MARK: - Demo App Options
@@ -183,7 +354,7 @@ class AppConfigViewController: UITableViewController {
         options: [DemoAppConfigOption]
     ) {
         let option = options[indexPath.row]
-        cell.textLabel?.text = option.rawValue
+        cell.textLabel?.text = option.title
 
         switch option {
         case .isHardDeleteEnabled:
@@ -194,20 +365,47 @@ class AppConfigViewController: UITableViewController {
             cell.accessoryView = makeSwitchButton(demoAppConfig.isAtlantisEnabled) { [weak self] newValue in
                 self?.demoAppConfig.isAtlantisEnabled = newValue
             }
-        }
-    }
-
-    private func didSelectDemoAppOptionsCell(
-        _ cell: UITableViewCell,
-        at indexPath: IndexPath,
-        options: [DemoAppConfigOption]
-    ) {
-        let option = options[indexPath.row]
-        switch option {
-        case .isHardDeleteEnabled:
-            break
-        case .isAtlantisEnabled:
-            break
+        case .isMessageDebuggerEnabled:
+            cell.accessoryView = makeSwitchButton(demoAppConfig.isMessageDebuggerEnabled) { [weak self] newValue in
+                self?.demoAppConfig.isMessageDebuggerEnabled = newValue
+            }
+        case .isMessageDeliveredInfoEnabled:
+            cell.accessoryView = makeSwitchButton(demoAppConfig.isMessageDeliveredInfoEnabled) { [weak self] newValue in
+                self?.demoAppConfig.isMessageDeliveredInfoEnabled = newValue
+            }
+        case .tokenRefreshDetails:
+            if let tokenRefreshDuration = demoAppConfig.tokenRefreshDetails?.expirationDuration {
+                cell.detailTextLabel?.text = "Duration before expired: \(tokenRefreshDuration)s"
+            } else {
+                cell.detailTextLabel?.text = "Disabled"
+            }
+            cell.accessoryType = .none
+        case .shouldShowConnectionBanner:
+            cell.accessoryView = makeSwitchButton(demoAppConfig.shouldShowConnectionBanner) { [weak self] newValue in
+                self?.demoAppConfig.shouldShowConnectionBanner = newValue
+            }
+        case .isPremiumMemberFeatureEnabled:
+            cell.accessoryView = makeSwitchButton(demoAppConfig.isPremiumMemberFeatureEnabled) { [weak self] newValue in
+                self?.demoAppConfig.isPremiumMemberFeatureEnabled = newValue
+            }
+        case .shouldShowPremiumBadge:
+            cell.accessoryView = makeSwitchButton(demoAppConfig.shouldShowPremiumBadge) { [weak self] newValue in
+                self?.demoAppConfig.shouldShowPremiumBadge = newValue
+            }
+        case .isRemindersEnabled:
+            cell.accessoryView = makeSwitchButton(demoAppConfig.isRemindersEnabled) { [weak self] newValue in
+                self?.demoAppConfig.isRemindersEnabled = newValue
+            }
+        case .isScheduledMessagesEnabled:
+            cell.accessoryView = makeSwitchButton(demoAppConfig.isScheduledMessagesEnabled) { [weak self] newValue in
+                self?.demoAppConfig.isScheduledMessagesEnabled = newValue
+            }
+        case .isActiveMemberCountEnabled:
+            cell.accessoryView = makeSwitchButton(demoAppConfig.isActiveMemberCountEnabled) { [weak self] newValue in
+                self?.demoAppConfig.isActiveMemberCountEnabled = newValue
+            }
+        case .logSettings:
+            cell.accessoryType = .disclosureIndicator
         }
     }
 
@@ -222,6 +420,9 @@ class AppConfigViewController: UITableViewController {
         cell.textLabel?.text = option.rawValue
 
         switch option {
+        case .baseURL:
+            cell.detailTextLabel?.text = chatClientConfig.baseURL.description
+            cell.accessoryType = .disclosureIndicator
         case .isLocalStorageEnabled:
             cell.accessoryView = makeSwitchButton(chatClientConfig.isLocalStorageEnabled) { [weak self] newValue in
                 self?.chatClientConfig.isLocalStorageEnabled = newValue
@@ -230,12 +431,23 @@ class AppConfigViewController: UITableViewController {
             cell.accessoryView = makeSwitchButton(chatClientConfig.staysConnectedInBackground) { [weak self] newValue in
                 self?.chatClientConfig.staysConnectedInBackground = newValue
             }
+        case .reconnectionTimeout:
+            cell.detailTextLabel?.text = chatClientConfig.reconnectionTimeout.map { "\($0)" } ?? "None"
+            cell.accessoryType = .disclosureIndicator
         case .shouldShowShadowedMessages:
             cell.accessoryView = makeSwitchButton(chatClientConfig.shouldShowShadowedMessages) { [weak self] newValue in
                 self?.chatClientConfig.shouldShowShadowedMessages = newValue
             }
-        case .deletedMessagesVisibility:
-            cell.detailTextLabel?.text = chatClientConfig.deletedMessagesVisibility.description
+        case .isChannelAutomaticFilteringEnabled:
+            cell.accessoryView = makeSwitchButton(chatClientConfig.isChannelAutomaticFilteringEnabled) { [weak self] newValue in
+                self?.chatClientConfig.isChannelAutomaticFilteringEnabled = newValue
+            }
+        case .isLocalUnreadCountEnabled:
+            cell.accessoryView = makeSwitchButton(chatClientConfig.isLocalUnreadCountEnabled) { [weak self] newValue in
+                self?.chatClientConfig.isLocalUnreadCountEnabled = newValue
+            }
+        case .webSocketEventProtocol:
+            cell.detailTextLabel?.text = chatClientConfig.webSocketEventProtocol.demoDescription
             cell.accessoryType = .disclosureIndicator
         }
     }
@@ -247,18 +459,187 @@ class AppConfigViewController: UITableViewController {
     ) {
         let option = options[indexPath.row]
         switch option {
-        case .isLocalStorageEnabled:
+        case .baseURL:
+            showBaseURLInputAlert()
+        case .reconnectionTimeout:
+            pushReconnectionTimeoutSelectorVC()
+        case .webSocketEventProtocol:
+            pushWebSocketEventProtocolSelectorVC()
+        default:
             break
-        case .staysConnectedInBackground:
-            break
-        case .shouldShowShadowedMessages:
-            break
-        case .deletedMessagesVisibility:
-            makeDeletedMessagesVisibilitySelectorVC()
         }
     }
 
-    // MARK: View Factories
+    // MARK: User Options
+
+    private func configureUserOptionsCell(
+        _ cell: UITableViewCell,
+        at indexPath: IndexPath,
+        options: [UserConfigOption]
+    ) {
+        let option = options[indexPath.row]
+        cell.textLabel?.text = option.rawValue
+
+        switch option {
+        case .isInvisible:
+            cell.accessoryView = makeSwitchButton(UserConfig.shared.isInvisible) { newValue in
+                UserConfig.shared.isInvisible = newValue
+            }
+        case .readReceiptsEnabled:
+            cell.accessoryView = makeSwitchButton(UserConfig.shared.readReceiptsEnabled ?? true) { newValue in
+                UserConfig.shared.readReceiptsEnabled = newValue
+            }
+        case .typingIndicatorsEnabled:
+            cell.accessoryView = makeSwitchButton(UserConfig.shared.typingIndicatorsEnabled ?? true) { newValue in
+                UserConfig.shared.typingIndicatorsEnabled = newValue
+            }
+        case .language:
+            cell.detailTextLabel?.text = UserConfig.shared.language?.languageCode
+            cell.accessoryType = .disclosureIndicator
+        }
+    }
+
+    // MARK: Components Options
+
+    private func configureComponentsOptionsCell(
+        _ cell: UITableViewCell,
+        at indexPath: IndexPath,
+        options: [ComponentsConfigOption]
+    ) {
+        let option = options[indexPath.row]
+        cell.textLabel?.text = option.rawValue
+
+        switch option {
+        case .isUniqueReactionsEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.isUniqueReactionsEnabled) { newValue in
+                Components.default.isUniqueReactionsEnabled = newValue
+            }
+        case .isReactionPushEmojisEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.isReactionPushEmojisEnabled) { newValue in
+                Components.default.isReactionPushEmojisEnabled = newValue
+            }
+        case .shouldMessagesStartAtTheTop:
+            cell.accessoryView = makeSwitchButton(Components.default.shouldMessagesStartAtTheTop) { newValue in
+                Components.default.shouldMessagesStartAtTheTop = newValue
+            }
+        case .shouldAnimateJumpToMessageWhenOpeningChannel:
+            cell.accessoryView = makeSwitchButton(Components.default.shouldAnimateJumpToMessageWhenOpeningChannel) { newValue in
+                Components.default.shouldAnimateJumpToMessageWhenOpeningChannel = newValue
+            }
+        case .shouldJumpToUnreadWhenOpeningChannel:
+            cell.accessoryView = makeSwitchButton(Components.default.shouldJumpToUnreadWhenOpeningChannel) { newValue in
+                Components.default.shouldJumpToUnreadWhenOpeningChannel = newValue
+            }
+        case .threadRepliesStartFromOldest:
+            cell.accessoryView = makeSwitchButton(Components.default.threadRepliesStartFromOldest) { newValue in
+                Components.default.threadRepliesStartFromOldest = newValue
+            }
+        case .threadRendersParentMessageEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.threadRendersParentMessageEnabled) { newValue in
+                Components.default.threadRendersParentMessageEnabled = newValue
+            }
+        case .isVoiceRecordingEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.isVoiceRecordingEnabled) { newValue in
+                Components.default.isVoiceRecordingEnabled = newValue
+            }
+        case .isVoiceRecordingConfirmationRequiredEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.isVoiceRecordingConfirmationRequiredEnabled) { newValue in
+                Components.default.isVoiceRecordingConfirmationRequiredEnabled = newValue
+            }
+        case .channelListSearchStrategy:
+            cell.detailTextLabel?.text = channelListSearchStrategy?.name ?? "none"
+            cell.accessoryType = .disclosureIndicator
+        case .isUnreadMessageSeparatorEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.isUnreadMessagesSeparatorEnabled) { newValue in
+                Components.default.isUnreadMessagesSeparatorEnabled = newValue
+            }
+        case .isJumpToUnreadEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.isJumpToUnreadEnabled) { newValue in
+                Components.default.isJumpToUnreadEnabled = newValue
+            }
+        case .mentionAllAppUsers:
+            cell.accessoryView = makeSwitchButton(Components.default.mentionAllAppUsers) { newValue in
+                Components.default.mentionAllAppUsers = newValue
+            }
+        case .isBlockingUsersEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.isBlockingUsersEnabled) { newValue in
+                Components.default.isBlockingUsersEnabled = newValue
+            }
+        case .isMessageListAnimationsEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.isMessageListAnimationsEnabled) { newValue in
+                Components.default.isMessageListAnimationsEnabled = newValue
+            }
+        case .isDownloadFileAttachmentsEnabled:
+            cell.accessoryView = makeSwitchButton(Components.default.isDownloadFileAttachmentsEnabled) { newValue in
+                Components.default.isDownloadFileAttachmentsEnabled = newValue
+            }
+        }
+    }
+
+    private func didSelectInfoOptionsCell(
+        _ cell: UITableViewCell,
+        at indexPath: IndexPath,
+        options: [DemoAppInfoOption]
+    ) {
+        let option = options[indexPath.row]
+        switch option {
+        case .environment:
+            pushEnvironmentSelectorVC()
+        case .pushConfiguration:
+            break
+        }
+    }
+
+    private func didSelectComponentsOptionsCell(
+        _ cell: UITableViewCell,
+        at indexPath: IndexPath,
+        options: [ComponentsConfigOption]
+    ) {
+        let option = options[indexPath.row]
+        switch option {
+        case .channelListSearchStrategy:
+            pushChannelListSearchStrategySelectorVC()
+        default:
+            break
+        }
+    }
+
+    private func didSelectUserOptionsCell(
+        _ cell: UITableViewCell,
+        at indexPath: IndexPath,
+        options: [UserConfigOption]
+    ) {
+        let option = options[indexPath.row]
+        switch option {
+        case .language:
+            pushUserLanguageSelectorVC()
+        default:
+            break
+        }
+    }
+
+    private func didSelectDemoAppOptionsCell(
+        _ cell: UITableViewCell,
+        at indexPath: IndexPath,
+        options: [DemoAppConfigOption]
+    ) {
+        let option = options[indexPath.row]
+        switch option {
+        case .tokenRefreshDetails:
+            showTokenDetailsAlert()
+        case .logSettings:
+            pushLogSettings()
+        default:
+            break
+        }
+    }
+
+    private func pushLogSettings() {
+        guard #available(iOS 16.0, *) else { return }
+        navigationController?.pushViewController(UIHostingController(rootView: LogSettingsView()), animated: true)
+    }
+
+    // MARK: - Helpers
 
     private func makeSwitchButton(_ initialValue: Bool, _ didChangeValue: @escaping (Bool) -> Void) -> SwitchButton {
         let switchButton = SwitchButton()
@@ -267,17 +648,189 @@ class AppConfigViewController: UITableViewController {
         return switchButton
     }
 
-    private func makeDeletedMessagesVisibilitySelectorVC() {
+    private func pushChannelListSearchStrategySelectorVC() {
         let selectorViewController = OptionsSelectorViewController(
-            options: [.alwaysHidden, .alwaysVisible, .visibleForCurrentUser],
-            initialSelectedOptions: [chatClientConfig.deletedMessagesVisibility],
-            allowsMultipleSelection: false
+            options: [ChannelListSearchStrategy.channels.name, ChannelListSearchStrategy.messages.name, nil],
+            initialSelectedOptions: [channelListSearchStrategy?.name],
+            allowsMultipleSelection: false,
+            optionFormatter: { option in
+                option ?? "none"
+            }
         )
         selectorViewController.didChangeSelectedOptions = { [weak self] options in
             guard let selectedOption = options.first else { return }
-            self?.chatClientConfig.deletedMessagesVisibility = selectedOption
+            if selectedOption == ChannelListSearchStrategy.channels.name {
+                self?.channelListSearchStrategy = ChannelListSearchStrategy.channels
+            } else if selectedOption == ChannelListSearchStrategy.messages.name {
+                self?.channelListSearchStrategy = ChannelListSearchStrategy.messages
+            } else {
+                self?.channelListSearchStrategy = nil
+            }
+            self?.tableView.reloadData()
         }
 
         navigationController?.pushViewController(selectorViewController, animated: true)
+    }
+
+    private func pushUserLanguageSelectorVC() {
+        let selectorViewController = OptionsSelectorViewController(
+            options: TranslationLanguage.allCases,
+            initialSelectedOptions: [nil],
+            allowsMultipleSelection: false,
+            optionFormatter: { option in
+                option?.languageCode ?? "nil"
+            }
+        )
+        selectorViewController.didChangeSelectedOptions = { [weak self] options in
+            guard let selectedOption = options.first else { return }
+            UserConfig.shared.language = selectedOption
+            self?.tableView.reloadData()
+        }
+
+        navigationController?.pushViewController(selectorViewController, animated: true)
+    }
+
+    private func pushReconnectionTimeoutSelectorVC() {
+        let selectorViewController = OptionsSelectorViewController<TimeInterval?>(
+            options: [nil, 15.0, 30.0, 45.0, 60.0],
+            initialSelectedOptions: [chatClientConfig.reconnectionTimeout],
+            allowsMultipleSelection: false,
+            optionFormatter: { option in
+                option.map { "\($0)" } ?? "None"
+            }
+        )
+        selectorViewController.didChangeSelectedOptions = { [weak self] options in
+            guard let selectedOption = options.first else { return }
+            self?.chatClientConfig.reconnectionTimeout = selectedOption
+            self?.tableView.reloadData()
+        }
+
+        navigationController?.pushViewController(selectorViewController, animated: true)
+    }
+
+    private func pushWebSocketEventProtocolSelectorVC() {
+        let selectorViewController = OptionsSelectorViewController<WebSocketEventProtocol>(
+            options: [.v2, .v3],
+            initialSelectedOptions: [chatClientConfig.webSocketEventProtocol],
+            allowsMultipleSelection: false,
+            optionFormatter: \.demoDescription
+        )
+        selectorViewController.didChangeSelectedOptions = { [weak self] options in
+            guard let selectedOption = options.first else { return }
+            self?.chatClientConfig.webSocketEventProtocol = selectedOption
+            self?.tableView.reloadData()
+        }
+
+        navigationController?.pushViewController(selectorViewController, animated: true)
+    }
+
+    private func showBaseURLInputAlert() {
+        let alert = UIAlertController(
+            title: "Base URL",
+            message: "Input the base URL for the Chat Client.",
+            preferredStyle: .alert
+        )
+
+        alert.addTextField { textField in
+            textField.placeholder = "Base URL"
+            textField.autocapitalizationType = .none
+            textField.autocorrectionType = .no
+            textField.text = self.chatClientConfig.baseURL.description
+            textField.textContentType = .URL
+        }
+
+        alert.addAction(.init(title: "Set", style: .default, handler: { _ in
+            guard let urlString = alert.textFields?.first?.text,
+                  let url = URL(string: urlString)
+            else {
+                return
+            }
+            self.chatClientConfig.baseURL = .init(url: url)
+            self.tableView.reloadData()
+        }))
+
+        alert.addAction(.init(title: "Cancel", style: .destructive, handler: nil))
+
+        present(alert, animated: true, completion: nil)
+    }
+
+    private func showTokenDetailsAlert() {
+        let alert = UIAlertController(
+            title: "Token Refreshing",
+            message: "Input the app secret from Stream's Dashboard and the desired duration.",
+            preferredStyle: .alert
+        )
+
+        alert.addTextField { textField in
+            textField.placeholder = "App Secret"
+            textField.autocapitalizationType = .none
+            textField.autocorrectionType = .no
+            if let appSecret = self.demoAppConfig.tokenRefreshDetails?.appSecret {
+                textField.text = appSecret
+            }
+        }
+        alert.addTextField { textField in
+            textField.placeholder = "Expiration duration (Seconds)"
+            textField.keyboardType = .numberPad
+            if let duration = self.demoAppConfig.tokenRefreshDetails?.expirationDuration {
+                textField.text = "\(duration)"
+            }
+        }
+        alert.addTextField { textField in
+            textField.placeholder = "Number of refresh fails"
+            textField.keyboardType = .numberPad
+            if let numberOfRefreshes = self.demoAppConfig.tokenRefreshDetails?.numberOfFailures {
+                textField.text = "\(numberOfRefreshes)"
+            }
+        }
+
+        alert.addAction(.init(title: "Enable", style: .default, handler: { _ in
+            guard let appSecret = alert.textFields?[0].text else { return }
+            guard let duration = alert.textFields?[1].text else { return }
+            guard let numberOfFailures = alert.textFields?[2].text else { return }
+            self.demoAppConfig.tokenRefreshDetails = .init(
+                appSecret: appSecret,
+                expirationDuration: TimeInterval(duration) ?? 60,
+                numberOfFailures: Int(numberOfFailures) ?? 0
+            )
+        }))
+
+        alert.addAction(.init(title: "Disable", style: .destructive, handler: { _ in
+            self.demoAppConfig.tokenRefreshDetails = nil
+        }))
+
+        present(alert, animated: true, completion: nil)
+    }
+
+    private func pushEnvironmentSelectorVC() {
+        let selectorViewController = OptionsSelectorViewController<DemoApiKeys>(
+            options: [.frankfurtC1, .frankfurtC2, .usEastC6, .usEastStaging],
+            initialSelectedOptions: [DemoApiKeys(rawValue: apiKeyString)],
+            allowsMultipleSelection: false,
+            optionFormatter: { option in
+                var optionName = option.rawValue
+                if let appName = option.appName {
+                    optionName += " (\(appName))"
+                }
+                return optionName
+            }
+        )
+        selectorViewController.didChangeSelectedOptions = { [weak self] options in
+            guard let selectedOption = options.first else { return }
+            apiKeyString = selectedOption.rawValue
+            StreamChatWrapper.replaceSharedInstance(apiKeyString: apiKeyString)
+            if let baseURL = selectedOption.customBaseURL {
+                self?.chatClientConfig.baseURL = .init(url: baseURL)
+            }
+            self?.tableView.reloadData()
+        }
+
+        navigationController?.pushViewController(selectorViewController, animated: true)
+    }
+}
+
+private extension WebSocketEventProtocol {
+    var demoDescription: String {
+        self == .v3 ? "v3" : "v2"
     }
 }

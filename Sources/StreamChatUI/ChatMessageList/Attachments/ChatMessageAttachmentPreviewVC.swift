@@ -1,5 +1,5 @@
 //
-// Copyright © 2022 Stream.io Inc. All rights reserved.
+// Copyright © 2026 Stream.io Inc. All rights reserved.
 //
 
 import StreamChat
@@ -17,7 +17,7 @@ open class ChatMessageAttachmentPreviewVC: _ViewController, WKNavigationDelegate
         .withoutAutoresizingMaskConstraints
         .withAccessibilityIdentifier(identifier: "webView")
 
-    public private(set) lazy var activityIndicatorView = UIActivityIndicatorView(style: .gray)
+    public private(set) lazy var activityIndicatorView = UIActivityIndicatorView(style: .medium)
         .withAccessibilityIdentifier(identifier: "activityIndicatorView")
 
     private lazy var closeButton = UIBarButtonItem(
@@ -28,14 +28,14 @@ open class ChatMessageAttachmentPreviewVC: _ViewController, WKNavigationDelegate
     )
 
     private lazy var goBackButton = UIBarButtonItem(
-        title: "←",
+        image: appearance.images.chevronLeft,
         style: .plain,
         target: self,
         action: #selector(goBack)
     )
 
     private lazy var goForwardButton = UIBarButtonItem(
-        title: "→",
+        image: appearance.images.chevronRight,
         style: .plain,
         target: self,
         action: #selector(goForward)
@@ -102,20 +102,24 @@ open class ChatMessageAttachmentPreviewVC: _ViewController, WKNavigationDelegate
 
     // MARK: - WKNavigationDelegate
 
-    public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        activityIndicatorView.startAnimating()
+    public nonisolated func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        StreamConcurrency.onMain {
+            activityIndicatorView.startAnimating()
+        }
     }
 
-    public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        activityIndicatorView.stopAnimating()
-
-        webView.evaluateJavaScript("document.title") { data, _ in
-            if let title = data as? String, !title.isEmpty {
-                self.title = title
+    public nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        StreamConcurrency.onMain {
+            activityIndicatorView.stopAnimating()
+            
+            webView.evaluateJavaScript("document.title") { data, _ in
+                if let title = data as? String, !title.isEmpty {
+                    self.title = title
+                }
             }
+            
+            goBackButton.isEnabled = webView.canGoBack
+            goForwardButton.isEnabled = webView.canGoForward
         }
-
-        goBackButton.isEnabled = webView.canGoBack
-        goForwardButton.isEnabled = webView.canGoForward
     }
 }
